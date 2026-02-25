@@ -112,6 +112,114 @@ function formatEngineStatus({ nativeCorePath, lastRunEngineUsed }) {
   return 'Zig核心:已探测(待使用)';
 }
 
+const ANSI_RESET = '\x1b[0m';
+const ANSI_VERSION_YELLOW = [250, 220, 90];
+
+function canUseAnsiColor() {
+  return Boolean(process.stdout?.isTTY) && !process.env.NO_COLOR && process.env.NODE_DISABLE_COLORS !== '1';
+}
+
+function ansiColor(color) {
+  return `\x1b[38;2;${color[0]};${color[1]};${color[2]}m`;
+}
+
+function stripAnsi(text) {
+  return String(text || '').replace(/\x1b\[[0-9;]*m/g, '');
+}
+
+function textWidth(text) {
+  return [...stripAnsi(text)].length;
+}
+
+function centerText(text, width) {
+  const lineWidth = textWidth(text);
+  if (lineWidth >= width) {
+    return text;
+  }
+  const leftPadding = Math.floor((width - lineWidth) / 2);
+  return `${' '.repeat(leftPadding)}${text}`;
+}
+
+function lerp(a, b, t) {
+  return Math.round(a + (b - a) * t);
+}
+
+function blendColor(start, end, t) {
+  return [lerp(start[0], end[0], t), lerp(start[1], end[1], t), lerp(start[2], end[2], t)];
+}
+
+function pickGradientColor(stops, t) {
+  if (t <= stops[0].at) {
+    return stops[0].color;
+  }
+  if (t >= stops[stops.length - 1].at) {
+    return stops[stops.length - 1].color;
+  }
+  for (let i = 0; i < stops.length - 1; i += 1) {
+    const curr = stops[i];
+    const next = stops[i + 1];
+    if (t >= curr.at && t <= next.at) {
+      const denom = next.at - curr.at || 1;
+      const local = (t - curr.at) / denom;
+      return blendColor(curr.color, next.color, local);
+    }
+  }
+  return stops[stops.length - 1].color;
+}
+
+function colorizeGradient(line, stops) {
+  if (!canUseAnsiColor()) {
+    return line;
+  }
+  const chars = [...line];
+  const denom = Math.max(chars.length - 1, 1);
+  let output = '';
+  for (let i = 0; i < chars.length; i += 1) {
+    const ch = chars[i];
+    if (ch === ' ') {
+      output += ' ';
+      continue;
+    }
+    const color = pickGradientColor(stops, i / denom);
+    output += `${ansiColor(color)}${ch}`;
+  }
+  return `${output}${ANSI_RESET}`;
+}
+
+function colorizeText(text, color) {
+  if (!canUseAnsiColor()) {
+    return text;
+  }
+  return `${ansiColor(color)}${text}${ANSI_RESET}`;
+}
+
+function renderAsciiLogoLines(appMeta, terminalWidth) {
+  const wecomStops = [
+    { at: 0, color: [245, 245, 245] },
+    { at: 0.55, color: [95, 225, 255] },
+    { at: 1, color: [55, 120, 255] },
+  ];
+  const cleanerStops = [
+    { at: 0, color: [90, 225, 255] },
+    { at: 0.6, color: [90, 220, 140] },
+    { at: 1, color: [250, 220, 90] },
+  ];
+
+  const logoLines = [];
+  for (const line of APP_ASCII_LOGO.wecom) {
+    logoLines.push(centerText(colorizeGradient(line, wecomStops), terminalWidth));
+  }
+  logoLines.push('');
+  for (const line of APP_ASCII_LOGO.cleaner) {
+    logoLines.push(centerText(colorizeGradient(line, cleanerStops), terminalWidth));
+  }
+  logoLines.push('');
+  logoLines.push(centerText(colorizeText(APP_ASCII_LOGO.subtitle, ANSI_VERSION_YELLOW), terminalWidth));
+  logoLines.push(centerText(colorizeText(`v${appMeta.version}`, ANSI_VERSION_YELLOW), terminalWidth));
+  logoLines.push('');
+  return logoLines;
+}
+
 function normalizeRepositoryUrl(rawValue) {
   if (typeof rawValue !== 'string' || rawValue.trim() === '') {
     return '';
@@ -158,7 +266,8 @@ async function loadAppMeta(projectRoot) {
 function printHeader({ config, accountCount, nativeCorePath, lastRunEngineUsed, appMeta }) {
   console.clear();
   const nativeText = formatEngineStatus({ nativeCorePath, lastRunEngineUsed });
-  console.log(APP_ASCII_LOGO.join('\n'));
+  const terminalWidth = Number(process.stdout.columns || 120);
+  console.log(renderAsciiLogoLines(appMeta, terminalWidth).join('\n'));
   console.log(`${APP_NAME} v${appMeta.version} (${PACKAGE_NAME})`);
   console.log(`作者: ${appMeta.author} | 许可证: ${appMeta.license}`);
   console.log(`仓库: ${appMeta.repository}`);
