@@ -1,0 +1,7 @@
+.git
+node_modules
+native/bin
+*.tgz
+*.log
+coverage
+.wecom-cleaner-state

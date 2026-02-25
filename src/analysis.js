@@ -49,11 +49,9 @@ export function printAnalysisSummary(result) {
   }
 
   if (monthsSummary.length > 0) {
-    const rows = monthsSummary.slice(0, 20).map((row) => [
-      row.monthKey,
-      String(row.count),
-      formatBytes(row.sizeBytes),
-    ]);
+    const rows = monthsSummary
+      .slice(0, 20)
+      .map((row) => [row.monthKey, String(row.count), formatBytes(row.sizeBytes)]);
     console.log('\n月份维度（Top 20）：');
     console.log(renderTable(['月份/目录', '目录数', '大小'], rows));
   }

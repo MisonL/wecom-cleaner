@@ -269,7 +269,10 @@ function shouldSkipExternalScanDir(name) {
 
 async function findExternalStorageRootsByStructure(baseRoots, options = {}) {
   const maxDepth = Math.max(1, Number(options.searchMaxDepth || EXTERNAL_STORAGE_SCAN_MAX_DEPTH_DEFAULT));
-  const visitLimit = Math.max(200, Number(options.searchVisitLimit || EXTERNAL_STORAGE_SCAN_MAX_VISITS_DEFAULT));
+  const visitLimit = Math.max(
+    200,
+    Number(options.searchVisitLimit || EXTERNAL_STORAGE_SCAN_MAX_VISITS_DEFAULT)
+  );
   const uniqueBaseRoots = [
     ...new Set(
       (baseRoots || [])
@@ -560,12 +563,7 @@ async function calculateSizesByNode(candidates, sizeConcurrency, onProgress) {
   });
 }
 
-async function calculateSizesWithEngine({
-  candidates,
-  nativeCorePath,
-  sizeConcurrency = 4,
-  onProgress,
-}) {
+async function calculateSizesWithEngine({ candidates, nativeCorePath, sizeConcurrency = 4, onProgress }) {
   let engineUsed = nativeCorePath ? 'zig' : 'node';
   let nativeFallbackReason = null;
   let nativeFailed = false;
@@ -784,7 +782,12 @@ export async function discoverAccounts(rootDir, aliases = {}) {
   return accounts;
 }
 
-export async function collectAvailableMonths(accounts, selectedAccountIds, categoryKeys, externalStorageRoots = []) {
+export async function collectAvailableMonths(
+  accounts,
+  selectedAccountIds,
+  categoryKeys,
+  externalStorageRoots = []
+) {
   const selectedSet = new Set(selectedAccountIds || []);
   const months = [];
 
@@ -1144,7 +1147,10 @@ export async function scanSpaceGovernanceTargets({
     const idleDays = idleMs / (24 * 3600 * 1000);
     const recentlyActive = idleMs < suggestIdleMs;
     const suggested =
-      target.deletable && target.sizeBytes >= suggestSizeThresholdBytes && !recentlyActive && target.tier !== SPACE_GOVERNANCE_TIERS.PROTECTED;
+      target.deletable &&
+      target.sizeBytes >= suggestSizeThresholdBytes &&
+      !recentlyActive &&
+      target.tier !== SPACE_GOVERNANCE_TIERS.PROTECTED;
 
     target.idleDays = idleDays;
     target.recentlyActive = recentlyActive;

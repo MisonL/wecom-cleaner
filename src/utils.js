@@ -297,22 +297,12 @@ export async function calculateDirectorySize(targetPath) {
           total += stat.size;
         }
       } catch {
-        // ignore single file errors
+        // 忽略单个文件的读取异常，继续统计其他条目
       }
     }
   }
   await walk(targetPath);
   return total;
-}
-
-export function formatUtcDate(tsMillis) {
-  const d = new Date(tsMillis);
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(d.getUTCDate()).padStart(2, '0');
-  const hh = String(d.getUTCHours()).padStart(2, '0');
-  const mm = String(d.getUTCMinutes()).padStart(2, '0');
-  return `${y}-${m}-${day} ${hh}:${mm} UTC`;
 }
 
 export function formatLocalDate(tsMillis) {
@@ -342,7 +332,7 @@ export async function readJsonLines(filePath) {
       try {
         rows.push(JSON.parse(text));
       } catch {
-        // ignore invalid line
+        // 忽略损坏的 JSONL 行，保持读取过程不中断
       }
     }
   } catch {

@@ -12,7 +12,10 @@ function normalizePackedFileName(packageName, version) {
 }
 
 function targetTgzName(packageName, version) {
-  const unscoped = String(packageName || '').split('/').pop() || 'package';
+  const unscoped =
+    String(packageName || '')
+      .split('/')
+      .pop() || 'package';
   return `${unscoped}-${version}.tgz`;
 }
 
@@ -62,7 +65,7 @@ async function main() {
 
   await fs.rm(dstPath, { force: true }).catch(() => {});
   await fs.rename(srcPath, dstPath);
-  console.log(`Renamed package: ${srcName} -> ${dstName}`);
+  console.log(`已重命名打包产物: ${srcName} -> ${dstName}`);
 }
 
 main().catch((error) => {

@@ -60,7 +60,10 @@ function normalizeSpaceGovernance(input, fallback) {
 
   return {
     autoSuggest: {
-      sizeThresholdMB: normalizePositiveInt(autoSuggest.sizeThresholdMB, fallback.autoSuggest.sizeThresholdMB),
+      sizeThresholdMB: normalizePositiveInt(
+        autoSuggest.sizeThresholdMB,
+        fallback.autoSuggest.sizeThresholdMB
+      ),
       idleDays: normalizePositiveInt(autoSuggest.idleDays, fallback.autoSuggest.idleDays),
     },
     cooldownSeconds: normalizePositiveInt(source.cooldownSeconds, fallback.cooldownSeconds),
@@ -151,9 +154,7 @@ export function parseCliArgs(argv) {
 
 function normalizePathList(value) {
   if (Array.isArray(value)) {
-    return value
-      .map((item) => expandHome(String(item || '').trim()))
-      .filter((item) => item && item.trim());
+    return value.map((item) => expandHome(String(item || '').trim())).filter((item) => item && item.trim());
   }
   if (typeof value === 'string') {
     return value

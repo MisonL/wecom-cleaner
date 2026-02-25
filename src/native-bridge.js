@@ -81,7 +81,9 @@ async function probeNativeCore(binPath) {
 }
 
 function shouldAutoRepair() {
-  const raw = String(process.env.WECOM_CLEANER_NATIVE_AUTO_REPAIR || 'true').toLowerCase().trim();
+  const raw = String(process.env.WECOM_CLEANER_NATIVE_AUTO_REPAIR || 'true')
+    .toLowerCase()
+    .trim();
   return !(raw === '0' || raw === 'false' || raw === 'no' || raw === 'off');
 }
 
@@ -168,7 +170,12 @@ async function readNativeManifest(projectRoot) {
 }
 
 function resolveManifestTarget(manifest, target) {
-  if (!manifest || typeof manifest !== 'object' || !manifest.targets || typeof manifest.targets !== 'object') {
+  if (
+    !manifest ||
+    typeof manifest !== 'object' ||
+    !manifest.targets ||
+    typeof manifest.targets !== 'object'
+  ) {
     return null;
   }
 
@@ -178,7 +185,8 @@ function resolveManifestTarget(manifest, target) {
   }
 
   return {
-    binaryName: typeof raw.binaryName === 'string' && raw.binaryName.trim() ? raw.binaryName.trim() : target.binaryName,
+    binaryName:
+      typeof raw.binaryName === 'string' && raw.binaryName.trim() ? raw.binaryName.trim() : target.binaryName,
     sha256: normalizeSha256(raw.sha256),
     url: typeof raw.url === 'string' && raw.url.trim() ? raw.url.trim() : null,
   };

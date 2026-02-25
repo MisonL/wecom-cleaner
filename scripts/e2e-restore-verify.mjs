@@ -92,13 +92,7 @@ async function prepareUiConflictBatch({ profileRoot, uiStateRoot }) {
   console.log(`prepare_restore_ui_conflict_batch=${cleanup.batchId}`);
 }
 
-async function runConflictCase({
-  strategy,
-  accountRoot,
-  profileRoot,
-  recycleRoot,
-  indexPath,
-}) {
+async function runConflictCase({ strategy, accountRoot, profileRoot, recycleRoot, indexPath }) {
   const caseName = `restore-${strategy}-${Date.now()}`;
   const sourceDir = await writeCaseDir(accountRoot, caseName, `original-${strategy}`);
 
@@ -124,7 +118,9 @@ async function runConflictCase({
 
   assert(cleanup.successCount === 1, `${strategy}: cleanup successCount 应为 1`);
 
-  const batch = (await listRestorableBatches(indexPath, { recycleRoot })).find((item) => item.batchId === cleanup.batchId);
+  const batch = (await listRestorableBatches(indexPath, { recycleRoot })).find(
+    (item) => item.batchId === cleanup.batchId
+  );
   assert(batch && batch.entries.length === 1, `${strategy}: 未找到可恢复批次`);
   const recyclePath = batch.entries[0].recyclePath;
 
@@ -171,11 +167,7 @@ async function runConflictCase({
   return cleanup.batchId;
 }
 
-async function runInvalidPathCase({
-  profileRoot,
-  recycleRoot,
-  indexPath,
-}) {
+async function runInvalidPathCase({ profileRoot, recycleRoot, indexPath }) {
   const batchId = `restore-invalid-${Date.now()}`;
   const recyclePath = path.join(recycleRoot, batchId, '0001_invalid');
   await ensureDir(recyclePath);
@@ -200,7 +192,9 @@ async function runInvalidPathCase({
     dryRun: false,
   });
 
-  const batch = (await listRestorableBatches(indexPath, { recycleRoot })).find((item) => item.batchId === batchId);
+  const batch = (await listRestorableBatches(indexPath, { recycleRoot })).find(
+    (item) => item.batchId === batchId
+  );
   assert(batch && batch.entries.length === 1, 'invalid: 未找到批次');
 
   const restore = await restoreBatch({

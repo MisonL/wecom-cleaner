@@ -57,7 +57,12 @@ function isPromptAbort(error) {
     return false;
   }
   const text = `${error.name || ''} ${error.message || ''}`;
-  return text.includes('ExitPromptError') || text.includes('SIGINT') || text.includes('canceled') || text.includes('force closed');
+  return (
+    text.includes('ExitPromptError') ||
+    text.includes('SIGINT') ||
+    text.includes('canceled') ||
+    text.includes('force closed')
+  );
 }
 
 async function askSelect(config) {
@@ -110,7 +115,12 @@ function categoryChoices(defaultKeys = [], options = {}) {
   return CACHE_CATEGORIES.map((cat) => ({
     name: `${cat.label} (${cat.key}) - ${cat.desc}`,
     value: cat.key,
-    checked: defaultSet.size === 0 ? (includeAllByDefault ? true : cat.defaultSelected !== false) : defaultSet.has(cat.key),
+    checked:
+      defaultSet.size === 0
+        ? includeAllByDefault
+          ? true
+          : cat.defaultSelected !== false
+        : defaultSet.has(cat.key),
   }));
 }
 
@@ -403,7 +413,9 @@ async function collectProfileRootCandidates(configRootDir) {
   for (const row of rows) {
     dedup.set(row.rootDir, row);
   }
-  return [...dedup.values()].sort((a, b) => b.accountCount - a.accountCount || a.rootDir.localeCompare(b.rootDir));
+  return [...dedup.values()].sort(
+    (a, b) => b.accountCount - a.accountCount || a.rootDir.localeCompare(b.rootDir)
+  );
 }
 
 async function evaluateProfileRootHealth(configRootDir, accounts) {
@@ -444,7 +456,9 @@ function printHeader({
   console.log(`仓库: ${appMeta.repository}`);
   console.log(`根目录: ${config.rootDir}`);
   console.log(`状态目录: ${config.stateRoot}`);
-  console.log(`账号数: ${accountCount} | ${nativeText} | ${formatThemeStatus(config.theme, resolvedThemeMode)}`);
+  console.log(
+    `账号数: ${accountCount} | ${nativeText} | ${formatThemeStatus(config.theme, resolvedThemeMode)}`
+  );
   const sourceCounts = externalStorageMeta?.sourceCounts || null;
   if (externalStorageRoots.length > 0) {
     if (sourceCounts) {
@@ -452,7 +466,9 @@ function printHeader({
         `文件存储目录: 共${externalStorageRoots.length}个（默认${sourceCounts.builtin || 0} / 手动${sourceCounts.configured || 0} / 自动${sourceCounts.auto || 0}）`
       );
     } else {
-      console.log(`文件存储目录: 已检测 ${externalStorageRoots.length} 个（含默认/自定义，示例: ${externalStorageRoots[0]}）`);
+      console.log(
+        `文件存储目录: 已检测 ${externalStorageRoots.length} 个（含默认/自定义，示例: ${externalStorageRoots[0]}）`
+      );
     }
   } else {
     console.log('文件存储目录: 未检测到（可在设置里手动添加）');
@@ -463,15 +479,25 @@ function printHeader({
   if ((sourceCounts?.auto || 0) > 0 && (sourceCounts?.builtin || 0) + (sourceCounts?.configured || 0) === 0) {
     console.log('操作建议: 建议在“交互配置 -> 手动追加文件存储根目录”先确认常用路径。');
   }
-  if (externalStorageMeta && Array.isArray(externalStorageMeta.truncatedRoots) && externalStorageMeta.truncatedRoots.length > 0) {
-    console.log(`探测提示: ${externalStorageMeta.truncatedRoots.length} 个搜索根达到扫描预算上限，建议手动补充路径`);
+  if (
+    externalStorageMeta &&
+    Array.isArray(externalStorageMeta.truncatedRoots) &&
+    externalStorageMeta.truncatedRoots.length > 0
+  ) {
+    console.log(
+      `探测提示: ${externalStorageMeta.truncatedRoots.length} 个搜索根达到扫描预算上限，建议手动补充路径`
+    );
   }
   if (profileRootHealth?.status === 'missing') {
     console.log('目录提示: 当前 Profile 根目录不存在，请在“交互配置”中修正。');
   } else if (profileRootHealth?.status === 'empty') {
     console.log('目录提示: 当前 Profile 根目录未识别到账号目录。');
   }
-  if (profileRootHealth && Array.isArray(profileRootHealth.candidates) && profileRootHealth.candidates.length > 0) {
+  if (
+    profileRootHealth &&
+    Array.isArray(profileRootHealth.candidates) &&
+    profileRootHealth.candidates.length > 0
+  ) {
     const candidateText = profileRootHealth.candidates
       .slice(0, 3)
       .map((item) => `${item.rootDir} (${item.accountCount}账号)`)
@@ -727,14 +753,16 @@ function relativeTargetPath(target) {
 }
 
 function printTargetPreview(targets) {
-  const rows = targets.slice(0, 40).map((item, idx) => [
-    String(idx + 1),
-    formatBytes(item.sizeBytes),
-    item.categoryLabel,
-    item.monthKey || '非月份目录',
-    item.accountShortId,
-    relativeTargetPath(item),
-  ]);
+  const rows = targets
+    .slice(0, 40)
+    .map((item, idx) => [
+      String(idx + 1),
+      formatBytes(item.sizeBytes),
+      item.categoryLabel,
+      item.monthKey || '非月份目录',
+      item.accountShortId,
+      relativeTargetPath(item),
+    ]);
 
   console.log(renderTable(['#', '大小', '类型', '月份/目录', '账号', '路径'], rows));
 
@@ -810,16 +838,18 @@ function summarizeGovernanceTargets(targets) {
 }
 
 function printGovernancePreview({ targets, dataRoot }) {
-  const rows = targets.slice(0, 50).map((item, idx) => [
-    String(idx + 1),
-    governanceTierLabel(item.tier),
-    item.suggested ? '建议' : '-',
-    formatBytes(item.sizeBytes),
-    formatIdleDaysText(item.idleDays),
-    item.accountShortId || '-',
-    trimToWidth(item.targetLabel, 20),
-    trimToWidth(formatGovernancePath(item, dataRoot), 40),
-  ]);
+  const rows = targets
+    .slice(0, 50)
+    .map((item, idx) => [
+      String(idx + 1),
+      governanceTierLabel(item.tier),
+      item.suggested ? '建议' : '-',
+      formatBytes(item.sizeBytes),
+      formatIdleDaysText(item.idleDays),
+      item.accountShortId || '-',
+      trimToWidth(item.targetLabel, 20),
+      trimToWidth(formatGovernancePath(item, dataRoot), 40),
+    ]);
 
   console.log(renderTable(['#', '层级', '建议', '大小', '静置', '账号', '目标', '路径'], rows));
   if (targets.length > 50) {
@@ -1089,7 +1119,10 @@ async function runSpaceGovernanceMode(context) {
     choices: selectableTargets.map((item) => ({
       name: `${item.suggested ? '[建议] ' : ''}[${governanceTierLabel(item.tier)}] ${item.targetLabel} | ${item.accountShortId} | ${formatBytes(item.sizeBytes)} | 静置${formatIdleDaysText(item.idleDays)} | ${trimToWidth(formatGovernancePath(item, scan.dataRoot), 36)}`,
       value: item.id,
-      checked: lastSelected.size > 0 ? lastSelected.has(item.id) : item.suggested && item.tier === SPACE_GOVERNANCE_TIERS.SAFE,
+      checked:
+        lastSelected.size > 0
+          ? lastSelected.has(item.id)
+          : item.suggested && item.tier === SPACE_GOVERNANCE_TIERS.SAFE,
     })),
     validate: (values) => (values.length > 0 ? true : '至少选择一个目录'),
   });
@@ -1228,7 +1261,9 @@ async function runRestoreMode(context) {
     profilesRoot: config.rootDir,
     autoDetect: config.externalStorageAutoDetect !== false,
   });
-  const governanceAllowRoots = governanceRoot ? [...externalStorageRoots] : [config.rootDir, ...externalStorageRoots];
+  const governanceAllowRoots = governanceRoot
+    ? [...externalStorageRoots]
+    : [config.rootDir, ...externalStorageRoots];
 
   const batches = await listRestorableBatches(config.indexPath, { recycleRoot: config.recycleRoot });
   if (batches.length === 0) {
@@ -1267,7 +1302,9 @@ async function runRestoreMode(context) {
   if (governanceRoot) {
     console.log(`治理恢复白名单: Data 根目录 + 文件存储目录(${externalStorageRoots.length}项)`);
   } else {
-    console.log(`治理恢复白名单: 未识别Data根，已回退到 Profile 根目录 + 文件存储目录(${externalStorageRoots.length}项)`);
+    console.log(
+      `治理恢复白名单: 未识别Data根，已回退到 Profile 根目录 + 文件存储目录(${externalStorageRoots.length}项)`
+    );
   }
   const result = await restoreBatch({
     batch,
@@ -1290,7 +1327,9 @@ async function runRestoreMode(context) {
 
   if (result.errors.length > 0) {
     console.log('\n失败明细（最多 8 条）：');
-    const rows = result.errors.slice(0, 8).map((e) => [trimToWidth(e.sourcePath, 50), trimToWidth(e.message, 40)]);
+    const rows = result.errors
+      .slice(0, 8)
+      .map((e) => [trimToWidth(e.sourcePath, 50), trimToWidth(e.message, 40)]);
     console.log(renderTable(['路径', '错误'], rows));
   }
 }

@@ -49,7 +49,14 @@ function isPathWithinAnyRoot(rootPaths, targetPath) {
 }
 
 function normalizeRootList(rootPaths) {
-  return [...new Set((rootPaths || []).map((item) => String(item || '').trim()).filter(Boolean).map((item) => path.resolve(item)))];
+  return [
+    ...new Set(
+      (rootPaths || [])
+        .map((item) => String(item || '').trim())
+        .filter(Boolean)
+        .map((item) => path.resolve(item))
+    ),
+  ];
 }
 
 function isPathWithinResolvedRoot(rootPathResolved, targetPathResolved) {
@@ -190,23 +197,18 @@ async function streamJsonRows(filePath, onRow) {
         const row = JSON.parse(text);
         await onRow(row);
       } catch {
-        // ignore malformed jsonl row
+        // 忽略损坏的 JSONL 行，继续处理后续记录
       }
     }
   } catch {
-    // ignore stream errors
+    // 忽略流读取异常，交由上层根据结果做兜底
   } finally {
     rl.close();
     input.close();
   }
 }
 
-async function validateRestoreEntryPath({
-  originalPath,
-  recyclePath,
-  scope,
-  validationState,
-}) {
+async function validateRestoreEntryPath({ originalPath, recyclePath, scope, validationState }) {
   if (typeof originalPath !== 'string' || typeof recyclePath !== 'string' || !originalPath || !recyclePath) {
     return 'invalid_path_record';
   }
@@ -221,7 +223,10 @@ async function validateRestoreEntryPath({
       return 'recycle_path_unresolvable';
     }
 
-    const recycleInside = isPathWithinResolvedRoot(validationState.recycleRootReal, recycleChecked.resolvedPath);
+    const recycleInside = isPathWithinResolvedRoot(
+      validationState.recycleRootReal,
+      recycleChecked.resolvedPath
+    );
     if (!recycleInside) {
       const rawInside = isPathWithinRoot(validationState.recycleRootRaw, recyclePath);
       return rawInside ? 'recycle_symlink_escape' : 'recycle_outside_recycle_root';
@@ -229,8 +234,12 @@ async function validateRestoreEntryPath({
   }
 
   const governanceScope = scope === 'space_governance';
-  const sourceRootsRaw = governanceScope ? validationState.governanceRootsRaw : validationState.profileRootsRaw;
-  const sourceRootsReal = governanceScope ? validationState.governanceRootsReal : validationState.profileRootsReal;
+  const sourceRootsRaw = governanceScope
+    ? validationState.governanceRootsRaw
+    : validationState.profileRootsRaw;
+  const sourceRootsReal = governanceScope
+    ? validationState.governanceRootsReal
+    : validationState.profileRootsReal;
   if (sourceRootsReal.length === 0) {
     return 'missing_allowed_root';
   }

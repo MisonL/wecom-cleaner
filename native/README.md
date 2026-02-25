@@ -1,6 +1,6 @@
-# Zig Core 占位说明
+# Zig 核心说明
 
-当前版本采用 `Node CLI + Zig核心预留` 架构：
+当前版本采用 `Node CLI + Zig 核心预留` 架构：
 
 - 如果存在 `native/bin/<platform>-<arch>/wecom-cleaner-core`，CLI 会尝试加载 Zig 核心。
 - 如果未检测到 Zig 二进制，会自动回退到 Node 引擎，不影响使用。

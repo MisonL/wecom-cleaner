@@ -23,7 +23,7 @@ case "$RAW_OS" in
     ZIG_OS="windows"
     ;;
   *)
-    echo "Unsupported OS: $RAW_OS" >&2
+    echo "不支持的操作系统: $RAW_OS" >&2
     exit 1
     ;;
 esac
@@ -38,7 +38,7 @@ case "$RAW_ARCH" in
     ZIG_ARCH="aarch64"
     ;;
   *)
-    echo "Unsupported ARCH: $RAW_ARCH" >&2
+    echo "不支持的架构: $RAW_ARCH" >&2
     exit 1
     ;;
 esac
@@ -65,4 +65,4 @@ fi
 
 "${BUILD_CMD[@]}"
 
-echo "Built: $OUT_DIR/$BIN_NAME"
+echo "构建完成: $OUT_DIR/$BIN_NAME"

@@ -1,86 +1,112 @@
-# wecom-cleaner 实施计划（最终版）
+# wecom-cleaner 实施与现状说明
 
-## 1. 目标
+## 1. 产品定位
 
-将旧版脚本重构为可通过 npm/npx 一键使用的新程序，统一产品命名：
+`wecom-cleaner` 是企业微信本地缓存治理工具，核心目标是“可安全回收空间、可审计、可恢复”。
 
 - 软件名：`wecom-cleaner`
-- npm 全名称：`@mison/wecom-cleaner`
+- npm 包名：`@mison/wecom-cleaner`
+- 命令名：`wecom-cleaner`
 
-并确保支持：
-
-- 多账号数据识别与选择
-- 默认按年月清理旧聊天缓存
-- 会话分析只读模式（明确能力限制）
-- 删除后可恢复与冲突策略处理
-
-## 2. 技术路线
-
-1. 主体：Node.js 交互式 CLI/TUI 风格
-- 原因：快速交付、跨平台、天然适配 npm/npx 分发。
-
-2. Zig：核心能力预留
-- 通过 `native/bin/<platform>-<arch>/wecom-cleaner-core` 桥接。
-- 若不存在 Zig 核心，自动回退 Node 引擎。
-
-3. 模块化目录
-- `src/cli.js`：交互入口与菜单编排
-- `src/scanner.js`：账号发现、月份发现、目录扫描
-- `src/cleanup.js`：删除执行（移动到回收区）与索引记录
-- `src/restore.js`：按批次恢复与冲突处理
-- `src/analysis.js`：只读分析输出
-- `src/config.js`：配置/别名持久化
-- `src/native-bridge.js`：Zig 桥接与回退
-
-## 3. 关键交互设计
+## 2. 当前功能范围
 
 1. 开始菜单
-- 年月清理（默认）
+
+- 年月清理（默认，可执行删除）
 - 会话分析（只读）
+- 全量空间治理（分级治理）
 - 恢复已删除批次
 - 交互配置
 
-2. 年月清理模式
-- 先选择账号（用户名 | 企业名 | 短ID 三列展示）
-- 进入即弹出年月筛选配置（截止年月 or 手动勾选）
-- 选择缓存类型与是否包含非月份目录
-- 扫描预览（汇总+明细）
-- 输入 `DELETE` 执行删除（移动到回收区）
+2. 年月清理
 
-3. 会话分析模式
-- 只分析可见目录，不处理数据。
-- 清晰提示企业微信私有库限制：无法自动按会话删除。
+- 多账号选择与别名管理。
+- 按截止年月或手动勾选月份筛选。
+- 按缓存类型筛选，`wwsecurity` 默认不勾选。
+- 删除动作统一进入回收区，不直接 `rm`。
 
-4. 恢复模式
-- 按批次恢复。
-- 冲突支持：覆盖 / 重命名 / 跳过，可应用到后续。
+3. 会话分析（只读）
 
-## 4. 数据安全与可追溯
+- 统计账号/类型/月份维度占用。
+- 明确能力边界：不支持按“会话名”自动删除。
 
-1. 删除不直接 `rm`
-- 统一移动到回收区（`~/.wecom-cleaner-state/recycle-bin`）。
+4. 全量空间治理
 
-2. 索引记录
-- `index.jsonl` 记录每次删除和恢复动作。
-- 包含批次、源路径、回收路径、账号、分类、体积等字段。
+- 对 `Profiles` 外高占用目录进行分层治理（安全层/谨慎层/受保护层）。
+- 谨慎层二次确认，受保护层仅分析不删除。
+- 支持外部文件存储缓存目录（`WXWork Files/Caches`）纳入治理。
 
-## 5. 多账号兼容方案
+5. 恢复
 
-1. 自动识别 `Profiles` 下账号目录。
-2. 账号信息多源提取：`io_data.json` + 用户别名文件。
-3. 别名管理支持人工修正，保障列表可读性。
+- 支持按批次恢复。
+- 冲突策略：覆盖 / 重命名 / 跳过。
+- 恢复路径使用 `realpath` 做越界校验并写审计记录。
 
-## 6. 运行与分发
+## 3. 技术架构
 
-1. 本地开发
-- `npm install`
-- `npm run dev`
+1. CLI 主体
 
-2. 发布后运行
-- `npx @mison/wecom-cleaner`
+- `src/cli.js`：交互流程编排。
+- `src/config.js`：CLI 参数与配置持久化。
 
-## 7. 后续迭代建议
+2. 领域模块
 
-1. 加入“扫描缓存”与“恢复”并发任务可视化进度条。
-2. Zig 核心落地后，将目录遍历与体积计算迁移为高性能实现。
-3. 增加 JSON 报告导出与审计视图。
+- `src/scanner.js`：账号发现、目录扫描、体积计算。
+- `src/cleanup.js`：删除（迁移到回收区）与索引记录。
+- `src/restore.js`：批次恢复与冲突处理。
+- `src/analysis.js`：只读分析输出。
+
+3. 引擎层
+
+- `src/native-bridge.js`：Zig 核心探测、校验、自动修复下载、Node 回退。
+- `native/manifest.json`：核心下载清单与 `SHA256`。
+
+## 4. 安全与审计策略
+
+1. 删除安全
+
+- 所有删除先进入 `recycle-bin/`。
+- 每条动作写入 `index.jsonl`。
+
+2. 恢复安全
+
+- 严格限制恢复源与目标必须位于允许根路径。
+- 对软链接逃逸与路径不可解析场景做拒绝与审计。
+
+3. Zig 自动修复安全
+
+- 仅按清单下载固定目标。
+- 下载后先做 `SHA256` 校验，再做 `--ping` 探针。
+- 校验失败或探针失败会删除缓存并回退 Node。
+
+## 5. 质量保障与门禁
+
+1. 代码风格
+
+- 统一使用 Prettier（仓库内置 `.prettierrc.json`）。
+- 执行命令：`npm run format` / `npm run format:check`。
+
+2. 单元测试
+
+- 使用 Node 原生测试框架（`node:test`）。
+- 覆盖核心模块：`config/utils/cleanup/restore/scanner/native-bridge/analysis`。
+
+3. 覆盖率
+
+- 使用 `c8` 输出覆盖率报告。
+- 门禁阈值：`lines/statements >= 75%`，`functions >= 80%`，`branches >= 60%`。
+- 命令：`npm run test:coverage` / `npm run test:coverage:check`。
+
+4. 端到端回归
+
+- 使用 `scripts/e2e-smoke.sh` 覆盖全部一级菜单与关键分支。
+
+## 6. 推荐发布前检查
+
+```bash
+npm run check
+npm run test:coverage:check
+npm run format:check
+npm run e2e:smoke -- --keep
+npm run pack:tgz:dry-run
+```

@@ -2,5 +2,5 @@ node_modules/
 .DS_Store
 *.log
 *.tgz
+coverage/
 .wecom-cleaner-state/
-wework-cleaner.config.json

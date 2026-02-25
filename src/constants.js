@@ -97,7 +97,6 @@ export const CACHE_CATEGORIES = [
 ];
 
 export const CATEGORY_MAP = new Map(CACHE_CATEGORIES.map((item) => [item.key, item]));
-const DEFAULT_CLEANUP_CATEGORY_KEYS = CACHE_CATEGORIES.filter((item) => item.defaultSelected !== false).map((item) => item.key);
 
 export const MODES = {
   START: 'start',
@@ -300,50 +299,9 @@ export const SPACE_GOVERNANCE_TARGETS = [
   },
 ];
 
-export const CLEANUP_PRESETS = [
-  {
-    key: 'safe_2y',
-    label: '保守（2年前，表情+缩略图）',
-    days: 730,
-    categories: ['emotions', 'emotion_thumbnails', 'video_thumbnails', 'link_thumbnails'],
-    includeNonMonthDirs: false,
-  },
-  {
-    key: 'balanced_1y',
-    label: '平衡（1年前，全量缓存）',
-    days: 365,
-    categories: DEFAULT_CLEANUP_CATEGORY_KEYS,
-    includeNonMonthDirs: false,
-  },
-  {
-    key: 'aggressive_6m',
-    label: '激进（6个月，全量+非月份目录）',
-    days: 180,
-    categories: DEFAULT_CLEANUP_CATEGORY_KEYS,
-    includeNonMonthDirs: true,
-  },
-  {
-    key: 'custom',
-    label: '自定义',
-    days: null,
-    categories: [],
-    includeNonMonthDirs: false,
-  },
-];
+export const USER_LABEL_STOPWORDS = new Set(['真实姓名', '企业介绍', '我的业务', '新学期准备', '帮助企业']);
 
-export const USER_LABEL_STOPWORDS = new Set([
-  '真实姓名',
-  '企业介绍',
-  '我的业务',
-  '新学期准备',
-  '帮助企业',
-]);
-
-export const CORP_LABEL_STOPWORDS = new Set([
-  '新学期准备',
-  '腾讯科技股份有限公司',
-  '其他',
-]);
+export const CORP_LABEL_STOPWORDS = new Set(['新学期准备', '腾讯科技股份有限公司', '其他']);
 
 export const CJK_TEXT_RE = /[\u4e00-\u9fff]{2,24}/g;
 export const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
