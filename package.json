@@ -1,0 +1,38 @@
+{
+  "name": "@mison/wecom-cleaner",
+  "version": "0.1.0",
+  "description": "企业微信本地聊天缓存清理工具（交互式 CLI/TUI）",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "wecom-cleaner": "./src/cli.js"
+  },
+  "main": "./src/cli.js",
+  "files": [
+    "src",
+    "native",
+    "README.md",
+    "LICENSE",
+    "docs"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build:native": "./native/zig/build.sh",
+    "start": "node src/cli.js",
+    "dev": "node src/cli.js",
+    "check": "node --check src/*.js",
+    "prepack": "npm run build:native && npm run check"
+  },
+  "keywords": [
+    "wecom",
+    "cleaner",
+    "wechat-work",
+    "cache",
+    "tui"
+  ],
+  "dependencies": {
+    "@inquirer/prompts": "^7.8.6"
+  }
+}
