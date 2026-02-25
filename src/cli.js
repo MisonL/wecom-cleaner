@@ -113,7 +113,9 @@ function formatEngineStatus({ nativeCorePath, lastRunEngineUsed }) {
 }
 
 const ANSI_RESET = '\x1b[0m';
-const ANSI_VERSION_YELLOW = [250, 220, 90];
+const ANSI_SUBTITLE_COLOR = [35, 120, 220];
+const ANSI_VERSION_COLOR = [25, 150, 190];
+const LOGO_LEFT_PADDING = '  ';
 
 function canUseAnsiColor() {
   return Boolean(process.stdout?.isTTY) && !process.env.NO_COLOR && process.env.NODE_DISABLE_COLORS !== '1';
@@ -121,23 +123,6 @@ function canUseAnsiColor() {
 
 function ansiColor(color) {
   return `\x1b[38;2;${color[0]};${color[1]};${color[2]}m`;
-}
-
-function stripAnsi(text) {
-  return String(text || '').replace(/\x1b\[[0-9;]*m/g, '');
-}
-
-function textWidth(text) {
-  return [...stripAnsi(text)].length;
-}
-
-function centerText(text, width) {
-  const lineWidth = textWidth(text);
-  if (lineWidth >= width) {
-    return text;
-  }
-  const leftPadding = Math.floor((width - lineWidth) / 2);
-  return `${' '.repeat(leftPadding)}${text}`;
 }
 
 function lerp(a, b, t) {
@@ -193,11 +178,11 @@ function colorizeText(text, color) {
   return `${ansiColor(color)}${text}${ANSI_RESET}`;
 }
 
-function renderAsciiLogoLines(appMeta, terminalWidth) {
+function renderAsciiLogoLines(appMeta) {
   const wecomStops = [
-    { at: 0, color: [245, 245, 245] },
-    { at: 0.55, color: [95, 225, 255] },
-    { at: 1, color: [55, 120, 255] },
+    { at: 0, color: [70, 205, 255] },
+    { at: 0.55, color: [55, 165, 255] },
+    { at: 1, color: [70, 110, 255] },
   ];
   const cleanerStops = [
     { at: 0, color: [90, 225, 255] },
@@ -207,15 +192,15 @@ function renderAsciiLogoLines(appMeta, terminalWidth) {
 
   const logoLines = [];
   for (const line of APP_ASCII_LOGO.wecom) {
-    logoLines.push(centerText(colorizeGradient(line, wecomStops), terminalWidth));
+    logoLines.push(`${LOGO_LEFT_PADDING}${colorizeGradient(line, wecomStops)}`);
   }
   logoLines.push('');
   for (const line of APP_ASCII_LOGO.cleaner) {
-    logoLines.push(centerText(colorizeGradient(line, cleanerStops), terminalWidth));
+    logoLines.push(`${LOGO_LEFT_PADDING}${colorizeGradient(line, cleanerStops)}`);
   }
   logoLines.push('');
-  logoLines.push(centerText(colorizeText(APP_ASCII_LOGO.subtitle, ANSI_VERSION_YELLOW), terminalWidth));
-  logoLines.push(centerText(colorizeText(`v${appMeta.version}`, ANSI_VERSION_YELLOW), terminalWidth));
+  logoLines.push(`${LOGO_LEFT_PADDING}${colorizeText(APP_ASCII_LOGO.subtitle, ANSI_SUBTITLE_COLOR)}`);
+  logoLines.push(`${LOGO_LEFT_PADDING}${colorizeText(`v${appMeta.version}`, ANSI_VERSION_COLOR)}`);
   logoLines.push('');
   return logoLines;
 }
@@ -266,8 +251,7 @@ async function loadAppMeta(projectRoot) {
 function printHeader({ config, accountCount, nativeCorePath, lastRunEngineUsed, appMeta }) {
   console.clear();
   const nativeText = formatEngineStatus({ nativeCorePath, lastRunEngineUsed });
-  const terminalWidth = Number(process.stdout.columns || 120);
-  console.log(renderAsciiLogoLines(appMeta, terminalWidth).join('\n'));
+  console.log(renderAsciiLogoLines(appMeta).join('\n'));
   console.log(`${APP_NAME} v${appMeta.version} (${PACKAGE_NAME})`);
   console.log(`作者: ${appMeta.author} | 许可证: ${appMeta.license}`);
   console.log(`仓库: ${appMeta.repository}`);
