@@ -16,6 +16,25 @@ export function expandHome(rawPath) {
   return rawPath;
 }
 
+export function inferDataRootFromProfilesRoot(rootDir) {
+  const expanded = expandHome(rootDir);
+  if (!expanded) {
+    return null;
+  }
+  const normalized = path.resolve(expanded);
+  const marker = `${path.sep}Documents${path.sep}Profiles`;
+  const idx = normalized.lastIndexOf(marker);
+  if (idx > 0) {
+    return normalized.slice(0, idx);
+  }
+  const baseName = path.basename(normalized);
+  const parentName = path.basename(path.dirname(normalized));
+  if (baseName === 'Profiles' && parentName === 'Documents') {
+    return path.resolve(normalized, '..', '..');
+  }
+  return null;
+}
+
 export async function ensureDir(dirPath) {
   await fs.mkdir(dirPath, { recursive: true });
 }
@@ -244,6 +263,18 @@ export async function mapLimit(items, limit, worker) {
 }
 
 export async function calculateDirectorySize(targetPath) {
+  try {
+    const stat = await fs.stat(targetPath);
+    if (stat.isFile()) {
+      return stat.size;
+    }
+    if (!stat.isDirectory()) {
+      return 0;
+    }
+  } catch {
+    return 0;
+  }
+
   let total = 0;
   async function walk(dirPath) {
     let entries;

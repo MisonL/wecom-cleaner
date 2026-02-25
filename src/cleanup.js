@@ -40,6 +40,8 @@ export async function executeCleanup({
   recycleRoot,
   indexPath,
   dryRun,
+  scope = 'cleanup_monthly',
+  shouldSkip,
   onProgress,
 }) {
   const batchId = generateBatchId();
@@ -66,15 +68,84 @@ export async function executeCleanup({
       onProgress(i + 1, total);
     }
 
+    let skipByPolicy = null;
+    if (typeof shouldSkip === 'function') {
+      skipByPolicy = await shouldSkip(target);
+    }
+    if (typeof skipByPolicy === 'string' && skipByPolicy) {
+      summary.skippedCount += 1;
+      await appendJsonLine(indexPath, {
+        action: 'cleanup',
+        time: Date.now(),
+        scope,
+        batchId,
+        sourcePath: target.path,
+        recyclePath: null,
+        accountId: target.accountId,
+        accountShortId: target.accountShortId,
+        userName: target.userName,
+        corpName: target.corpName,
+        categoryKey: target.categoryKey,
+        categoryLabel: target.categoryLabel,
+        monthKey: target.monthKey,
+        sizeBytes: target.sizeBytes,
+        targetKey: target.targetKey || null,
+        tier: target.tier || null,
+        status: skipByPolicy,
+        dryRun: Boolean(dryRun),
+      });
+      continue;
+    }
+
     const exists = await pathExists(target.path);
     if (!exists) {
       summary.skippedCount += 1;
+      await appendJsonLine(indexPath, {
+        action: 'cleanup',
+        time: Date.now(),
+        scope,
+        batchId,
+        sourcePath: target.path,
+        recyclePath: null,
+        accountId: target.accountId,
+        accountShortId: target.accountShortId,
+        userName: target.userName,
+        corpName: target.corpName,
+        categoryKey: target.categoryKey,
+        categoryLabel: target.categoryLabel,
+        monthKey: target.monthKey,
+        sizeBytes: target.sizeBytes,
+        targetKey: target.targetKey || null,
+        tier: target.tier || null,
+        status: 'skipped_missing_source',
+        dryRun: Boolean(dryRun),
+      });
       continue;
     }
 
     if (dryRun) {
       summary.successCount += 1;
       summary.reclaimedBytes += target.sizeBytes;
+      await appendJsonLine(indexPath, {
+        action: 'cleanup',
+        time: Date.now(),
+        scope,
+        batchId,
+        sourcePath: target.path,
+        recyclePath: null,
+        accountId: target.accountId,
+        accountShortId: target.accountShortId,
+        userName: target.userName,
+        corpName: target.corpName,
+        categoryKey: target.categoryKey,
+        categoryLabel: target.categoryLabel,
+        monthKey: target.monthKey,
+        sizeBytes: target.sizeBytes,
+        targetKey: target.targetKey || null,
+        tier: target.tier || null,
+        status: 'dry_run',
+        dryRun: true,
+      });
       continue;
     }
 
@@ -90,6 +161,7 @@ export async function executeCleanup({
       await appendJsonLine(indexPath, {
         action: 'cleanup',
         time: now,
+        scope,
         batchId,
         sourcePath: target.path,
         recyclePath,
@@ -101,12 +173,38 @@ export async function executeCleanup({
         categoryLabel: target.categoryLabel,
         monthKey: target.monthKey,
         sizeBytes: target.sizeBytes,
+        targetKey: target.targetKey || null,
+        tier: target.tier || null,
+        status: 'success',
+        dryRun: false,
       });
     } catch (error) {
       summary.failedCount += 1;
+      const message = error instanceof Error ? error.message : String(error);
       summary.errors.push({
         path: target.path,
-        message: error instanceof Error ? error.message : String(error),
+        message,
+      });
+      await appendJsonLine(indexPath, {
+        action: 'cleanup',
+        time: Date.now(),
+        scope,
+        batchId,
+        sourcePath: target.path,
+        recyclePath,
+        accountId: target.accountId,
+        accountShortId: target.accountShortId,
+        userName: target.userName,
+        corpName: target.corpName,
+        categoryKey: target.categoryKey,
+        categoryLabel: target.categoryLabel,
+        monthKey: target.monthKey,
+        sizeBytes: target.sizeBytes,
+        targetKey: target.targetKey || null,
+        tier: target.tier || null,
+        status: 'failed',
+        dryRun: false,
+        error: message,
       });
     }
   }

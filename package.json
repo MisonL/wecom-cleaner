@@ -35,7 +35,10 @@
     "start": "node src/cli.js",
     "dev": "node src/cli.js",
     "check": "node --check src/*.js",
-    "prepack": "npm run build:native:release && npm run check"
+    "e2e:smoke": "bash scripts/e2e-smoke.sh",
+    "prepack": "npm run build:native:release && npm run check",
+    "pack:tgz": "node scripts/pack-tgz.js",
+    "pack:tgz:dry-run": "node scripts/pack-tgz.js --dry-run"
   },
   "keywords": [
     "wecom",

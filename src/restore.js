@@ -1,6 +1,7 @@
-import { promises as fs } from 'node:fs';
+import { promises as fs, createReadStream } from 'node:fs';
 import path from 'node:path';
-import { appendJsonLine, ensureDir, pathExists, readJsonLines } from './utils.js';
+import readline from 'node:readline';
+import { appendJsonLine, ensureDir, pathExists } from './utils.js';
 
 async function movePath(src, dest) {
   await ensureDir(path.dirname(dest));
@@ -35,21 +36,250 @@ function isPathWithinRoot(rootPath, targetPath) {
   return !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
-export async function listRestorableBatches(indexPath) {
-  const rows = await readJsonLines(indexPath);
-  const restoredSet = new Set(
-    rows
-      .filter((row) => row?.action === 'restore' && row?.status === 'success' && typeof row.recyclePath === 'string')
-      .map((row) => row.recyclePath)
-  );
-
-  const cleanupRows = rows.filter((row) => row?.action === 'cleanup' && typeof row.recyclePath === 'string');
-  const batches = new Map();
-
-  for (const row of cleanupRows) {
-    if (restoredSet.has(row.recyclePath)) {
+function isPathWithinAnyRoot(rootPaths, targetPath) {
+  for (const rootPath of rootPaths) {
+    if (!rootPath) {
       continue;
     }
+    if (isPathWithinRoot(rootPath, targetPath)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function normalizeRootList(rootPaths) {
+  return [...new Set((rootPaths || []).map((item) => String(item || '').trim()).filter(Boolean).map((item) => path.resolve(item)))];
+}
+
+function isPathWithinResolvedRoot(rootPathResolved, targetPathResolved) {
+  const rel = path.relative(rootPathResolved, targetPathResolved);
+  if (!rel) {
+    return true;
+  }
+  return !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+function isPathWithinAnyResolvedRoot(rootPathsResolved, targetPathResolved) {
+  for (const rootPathResolved of rootPathsResolved || []) {
+    if (!rootPathResolved) {
+      continue;
+    }
+    if (isPathWithinResolvedRoot(rootPathResolved, targetPathResolved)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function safeRealpath(targetPath) {
+  try {
+    return await fs.realpath(targetPath);
+  } catch {
+    return null;
+  }
+}
+
+async function resolveExistingAncestorRealpath(targetPathAbs) {
+  let current = path.resolve(targetPathAbs);
+  while (true) {
+    const real = await safeRealpath(current);
+    if (real) {
+      return {
+        ancestorPath: current,
+        ancestorRealPath: real,
+      };
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return null;
+    }
+    current = parent;
+  }
+}
+
+async function resolvePathForBoundaryCheck(targetPath) {
+  const targetAbs = path.resolve(targetPath);
+  const stat = await fs.lstat(targetAbs).catch(() => null);
+  if (stat) {
+    const targetReal = await safeRealpath(targetAbs);
+    if (!targetReal) {
+      return {
+        ok: false,
+        reason: 'realpath_failed',
+      };
+    }
+    return {
+      ok: true,
+      resolvedPath: targetReal,
+      source: 'existing',
+    };
+  }
+
+  const ancestor = await resolveExistingAncestorRealpath(targetAbs);
+  if (!ancestor) {
+    return {
+      ok: false,
+      reason: 'missing_existing_ancestor',
+    };
+  }
+
+  const rel = path.relative(ancestor.ancestorPath, targetAbs);
+  return {
+    ok: true,
+    resolvedPath: path.resolve(ancestor.ancestorRealPath, rel || '.'),
+    source: 'ancestor',
+  };
+}
+
+async function resolveRootsRealpath(rootPaths) {
+  const resolved = [];
+  for (const rootPath of normalizeRootList(rootPaths)) {
+    const real = await safeRealpath(rootPath);
+    if (!real) {
+      continue;
+    }
+    resolved.push(real);
+  }
+  return [...new Set(resolved)];
+}
+
+async function buildRestoreValidationState({
+  profileRoot,
+  extraProfileRoots,
+  recycleRoot,
+  governanceRoot,
+  extraGovernanceRoots,
+}) {
+  const profileRootsRaw = normalizeRootList([profileRoot, ...(extraProfileRoots || [])]);
+  const governanceRootsRaw = normalizeRootList([governanceRoot, ...(extraGovernanceRoots || [])]);
+  const recycleRootRaw = normalizeRootList([recycleRoot])[0] || null;
+
+  const [profileRootsReal, governanceRootsReal, recycleRootReal] = await Promise.all([
+    resolveRootsRealpath(profileRootsRaw),
+    resolveRootsRealpath(governanceRootsRaw),
+    recycleRootRaw ? safeRealpath(recycleRootRaw) : Promise.resolve(null),
+  ]);
+
+  return {
+    profileRootsRaw,
+    governanceRootsRaw,
+    recycleRootRaw,
+    profileRootsReal,
+    governanceRootsReal,
+    recycleRootReal,
+  };
+}
+
+async function streamJsonRows(filePath, onRow) {
+  const exists = await pathExists(filePath);
+  if (!exists) {
+    return;
+  }
+
+  const input = createReadStream(filePath, { encoding: 'utf-8' });
+  const rl = readline.createInterface({ input, crlfDelay: Infinity });
+
+  try {
+    for await (const line of rl) {
+      const text = String(line || '').trim();
+      if (!text) {
+        continue;
+      }
+      try {
+        const row = JSON.parse(text);
+        await onRow(row);
+      } catch {
+        // ignore malformed jsonl row
+      }
+    }
+  } catch {
+    // ignore stream errors
+  } finally {
+    rl.close();
+    input.close();
+  }
+}
+
+async function validateRestoreEntryPath({
+  originalPath,
+  recyclePath,
+  scope,
+  validationState,
+}) {
+  if (typeof originalPath !== 'string' || typeof recyclePath !== 'string' || !originalPath || !recyclePath) {
+    return 'invalid_path_record';
+  }
+
+  if (validationState.recycleRootRaw) {
+    if (!validationState.recycleRootReal) {
+      return 'missing_recycle_root';
+    }
+
+    const recycleChecked = await resolvePathForBoundaryCheck(recyclePath);
+    if (!recycleChecked.ok) {
+      return 'recycle_path_unresolvable';
+    }
+
+    const recycleInside = isPathWithinResolvedRoot(validationState.recycleRootReal, recycleChecked.resolvedPath);
+    if (!recycleInside) {
+      const rawInside = isPathWithinRoot(validationState.recycleRootRaw, recyclePath);
+      return rawInside ? 'recycle_symlink_escape' : 'recycle_outside_recycle_root';
+    }
+  }
+
+  const governanceScope = scope === 'space_governance';
+  const sourceRootsRaw = governanceScope ? validationState.governanceRootsRaw : validationState.profileRootsRaw;
+  const sourceRootsReal = governanceScope ? validationState.governanceRootsReal : validationState.profileRootsReal;
+  if (sourceRootsReal.length === 0) {
+    return 'missing_allowed_root';
+  }
+
+  const sourceChecked = await resolvePathForBoundaryCheck(originalPath);
+  if (!sourceChecked.ok) {
+    return 'source_path_unresolvable';
+  }
+
+  const sourceInside = isPathWithinAnyResolvedRoot(sourceRootsReal, sourceChecked.resolvedPath);
+  if (!sourceInside) {
+    const rawInside = isPathWithinAnyRoot(sourceRootsRaw, originalPath);
+    if (rawInside) {
+      return 'source_symlink_escape';
+    }
+    return governanceScope ? 'source_outside_governance_root' : 'source_outside_profile_root';
+  }
+
+  return null;
+}
+
+export async function listRestorableBatches(indexPath, options = {}) {
+  const recycleRoot = typeof options.recycleRoot === 'string' ? options.recycleRoot : null;
+  const restoredSet = new Set();
+  const cleanupRows = new Map();
+
+  await streamJsonRows(indexPath, async (row) => {
+    if (!row || typeof row !== 'object') {
+      return;
+    }
+    if (row.action === 'restore' && row.status === 'success' && typeof row.recyclePath === 'string') {
+      restoredSet.add(row.recyclePath);
+      cleanupRows.delete(row.recyclePath);
+      return;
+    }
+    if (row.action === 'cleanup' && row.status === 'success' && typeof row.recyclePath === 'string') {
+      if (!restoredSet.has(row.recyclePath)) {
+        cleanupRows.set(row.recyclePath, row);
+      }
+    }
+  });
+
+  const batches = new Map();
+
+  for (const row of cleanupRows.values()) {
+    if (recycleRoot && !isPathWithinRoot(recycleRoot, row.recyclePath)) {
+      continue;
+    }
+
     const recycleExists = await pathExists(row.recyclePath);
     if (!recycleExists) {
       continue;
@@ -77,9 +307,12 @@ export async function restoreBatch({
   batch,
   indexPath,
   onConflict,
-  onRiskConfirm,
   onProgress,
   profileRoot = null,
+  extraProfileRoots = [],
+  recycleRoot = null,
+  governanceRoot = null,
+  extraGovernanceRoots = [],
 }) {
   const summary = {
     batchId: batch.batchId,
@@ -90,8 +323,15 @@ export async function restoreBatch({
     errors: [],
   };
 
+  const validationState = await buildRestoreValidationState({
+    profileRoot,
+    extraProfileRoots,
+    recycleRoot,
+    governanceRoot,
+    extraGovernanceRoots,
+  });
+
   let applyAllAction = null;
-  let applyAllRiskAllow = null;
   const total = batch.entries.length;
 
   for (let i = 0; i < total; i += 1) {
@@ -102,59 +342,51 @@ export async function restoreBatch({
 
     const recyclePath = entry.recyclePath;
     const originalPath = entry.sourcePath;
-    const outOfProfileRoot = Boolean(profileRoot) && !isPathWithinRoot(profileRoot, originalPath);
-    let riskConfirmed = null;
+    const scope = typeof entry.scope === 'string' && entry.scope ? entry.scope : 'cleanup_monthly';
+    const invalidPathReason = await validateRestoreEntryPath({
+      originalPath,
+      recyclePath,
+      scope,
+      validationState,
+    });
+
+    if (invalidPathReason) {
+      summary.skipCount += 1;
+      await appendJsonLine(indexPath, {
+        action: 'restore',
+        time: Date.now(),
+        scope,
+        batchId: batch.batchId,
+        recyclePath,
+        sourcePath: originalPath,
+        status: 'skipped_invalid_path',
+        invalid_reason: invalidPathReason,
+        profile_root: profileRoot,
+        extra_profile_roots: extraProfileRoots,
+        recycle_root: recycleRoot,
+        governance_root: governanceRoot,
+        extra_governance_roots: extraGovernanceRoots,
+      });
+      continue;
+    }
 
     if (!(await pathExists(recyclePath))) {
       summary.skipCount += 1;
       await appendJsonLine(indexPath, {
         action: 'restore',
         time: Date.now(),
+        scope,
         batchId: batch.batchId,
         recyclePath,
         sourcePath: originalPath,
         status: 'skipped_missing_recycle',
-        risk: outOfProfileRoot ? 'out_of_profile_root' : null,
-        user_confirmed: outOfProfileRoot ? Boolean(riskConfirmed) : null,
-        profile_root: outOfProfileRoot ? profileRoot : null,
+        profile_root: profileRoot,
+        extra_profile_roots: extraProfileRoots,
+        recycle_root: recycleRoot,
+        governance_root: governanceRoot,
+        extra_governance_roots: extraGovernanceRoots,
       });
       continue;
-    }
-
-    if (outOfProfileRoot) {
-      let allow = applyAllRiskAllow;
-      if (allow === null) {
-        if (typeof onRiskConfirm === 'function') {
-          const resolved = await onRiskConfirm({
-            originalPath,
-            recyclePath,
-            profileRoot,
-            entry,
-          });
-          allow = Boolean(resolved?.allow);
-          if (resolved?.applyToAll) {
-            applyAllRiskAllow = allow;
-          }
-        } else {
-          allow = true;
-        }
-      }
-      riskConfirmed = Boolean(allow);
-      if (!riskConfirmed) {
-        summary.skipCount += 1;
-        await appendJsonLine(indexPath, {
-          action: 'restore',
-          time: Date.now(),
-          batchId: batch.batchId,
-          recyclePath,
-          sourcePath: originalPath,
-          status: 'skipped_risk_rejected',
-          risk: 'out_of_profile_root',
-          user_confirmed: false,
-          profile_root: profileRoot,
-        });
-        continue;
-      }
     }
 
     let targetPath = originalPath;
@@ -183,13 +415,16 @@ export async function restoreBatch({
         await appendJsonLine(indexPath, {
           action: 'restore',
           time: Date.now(),
+          scope,
           batchId: batch.batchId,
           recyclePath,
           sourcePath: originalPath,
           status: 'skipped_conflict',
-          risk: outOfProfileRoot ? 'out_of_profile_root' : null,
-          user_confirmed: outOfProfileRoot ? Boolean(riskConfirmed) : null,
-          profile_root: outOfProfileRoot ? profileRoot : null,
+          profile_root: profileRoot,
+          extra_profile_roots: extraProfileRoots,
+          recycle_root: recycleRoot,
+          governance_root: governanceRoot,
+          extra_governance_roots: extraGovernanceRoots,
         });
         continue;
       }
@@ -211,14 +446,17 @@ export async function restoreBatch({
       await appendJsonLine(indexPath, {
         action: 'restore',
         time: Date.now(),
+        scope,
         batchId: batch.batchId,
         recyclePath,
         sourcePath: originalPath,
         restoredPath: targetPath,
         status: 'success',
-        risk: outOfProfileRoot ? 'out_of_profile_root' : null,
-        user_confirmed: outOfProfileRoot ? Boolean(riskConfirmed) : null,
-        profile_root: outOfProfileRoot ? profileRoot : null,
+        profile_root: profileRoot,
+        extra_profile_roots: extraProfileRoots,
+        recycle_root: recycleRoot,
+        governance_root: governanceRoot,
+        extra_governance_roots: extraGovernanceRoots,
       });
     } catch (error) {
       summary.failCount += 1;
@@ -231,14 +469,17 @@ export async function restoreBatch({
       await appendJsonLine(indexPath, {
         action: 'restore',
         time: Date.now(),
+        scope,
         batchId: batch.batchId,
         recyclePath,
         sourcePath: originalPath,
         status: 'failed',
         error: error instanceof Error ? error.message : String(error),
-        risk: outOfProfileRoot ? 'out_of_profile_root' : null,
-        user_confirmed: outOfProfileRoot ? Boolean(riskConfirmed) : null,
-        profile_root: outOfProfileRoot ? profileRoot : null,
+        profile_root: profileRoot,
+        extra_profile_roots: extraProfileRoots,
+        recycle_root: recycleRoot,
+        governance_root: governanceRoot,
+        extra_governance_roots: extraGovernanceRoots,
       });
     }
   }
