@@ -124,21 +124,44 @@ function categoryChoices(defaultKeys = [], options = {}) {
   }));
 }
 
-function formatEngineStatus({ nativeCorePath, lastRunEngineUsed }) {
+function resolveEngineStatus({ nativeCorePath, lastRunEngineUsed }) {
   if (!nativeCorePath) {
-    return 'Zig加速:未开启(当前使用Node)';
+    return {
+      badge: 'Node模式',
+      detail: '未检测到 Zig 核心，当前使用 Node 引擎',
+      tone: 'muted',
+      fullText: 'Zig加速:未开启(当前使用Node)',
+    };
   }
   if (lastRunEngineUsed === 'zig') {
-    return 'Zig加速:已生效(本次扫描更快)';
+    return {
+      badge: 'Zig加速',
+      detail: '本次扫描已启用 Zig 核心',
+      tone: 'ok',
+      fullText: 'Zig加速:已生效(本次扫描更快)',
+    };
   }
   if (lastRunEngineUsed === 'node') {
-    return 'Zig加速:本次未生效(已自动改用Node)';
+    return {
+      badge: 'Node回退',
+      detail: '检测到 Zig 核心，但本次扫描自动回退到 Node',
+      tone: 'warn',
+      fullText: 'Zig加速:本次未生效(已自动改用Node)',
+    };
   }
-  return 'Zig加速:已就绪(开始扫描后自动使用)';
+  return {
+    badge: 'Zig就绪',
+    detail: '已检测到 Zig 核心，开始扫描后会自动启用',
+    tone: 'info',
+    fullText: 'Zig加速:已就绪(开始扫描后自动使用)',
+  };
 }
 
 const ANSI_RESET = '\x1b[0m';
+const ANSI_BOLD = '\x1b[1m';
 const LOGO_LEFT_PADDING = '  ';
+const INFO_LEFT_PADDING = '  ';
+const AUTO_ADAPTIVE_LABEL_COLOR = [46, 132, 228];
 const THEME_AUTO = 'auto';
 const THEME_LIGHT = 'light';
 const THEME_DARK = 'dark';
@@ -173,6 +196,32 @@ const LOGO_THEME_PALETTES = {
     versionColor: [95, 220, 240],
   },
 };
+const INFO_THEME_PALETTES = {
+  light: {
+    labelColor: [36, 72, 124],
+    valueColor: [32, 44, 66],
+    mutedColor: [62, 82, 116],
+    dividerColor: [176, 186, 206],
+    badges: {
+      info: [35, 128, 220],
+      ok: [0, 164, 94],
+      warn: [190, 145, 0],
+      muted: [122, 134, 156],
+    },
+  },
+  dark: {
+    labelColor: [148, 198, 255],
+    valueColor: [232, 242, 255],
+    mutedColor: [196, 216, 246],
+    dividerColor: [92, 114, 152],
+    badges: {
+      info: [60, 150, 255],
+      ok: [24, 185, 108],
+      warn: [212, 168, 38],
+      muted: [104, 118, 145],
+    },
+  },
+};
 
 function canUseAnsiColor() {
   return Boolean(process.stdout?.isTTY) && !process.env.NO_COLOR && process.env.NODE_DISABLE_COLORS !== '1';
@@ -180,6 +229,10 @@ function canUseAnsiColor() {
 
 function ansiColor(color) {
   return `\x1b[38;2;${color[0]};${color[1]};${color[2]}m`;
+}
+
+function ansiBgColor(color) {
+  return `\x1b[48;2;${color[0]};${color[1]};${color[2]}m`;
 }
 
 function normalizeThemeMode(themeMode) {
@@ -255,7 +308,7 @@ function themeLabel(themeMode) {
 function formatThemeStatus(themeMode, resolvedThemeMode) {
   const normalized = normalizeThemeMode(themeMode);
   if (normalized === THEME_AUTO) {
-    return `主题:自动(${themeLabel(resolvedThemeMode)})`;
+    return '主题:自动';
   }
   return `主题:${themeLabel(normalized)}`;
 }
@@ -306,11 +359,65 @@ function colorizeGradient(line, stops) {
   return `${output}${ANSI_RESET}`;
 }
 
-function colorizeText(text, color) {
+function colorizeText(text, color, options = {}) {
   if (!canUseAnsiColor()) {
     return text;
   }
-  return `${ansiColor(color)}${text}${ANSI_RESET}`;
+  const boldPrefix = options.bold ? ANSI_BOLD : '';
+  return `${boldPrefix}${ansiColor(color)}${text}${ANSI_RESET}`;
+}
+
+function styleWithTerminalDefault(text, options = {}) {
+  if (!canUseAnsiColor()) {
+    return text;
+  }
+  const boldPrefix = options.bold ? ANSI_BOLD : '';
+  return `${boldPrefix}${text}${ANSI_RESET}`;
+}
+
+function resolveInfoPalette(resolvedThemeMode) {
+  return INFO_THEME_PALETTES[resolvedThemeMode] || INFO_THEME_PALETTES.dark;
+}
+
+function pickBadgeForegroundColor(bgColor) {
+  const brightness = (bgColor[0] * 299 + bgColor[1] * 587 + bgColor[2] * 114) / 1000;
+  return brightness >= 150 ? [18, 26, 40] : [245, 250, 255];
+}
+
+function renderBadge(text, tone, palette) {
+  if (!canUseAnsiColor()) {
+    return `[${text}]`;
+  }
+  const bg = palette.badges[tone] || palette.badges.info;
+  const fg = pickBadgeForegroundColor(bg);
+  return `${ansiBgColor(bg)}${ansiColor(fg)} ${text} ${ANSI_RESET}`;
+}
+
+function renderHeaderDivider(resolvedThemeMode, options = {}) {
+  const palette = resolveInfoPalette(resolvedThemeMode);
+  const width = Math.max(
+    42,
+    Math.min(96, Number(process.stdout.columns || 120) - INFO_LEFT_PADDING.length * 2)
+  );
+  if (options.adaptiveText) {
+    return `${INFO_LEFT_PADDING}${styleWithTerminalDefault('─'.repeat(width))}`;
+  }
+  return `${INFO_LEFT_PADDING}${colorizeText('─'.repeat(width), palette.dividerColor)}`;
+}
+
+function renderHeaderInfoLine(label, value, resolvedThemeMode, options = {}) {
+  const palette = resolveInfoPalette(resolvedThemeMode);
+  const maxValueWidth = Math.max(28, Number(process.stdout.columns || 120) - 18);
+  const clippedValue = trimToWidth(String(value || '-'), maxValueWidth);
+  if (options.adaptiveText) {
+    const labelText = colorizeText(`${label}:`, AUTO_ADAPTIVE_LABEL_COLOR, { bold: true });
+    const valueText = styleWithTerminalDefault(clippedValue);
+    return `${INFO_LEFT_PADDING}${labelText} ${valueText}`;
+  }
+  const labelText = colorizeText(`${label}:`, palette.labelColor, { bold: true });
+  const isDarkTheme = resolvedThemeMode === THEME_DARK;
+  const valueColor = options.muted ? (isDarkTheme ? palette.valueColor : palette.mutedColor) : palette.valueColor;
+  return `${INFO_LEFT_PADDING}${labelText} ${colorizeText(clippedValue, valueColor)}`;
 }
 
 function renderAsciiLogoLines(appMeta, resolvedThemeMode) {
@@ -448,36 +555,65 @@ function printHeader({
   profileRootHealth = null,
 }) {
   console.clear();
-  const nativeText = formatEngineStatus({ nativeCorePath, lastRunEngineUsed });
+  const normalizedThemeMode = normalizeThemeMode(config.theme);
   const resolvedThemeMode = resolveThemeMode(config.theme);
+  const palette = resolveInfoPalette(resolvedThemeMode);
+  const engineStatus = resolveEngineStatus({ nativeCorePath, lastRunEngineUsed });
+  const adaptiveHeaderText = normalizedThemeMode === THEME_AUTO;
+  const renderLine = (label, value, options = {}) =>
+    renderHeaderInfoLine(label, value, resolvedThemeMode, {
+      adaptiveText: adaptiveHeaderText,
+      ...options,
+    });
+
   console.log(renderAsciiLogoLines(appMeta, resolvedThemeMode).join('\n'));
-  console.log(`${APP_NAME} v${appMeta.version} (${PACKAGE_NAME})`);
-  console.log(`作者: ${appMeta.author} | 许可证: ${appMeta.license}`);
-  console.log(`仓库: ${appMeta.repository}`);
-  console.log(`根目录: ${config.rootDir}`);
-  console.log(`状态目录: ${config.stateRoot}`);
-  console.log(
-    `账号数: ${accountCount} | ${nativeText} | ${formatThemeStatus(config.theme, resolvedThemeMode)}`
-  );
+
+  const stateBadges = [
+    renderBadge(`账号 ${accountCount}`, 'info', palette),
+    renderBadge(engineStatus.badge, engineStatus.tone, palette),
+    renderBadge(formatThemeStatus(config.theme, resolvedThemeMode), 'muted', palette),
+  ];
+  console.log(`${INFO_LEFT_PADDING}${stateBadges.join(' ')}`);
+  console.log(renderLine('引擎说明', engineStatus.detail, { muted: true }));
+  console.log(renderHeaderDivider(resolvedThemeMode, { adaptiveText: adaptiveHeaderText }));
+
+  console.log(renderLine('应用', `${APP_NAME} v${appMeta.version} (${PACKAGE_NAME})`));
+  console.log(renderLine('作者/许可', `${appMeta.author} | ${appMeta.license}`));
+  console.log(renderLine('仓库', appMeta.repository));
+  console.log(renderLine('根目录', config.rootDir));
+  console.log(renderLine('状态目录', config.stateRoot));
+
   const sourceCounts = externalStorageMeta?.sourceCounts || null;
   if (externalStorageRoots.length > 0) {
     if (sourceCounts) {
       console.log(
-        `文件存储目录: 共${externalStorageRoots.length}个（默认${sourceCounts.builtin || 0} / 手动${sourceCounts.configured || 0} / 自动${sourceCounts.auto || 0}）`
+        renderLine(
+          '文件存储',
+          `共${externalStorageRoots.length}个（默认${sourceCounts.builtin || 0} / 手动${sourceCounts.configured || 0} / 自动${sourceCounts.auto || 0}）`
+        )
       );
     } else {
       console.log(
-        `文件存储目录: 已检测 ${externalStorageRoots.length} 个（含默认/自定义，示例: ${externalStorageRoots[0]}）`
+        renderLine(
+          '文件存储',
+          `已检测 ${externalStorageRoots.length} 个（含默认/自定义，示例: ${externalStorageRoots[0]}）`
+        )
       );
     }
   } else {
-    console.log('文件存储目录: 未检测到（可在设置里手动添加）');
+    console.log(renderLine('文件存储', '未检测到（可在设置里手动添加）'));
   }
   if ((sourceCounts?.auto || 0) > 0) {
-    console.log('探测提示: 自动探测目录默认不预选，纳入处理前请确认。');
+    console.log(renderLine('探测提示', '自动探测目录默认不预选，纳入处理前请确认。', { muted: true }));
   }
   if ((sourceCounts?.auto || 0) > 0 && (sourceCounts?.builtin || 0) + (sourceCounts?.configured || 0) === 0) {
-    console.log('操作建议: 建议在“交互配置 -> 手动追加文件存储根目录”先确认常用路径。');
+    console.log(
+      renderLine(
+        '操作建议',
+        '建议在“交互配置 -> 手动追加文件存储根目录”先确认常用路径。',
+        { muted: true }
+      )
+    );
   }
   if (
     externalStorageMeta &&
@@ -485,13 +621,23 @@ function printHeader({
     externalStorageMeta.truncatedRoots.length > 0
   ) {
     console.log(
-      `探测提示: ${externalStorageMeta.truncatedRoots.length} 个搜索根达到扫描预算上限，建议手动补充路径`
+      renderLine(
+        '探测提示',
+        `${externalStorageMeta.truncatedRoots.length} 个搜索根达到扫描预算上限，建议手动补充路径`,
+        { muted: true }
+      )
     );
   }
   if (profileRootHealth?.status === 'missing') {
-    console.log('目录提示: 当前 Profile 根目录不存在，请在“交互配置”中修正。');
+    console.log(
+      renderLine(
+        '目录提示',
+        '当前 Profile 根目录不存在，请在“交互配置”中修正。',
+        { muted: true }
+      )
+    );
   } else if (profileRootHealth?.status === 'empty') {
-    console.log('目录提示: 当前 Profile 根目录未识别到账号目录。');
+    console.log(renderLine('目录提示', '当前 Profile 根目录未识别到账号目录。', { muted: true }));
   }
   if (
     profileRootHealth &&
@@ -502,12 +648,13 @@ function printHeader({
       .slice(0, 3)
       .map((item) => `${item.rootDir} (${item.accountCount}账号)`)
       .join(' ; ');
-    console.log(`候选目录: ${candidateText}`);
-    console.log('操作建议: 进入“交互配置 -> Profile 根目录”修改。');
+    console.log(renderLine('候选目录', candidateText, { muted: true }));
+    console.log(renderLine('操作建议', '进入“交互配置 -> Profile 根目录”修改。', { muted: true }));
   }
   if (nativeRepairNote) {
-    console.log(`修复状态: ${nativeRepairNote}`);
+    console.log(renderLine('修复状态', nativeRepairNote, { muted: true }));
   }
+  console.log(renderHeaderDivider(resolvedThemeMode, { adaptiveText: adaptiveHeaderText }));
 }
 
 function accountTableRows(accounts) {
