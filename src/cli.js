@@ -101,15 +101,15 @@ function categoryChoices(defaultKeys = []) {
 
 function formatEngineStatus({ nativeCorePath, lastRunEngineUsed }) {
   if (!nativeCorePath) {
-    return 'Zig核心:未启用(Node)';
+    return 'Zig加速:未开启(当前使用Node)';
   }
   if (lastRunEngineUsed === 'zig') {
-    return 'Zig核心:已启用(运行中)';
+    return 'Zig加速:已生效(本次扫描更快)';
   }
   if (lastRunEngineUsed === 'node') {
-    return 'Zig核心:已探测(本次回退Node)';
+    return 'Zig加速:本次未生效(已自动改用Node)';
   }
-  return 'Zig核心:已探测(待使用)';
+  return 'Zig加速:已就绪(开始扫描后自动使用)';
 }
 
 const ANSI_RESET = '\x1b[0m';

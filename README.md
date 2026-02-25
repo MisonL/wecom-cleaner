@@ -64,13 +64,14 @@ npm run dev
 - `native/bin/darwin-x64/wecom-cleaner-core`
 - `native/bin/darwin-arm64/wecom-cleaner-core`
 
-如果你看到标题栏 `Zig核心:已启用`，表示正在使用 Zig 扫描引擎；
+如果你看到标题栏 `Zig加速:已生效`，表示正在使用 Zig 扫描引擎；
 否则会自动回退到 Node 引擎（功能不受影响，只是扫描速度可能较慢）。
 
 状态含义：
-- `Zig核心:已启用(运行中)`：本次扫描实际使用 Zig。
-- `Zig核心:已探测(本次回退Node)`：检测到 Zig，但本次运行回退到 Node。
-- `Zig核心:未启用(Node)`：未检测到可用 Zig 核心。
+- `Zig加速:已生效(本次扫描更快)`：本次扫描实际使用 Zig。
+- `Zig加速:本次未生效(已自动改用Node)`：检测到 Zig，但本次运行回退到 Node。
+- `Zig加速:已就绪(开始扫描后自动使用)`：已经检测到 Zig，可直接开始使用。
+- `Zig加速:未开启(当前使用Node)`：未检测到可用 Zig 核心。
 
 ## 常用参数
 
