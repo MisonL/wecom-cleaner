@@ -79,6 +79,7 @@ wecom-cleaner --root ~/Library/Containers/com.tencent.WeWorkMac/Data/Documents/P
 wecom-cleaner --state-root ~/.wecom-cleaner-state
 wecom-cleaner --dry-run-default true
 wecom-cleaner --mode cleanup_monthly
+wecom-cleaner --theme auto
 ```
 
 可选 `--mode`：
@@ -86,6 +87,11 @@ wecom-cleaner --mode cleanup_monthly
 - `analysis_only`
 - `restore`
 - `settings`
+
+可选 `--theme`：
+- `auto`：自动判断（优先读取终端环境，如 `COLORFGBG`）
+- `light`：亮色主题色板
+- `dark`：暗色主题色板
 
 跨平台编译 Zig 核心示例：
 

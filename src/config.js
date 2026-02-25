@@ -2,6 +2,19 @@ import path from 'node:path';
 import { DEFAULT_PROFILE_ROOT, DEFAULT_STATE_ROOT } from './constants.js';
 import { ensureDir, expandHome, readJson, writeJson } from './utils.js';
 
+const ALLOWED_THEMES = new Set(['auto', 'light', 'dark']);
+
+function normalizeTheme(theme) {
+  if (typeof theme !== 'string') {
+    return null;
+  }
+  const normalized = theme.trim().toLowerCase();
+  if (!ALLOWED_THEMES.has(normalized)) {
+    return null;
+  }
+  return normalized;
+}
+
 export function defaultConfig() {
   const stateRoot = DEFAULT_STATE_ROOT;
   return {
@@ -12,6 +25,7 @@ export function defaultConfig() {
     aliasPath: path.join(stateRoot, 'account-aliases.json'),
     dryRunDefault: true,
     defaultCategories: [],
+    theme: 'auto',
   };
 }
 
@@ -21,6 +35,7 @@ export function parseCliArgs(argv) {
     stateRoot: null,
     dryRunDefault: null,
     mode: null,
+    theme: null,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -43,6 +58,11 @@ export function parseCliArgs(argv) {
     }
     if (token === '--mode' && argv[i + 1]) {
       parsed.mode = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (token === '--theme' && argv[i + 1]) {
+      parsed.theme = normalizeTheme(argv[i + 1]);
       i += 1;
       continue;
     }
@@ -69,6 +89,7 @@ export async function loadConfig(cliArgs = {}) {
         : typeof fileConfig.dryRunDefault === 'boolean'
           ? fileConfig.dryRunDefault
           : base.dryRunDefault,
+    theme: normalizeTheme(cliArgs.theme || fileConfig.theme || base.theme) || base.theme,
   };
 
   merged.recycleRoot = expandHome(fileConfig.recycleRoot || path.join(stateRoot, 'recycle-bin'));
@@ -91,6 +112,7 @@ export async function saveConfig(config) {
     aliasPath: config.aliasPath,
     dryRunDefault: Boolean(config.dryRunDefault),
     defaultCategories: Array.isArray(config.defaultCategories) ? config.defaultCategories : [],
+    theme: normalizeTheme(config.theme) || 'auto',
   };
   await writeJson(config.configPath, payload);
 }

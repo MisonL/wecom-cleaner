@@ -113,9 +113,41 @@ function formatEngineStatus({ nativeCorePath, lastRunEngineUsed }) {
 }
 
 const ANSI_RESET = '\x1b[0m';
-const ANSI_SUBTITLE_COLOR = [35, 120, 220];
-const ANSI_VERSION_COLOR = [25, 150, 190];
 const LOGO_LEFT_PADDING = '  ';
+const THEME_AUTO = 'auto';
+const THEME_LIGHT = 'light';
+const THEME_DARK = 'dark';
+const THEME_SET = new Set([THEME_AUTO, THEME_LIGHT, THEME_DARK]);
+const LOGO_THEME_PALETTES = {
+  light: {
+    wecomStops: [
+      { at: 0, color: [0, 170, 220] },
+      { at: 0.55, color: [0, 130, 220] },
+      { at: 1, color: [55, 85, 215] },
+    ],
+    cleanerStops: [
+      { at: 0, color: [0, 190, 215] },
+      { at: 0.6, color: [0, 185, 95] },
+      { at: 1, color: [210, 175, 0] },
+    ],
+    subtitleColor: [20, 90, 185],
+    versionColor: [0, 120, 165],
+  },
+  dark: {
+    wecomStops: [
+      { at: 0, color: [70, 205, 255] },
+      { at: 0.55, color: [55, 165, 255] },
+      { at: 1, color: [70, 110, 255] },
+    ],
+    cleanerStops: [
+      { at: 0, color: [90, 225, 255] },
+      { at: 0.6, color: [90, 220, 140] },
+      { at: 1, color: [250, 220, 90] },
+    ],
+    subtitleColor: [120, 180, 255],
+    versionColor: [95, 220, 240],
+  },
+};
 
 function canUseAnsiColor() {
   return Boolean(process.stdout?.isTTY) && !process.env.NO_COLOR && process.env.NODE_DISABLE_COLORS !== '1';
@@ -123,6 +155,84 @@ function canUseAnsiColor() {
 
 function ansiColor(color) {
   return `\x1b[38;2;${color[0]};${color[1]};${color[2]}m`;
+}
+
+function normalizeThemeMode(themeMode) {
+  if (typeof themeMode !== 'string') {
+    return THEME_AUTO;
+  }
+  const normalized = themeMode.trim().toLowerCase();
+  if (!THEME_SET.has(normalized)) {
+    return THEME_AUTO;
+  }
+  return normalized;
+}
+
+function detectThemeByColorFgBg() {
+  const raw = process.env.COLORFGBG || '';
+  if (!raw) {
+    return null;
+  }
+  const parts = raw
+    .split(/[:;]/)
+    .map((x) => Number.parseInt(x, 10))
+    .filter((x) => Number.isFinite(x));
+  if (parts.length === 0) {
+    return null;
+  }
+  const bg = parts[parts.length - 1];
+  if (bg <= 6 || bg === 8) {
+    return THEME_DARK;
+  }
+  return THEME_LIGHT;
+}
+
+function detectThemeByEnvHint() {
+  const envHints = [
+    process.env.TERM_THEME,
+    process.env.COLORSCHEME,
+    process.env.THEME,
+    process.env.ITERM_PROFILE,
+  ]
+    .filter(Boolean)
+    .map((x) => String(x).toLowerCase());
+
+  for (const hint of envHints) {
+    if (hint.includes('dark')) {
+      return THEME_DARK;
+    }
+    if (hint.includes('light')) {
+      return THEME_LIGHT;
+    }
+  }
+  return null;
+}
+
+function resolveThemeMode(themeMode) {
+  const normalized = normalizeThemeMode(themeMode);
+  if (normalized === THEME_LIGHT || normalized === THEME_DARK) {
+    return normalized;
+  }
+  return detectThemeByColorFgBg() || detectThemeByEnvHint() || THEME_DARK;
+}
+
+function themeLabel(themeMode) {
+  const normalized = normalizeThemeMode(themeMode);
+  if (normalized === THEME_LIGHT) {
+    return '亮色';
+  }
+  if (normalized === THEME_DARK) {
+    return '暗色';
+  }
+  return '自动';
+}
+
+function formatThemeStatus(themeMode, resolvedThemeMode) {
+  const normalized = normalizeThemeMode(themeMode);
+  if (normalized === THEME_AUTO) {
+    return `主题:自动(${themeLabel(resolvedThemeMode)})`;
+  }
+  return `主题:${themeLabel(normalized)}`;
 }
 
 function lerp(a, b, t) {
@@ -178,29 +288,20 @@ function colorizeText(text, color) {
   return `${ansiColor(color)}${text}${ANSI_RESET}`;
 }
 
-function renderAsciiLogoLines(appMeta) {
-  const wecomStops = [
-    { at: 0, color: [70, 205, 255] },
-    { at: 0.55, color: [55, 165, 255] },
-    { at: 1, color: [70, 110, 255] },
-  ];
-  const cleanerStops = [
-    { at: 0, color: [90, 225, 255] },
-    { at: 0.6, color: [90, 220, 140] },
-    { at: 1, color: [250, 220, 90] },
-  ];
+function renderAsciiLogoLines(appMeta, resolvedThemeMode) {
+  const palette = LOGO_THEME_PALETTES[resolvedThemeMode] || LOGO_THEME_PALETTES.dark;
 
   const logoLines = [];
   for (const line of APP_ASCII_LOGO.wecom) {
-    logoLines.push(`${LOGO_LEFT_PADDING}${colorizeGradient(line, wecomStops)}`);
+    logoLines.push(`${LOGO_LEFT_PADDING}${colorizeGradient(line, palette.wecomStops)}`);
   }
   logoLines.push('');
   for (const line of APP_ASCII_LOGO.cleaner) {
-    logoLines.push(`${LOGO_LEFT_PADDING}${colorizeGradient(line, cleanerStops)}`);
+    logoLines.push(`${LOGO_LEFT_PADDING}${colorizeGradient(line, palette.cleanerStops)}`);
   }
   logoLines.push('');
-  logoLines.push(`${LOGO_LEFT_PADDING}${colorizeText(APP_ASCII_LOGO.subtitle, ANSI_SUBTITLE_COLOR)}`);
-  logoLines.push(`${LOGO_LEFT_PADDING}${colorizeText(`v${appMeta.version}`, ANSI_VERSION_COLOR)}`);
+  logoLines.push(`${LOGO_LEFT_PADDING}${colorizeText(APP_ASCII_LOGO.subtitle, palette.subtitleColor)}`);
+  logoLines.push(`${LOGO_LEFT_PADDING}${colorizeText(`v${appMeta.version}`, palette.versionColor)}`);
   logoLines.push('');
   return logoLines;
 }
@@ -251,13 +352,14 @@ async function loadAppMeta(projectRoot) {
 function printHeader({ config, accountCount, nativeCorePath, lastRunEngineUsed, appMeta }) {
   console.clear();
   const nativeText = formatEngineStatus({ nativeCorePath, lastRunEngineUsed });
-  console.log(renderAsciiLogoLines(appMeta).join('\n'));
+  const resolvedThemeMode = resolveThemeMode(config.theme);
+  console.log(renderAsciiLogoLines(appMeta, resolvedThemeMode).join('\n'));
   console.log(`${APP_NAME} v${appMeta.version} (${PACKAGE_NAME})`);
   console.log(`作者: ${appMeta.author} | 许可证: ${appMeta.license}`);
   console.log(`仓库: ${appMeta.repository}`);
   console.log(`根目录: ${config.rootDir}`);
   console.log(`状态目录: ${config.stateRoot}`);
-  console.log(`账号数: ${accountCount} | ${nativeText}`);
+  console.log(`账号数: ${accountCount} | ${nativeText} | ${formatThemeStatus(config.theme, resolvedThemeMode)}`);
 }
 
 function accountTableRows(accounts) {
@@ -767,6 +869,7 @@ async function runSettingsMode(context) {
         { name: `Profile 根目录: ${config.rootDir}`, value: 'root' },
         { name: `回收区目录: ${config.recycleRoot}`, value: 'recycle' },
         { name: `默认 dry-run: ${config.dryRunDefault ? '开' : '关'}`, value: 'dryrun' },
+        { name: `Logo 主题: ${themeLabel(config.theme)}`, value: 'theme' },
         { name: '账号别名管理（用户名 | 企业名 | 短ID）', value: 'alias' },
         { name: '返回主菜单', value: 'back' },
       ],
@@ -810,6 +913,22 @@ async function runSettingsMode(context) {
       config.dryRunDefault = value;
       await saveConfig(config);
       console.log('已保存 dry-run 默认值。');
+      continue;
+    }
+
+    if (choice === 'theme') {
+      const value = await askSelect({
+        message: '选择 Logo 主题',
+        default: normalizeThemeMode(config.theme),
+        choices: [
+          { name: '自动（按终端环境判断）', value: THEME_AUTO },
+          { name: '亮色（适配浅色背景）', value: THEME_LIGHT },
+          { name: '暗色（适配深色背景）', value: THEME_DARK },
+        ],
+      });
+      config.theme = normalizeThemeMode(value);
+      await saveConfig(config);
+      console.log(`已保存 Logo 主题：${themeLabel(config.theme)}。`);
       continue;
     }
 
