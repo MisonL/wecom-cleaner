@@ -4,14 +4,17 @@ import path from 'node:path';
 export const APP_NAME = 'wecom-cleaner';
 export const PACKAGE_NAME = '@mison/wecom-cleaner';
 export const APP_ASCII_LOGO = [
-  ' __      _____ ___  ___  __  __',
-  ' \\ \\ /\\ / / __/ __|/ _ \\|  \\/  |',
-  '  \\ V  V /| _| (__| (_) | |\\/| |',
-  '   \\_/\\_/ |___\\___|\\___/|_|  |_|',
-  '  ___ _    ___   _   _ _  _ ___ ___',
-  ' / __| |  | __| /_\\ | \\| | __| _ \\',
-  '| (__| |__| _| / _ \\| .` | _||   /',
-  ' \\___|____|___/_/ \\_\\_|\\_|___|_|_\\',
+  'W   W EEEEE  CCC   OOO  M   M',
+  'W   W E     C   C O   O MM MM',
+  'W W W EEE   C     O   O M M M',
+  'WW WW E     C   C O   O M   M',
+  'W   W EEEEE  CCC   OOO  M   M',
+  '',
+  ' CCC  L     EEEEE   A   N   N EEEEE RRRR ',
+  'C   C L     E      A A  NN  N E     R   R',
+  'C     L     EEE   AAAAA N N N EEE   RRRR ',
+  'C   C L     E     A   A N  NN E     R R  ',
+  ' CCC  LLLLL EEEEE A   A N   N EEEEE R  RR',
 ];
 
 export const DEFAULT_PROFILE_ROOT = path.join(
