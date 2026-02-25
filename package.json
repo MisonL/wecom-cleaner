@@ -2,7 +2,16 @@
   "name": "@mison/wecom-cleaner",
   "version": "0.1.0",
   "description": "企业微信本地聊天缓存清理工具（交互式 CLI/TUI）",
+  "author": "MisonL",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MisonL/wecom-cleaner.git"
+  },
+  "bugs": {
+    "url": "https://github.com/MisonL/wecom-cleaner/issues"
+  },
+  "homepage": "https://github.com/MisonL/wecom-cleaner",
   "type": "module",
   "bin": {
     "wecom-cleaner": "./src/cli.js"

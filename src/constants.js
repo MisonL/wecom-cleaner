@@ -3,6 +3,16 @@ import path from 'node:path';
 
 export const APP_NAME = 'wecom-cleaner';
 export const PACKAGE_NAME = '@mison/wecom-cleaner';
+export const APP_ASCII_LOGO = [
+  ' __      _____ ___  ___  __  __',
+  ' \\ \\ /\\ / / __/ __|/ _ \\|  \\/  |',
+  '  \\ V  V /| _| (__| (_) | |\\/| |',
+  '   \\_/\\_/ |___\\___|\\___/|_|  |_|',
+  '  ___ _    ___   _   _ _  _ ___ ___',
+  ' / __| |  | __| /_\\ | \\| | __| _ \\',
+  '| (__| |__| _| / _ \\| .` | _||   /',
+  ' \\___|____|___/_/ \\_\\_|\\_|___|_|_\\',
+];
 
 export const DEFAULT_PROFILE_ROOT = path.join(
   os.homedir(),

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkbox, confirm, input, select } from '@inquirer/prompts';
@@ -8,6 +9,7 @@ import {
   MODES,
   PACKAGE_NAME,
   APP_NAME,
+  APP_ASCII_LOGO,
 } from './constants.js';
 import { loadAliases, loadConfig, parseCliArgs, saveAliases, saveConfig } from './config.js';
 import { detectNativeCore } from './native-bridge.js';
@@ -110,10 +112,56 @@ function formatEngineStatus({ nativeCorePath, lastRunEngineUsed }) {
   return 'Zig核心:已探测(待使用)';
 }
 
-function printHeader({ config, accountCount, nativeCorePath, lastRunEngineUsed }) {
+function normalizeRepositoryUrl(rawValue) {
+  if (typeof rawValue !== 'string' || rawValue.trim() === '') {
+    return '';
+  }
+  let url = rawValue.trim();
+  if (url.startsWith('git+')) {
+    url = url.slice(4);
+  }
+  if (url.startsWith('git@github.com:')) {
+    url = `https://github.com/${url.slice('git@github.com:'.length)}`;
+  }
+  if (url.endsWith('.git')) {
+    url = url.slice(0, -4);
+  }
+  return url;
+}
+
+async function loadAppMeta(projectRoot) {
+  const fallback = {
+    version: process.env.npm_package_version || '0.0.0',
+    author: 'MisonL',
+    repository: 'https://github.com/MisonL/wecom-cleaner',
+    license: 'MIT',
+  };
+
+  try {
+    const packagePath = path.join(projectRoot, 'package.json');
+    const text = await fs.readFile(packagePath, 'utf-8');
+    const pkg = JSON.parse(text);
+    const author = typeof pkg.author === 'string' ? pkg.author : pkg.author?.name;
+    const repositoryRaw = typeof pkg.repository === 'string' ? pkg.repository : pkg.repository?.url;
+
+    return {
+      version: String(pkg.version || fallback.version),
+      author: String(author || fallback.author),
+      repository: normalizeRepositoryUrl(repositoryRaw) || fallback.repository,
+      license: String(pkg.license || fallback.license),
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function printHeader({ config, accountCount, nativeCorePath, lastRunEngineUsed, appMeta }) {
   console.clear();
   const nativeText = formatEngineStatus({ nativeCorePath, lastRunEngineUsed });
-  console.log(`${APP_NAME} (${PACKAGE_NAME})`);
+  console.log(APP_ASCII_LOGO.join('\n'));
+  console.log(`${APP_NAME} v${appMeta.version} (${PACKAGE_NAME})`);
+  console.log(`作者: ${appMeta.author} | 许可证: ${appMeta.license}`);
+  console.log(`仓库: ${appMeta.repository}`);
   console.log(`根目录: ${config.rootDir}`);
   console.log(`状态目录: ${config.stateRoot}`);
   console.log(`账号数: ${accountCount} | ${nativeText}`);
@@ -706,8 +754,9 @@ async function main() {
   const __dirname = path.dirname(__filename);
   const projectRoot = path.resolve(__dirname, '..');
   const nativeCorePath = await detectNativeCore(projectRoot);
+  const appMeta = await loadAppMeta(projectRoot);
 
-  const context = { config, aliases, nativeCorePath };
+  const context = { config, aliases, nativeCorePath, appMeta };
 
   if (cliArgs.mode) {
     await runMode(cliArgs.mode, context);
@@ -721,6 +770,7 @@ async function main() {
       accountCount: accounts.length,
       nativeCorePath,
       lastRunEngineUsed: context.lastRunEngineUsed || null,
+      appMeta: context.appMeta,
     });
 
     const mode = await askSelect({
