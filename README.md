@@ -60,6 +60,10 @@ npm install
 npm run dev
 ```
 
+发布打包（`npm pack` / `npm publish`）默认会在 `prepack` 阶段同时构建：
+- `native/bin/darwin-x64/wecom-cleaner-core`
+- `native/bin/darwin-arm64/wecom-cleaner-core`
+
 如果你看到标题栏 `Zig核心:已启用`，表示正在使用 Zig 扫描引擎；
 否则会自动回退到 Node 引擎（功能不受影响，只是扫描速度可能较慢）。
 
@@ -88,6 +92,9 @@ wecom-cleaner --mode cleanup_monthly
 ```bash
 # 按当前机器平台编译
 ./native/zig/build.sh
+
+# 发布前一次构建 macOS 双架构（默认由 prepack 自动触发）
+npm run build:native:release
 
 # 指定目标平台编译（示例）
 TARGET_OS=darwin TARGET_ARCH=arm64 ./native/zig/build.sh

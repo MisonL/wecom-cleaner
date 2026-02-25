@@ -20,10 +20,13 @@
   },
   "scripts": {
     "build:native": "./native/zig/build.sh",
+    "build:native:darwin:x64": "TARGET_OS=darwin TARGET_ARCH=x64 ./native/zig/build.sh",
+    "build:native:darwin:arm64": "TARGET_OS=darwin TARGET_ARCH=arm64 ./native/zig/build.sh",
+    "build:native:release": "npm run build:native:darwin:x64 && npm run build:native:darwin:arm64",
     "start": "node src/cli.js",
     "dev": "node src/cli.js",
     "check": "node --check src/*.js",
-    "prepack": "npm run build:native && npm run check"
+    "prepack": "npm run build:native:release && npm run check"
   },
   "keywords": [
     "wecom",
