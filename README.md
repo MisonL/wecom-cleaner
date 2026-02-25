@@ -67,6 +67,9 @@ npm run dev
 如果你看到标题栏 `Zig加速:已生效`，表示正在使用 Zig 扫描引擎；
 否则会自动回退到 Node 引擎（功能不受影响，只是扫描速度可能较慢）。
 
+当 Zig 核心缺失或损坏时，程序会自动尝试下载修复到状态目录：
+`~/.wecom-cleaner-state/native-cache/<platform-arch>/`
+
 状态含义：
 - `Zig加速:已生效(本次扫描更快)`：本次扫描实际使用 Zig。
 - `Zig加速:本次未生效(已自动改用Node)`：检测到 Zig，但本次运行回退到 Node。
@@ -93,6 +96,11 @@ wecom-cleaner --theme auto
 - `auto`：自动判断（优先读取终端环境，如 `COLORFGBG`）
 - `light`：亮色主题色板
 - `dark`：暗色主题色板
+
+可选环境变量：
+- `WECOM_CLEANER_NATIVE_AUTO_REPAIR=true|false`：是否开启 Zig 自动修复下载（默认 `true`）
+- `WECOM_CLEANER_NATIVE_BASE_URL=<url>`：自定义核心下载基地址
+- `WECOM_CLEANER_NATIVE_DOWNLOAD_TIMEOUT_MS=<ms>`：下载超时时间（默认 `15000`）
 
 跨平台编译 Zig 核心示例：
 

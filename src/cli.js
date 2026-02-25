@@ -349,7 +349,7 @@ async function loadAppMeta(projectRoot) {
   }
 }
 
-function printHeader({ config, accountCount, nativeCorePath, lastRunEngineUsed, appMeta }) {
+function printHeader({ config, accountCount, nativeCorePath, lastRunEngineUsed, appMeta, nativeRepairNote }) {
   console.clear();
   const nativeText = formatEngineStatus({ nativeCorePath, lastRunEngineUsed });
   const resolvedThemeMode = resolveThemeMode(config.theme);
@@ -360,6 +360,9 @@ function printHeader({ config, accountCount, nativeCorePath, lastRunEngineUsed, 
   console.log(`根目录: ${config.rootDir}`);
   console.log(`状态目录: ${config.stateRoot}`);
   console.log(`账号数: ${accountCount} | ${nativeText} | ${formatThemeStatus(config.theme, resolvedThemeMode)}`);
+  if (nativeRepairNote) {
+    console.log(`修复状态: ${nativeRepairNote}`);
+  }
 }
 
 function accountTableRows(accounts) {
@@ -965,10 +968,16 @@ async function main() {
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
   const projectRoot = path.resolve(__dirname, '..');
-  const nativeCorePath = await detectNativeCore(projectRoot);
+  const nativeProbe = await detectNativeCore(projectRoot, { stateRoot: config.stateRoot });
   const appMeta = await loadAppMeta(projectRoot);
 
-  const context = { config, aliases, nativeCorePath, appMeta };
+  const context = {
+    config,
+    aliases,
+    nativeCorePath: nativeProbe.nativeCorePath || null,
+    nativeRepairNote: nativeProbe.repairNote || null,
+    appMeta,
+  };
 
   if (cliArgs.mode) {
     await runMode(cliArgs.mode, context);
@@ -980,9 +989,10 @@ async function main() {
     printHeader({
       config,
       accountCount: accounts.length,
-      nativeCorePath,
+      nativeCorePath: context.nativeCorePath,
       lastRunEngineUsed: context.lastRunEngineUsed || null,
       appMeta: context.appMeta,
+      nativeRepairNote: context.nativeRepairNote,
     });
 
     const mode = await askSelect({
