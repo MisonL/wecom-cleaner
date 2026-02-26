@@ -318,6 +318,70 @@ test('detectNativeCore 自动修复可下载并恢复核心', async (t) => {
   assert.match(result.repairNote || '', /Zig核心已恢复/);
 });
 
+test('detectNativeCore 自动修复优先使用 manifest target.url', async (t) => {
+  const root = await makeTempDir('wecom-native-repair-manifest-url-');
+  t.after(async () => removeDir(root));
+
+  const target = resolveRuntimeTarget();
+  const stateRoot = path.join(root, 'state');
+  const binaryScript = buildFakeNativeScript('ok');
+  const digest = sha256Of(binaryScript);
+  const requestedUrls = [];
+
+  const { server, baseUrl } = await startServer((req, res) => {
+    requestedUrls.push(String(req.url || '/'));
+    if (req.url === '/binary-by-url') {
+      res.writeHead(200, { 'content-type': 'application/octet-stream' });
+      res.end(binaryScript);
+      return;
+    }
+    res.writeHead(404, { 'content-type': 'text/plain' });
+    res.end('not found');
+  });
+  t.after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  const manifestPath = path.join(root, 'native', 'manifest.json');
+  await ensureDir(path.dirname(manifestPath));
+  await fs.writeFile(
+    manifestPath,
+    JSON.stringify(
+      {
+        version: '9.9.9',
+        baseUrl: `${baseUrl}/should-not-use`,
+        targets: {
+          [target.targetTag]: {
+            binaryName: target.binaryName,
+            sha256: digest,
+            url: `${baseUrl}/binary-by-url`,
+          },
+        },
+      },
+      null,
+      2
+    ),
+    'utf-8'
+  );
+
+  const result = await withEnv(
+    {
+      WECOM_CLEANER_NATIVE_AUTO_REPAIR: 'true',
+      WECOM_CLEANER_NATIVE_BASE_URL: null,
+      WECOM_CLEANER_NATIVE_DOWNLOAD_TIMEOUT_MS: '2000',
+    },
+    async () => detectNativeCore(root, { stateRoot })
+  );
+
+  const expectedPath = path.join(stateRoot, 'native-cache', target.targetTag, target.binaryName);
+  assert.equal(result.nativeCorePath, expectedPath);
+  assert.equal(requestedUrls.includes('/binary-by-url'), true);
+  assert.equal(
+    requestedUrls.some((item) => item.includes('/should-not-use')),
+    false
+  );
+});
+
 test('detectNativeCore 自动修复关闭且 manifest 目标存在时返回空 repairNote', async (t) => {
   const root = await makeTempDir('wecom-native-repair-disabled-');
   t.after(async () => removeDir(root));
