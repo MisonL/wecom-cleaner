@@ -5,7 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 
 const NATIVE_CACHE_DIR = 'native-cache';
 const MANIFEST_RELATIVE_PATH = path.join('native', 'manifest.json');
-const DEFAULT_DOWNLOAD_BASE_URL = 'https://raw.githubusercontent.com/MisonL/wecom-cleaner/v1.0.0/native/bin';
+const DEFAULT_DOWNLOAD_REPO_BASE_URL = 'https://raw.githubusercontent.com/MisonL/wecom-cleaner';
 const DEFAULT_DOWNLOAD_TIMEOUT_MS = 15_000;
 const DEFAULT_PROBE_TIMEOUT_MS = 3_000;
 
@@ -219,6 +219,20 @@ function resolveManifestVersion(manifest) {
   return null;
 }
 
+function resolveReleaseTag(version) {
+  const normalized = String(version || '').trim();
+  if (!normalized) {
+    return null;
+  }
+  return normalized.startsWith('v') ? normalized : `v${normalized}`;
+}
+
+function resolveDefaultDownloadBaseUrl(manifest) {
+  const releaseTag = resolveReleaseTag(resolveManifestVersion(manifest));
+  const ref = releaseTag || 'main';
+  return `${DEFAULT_DOWNLOAD_REPO_BASE_URL}/${ref}/native/bin`;
+}
+
 function resolveDownloadUrl({ target, manifest, manifestTarget }) {
   const fileName = manifestTarget?.binaryName || target.binaryName;
   const overrideBaseUrl = getDownloadBaseUrlOverride();
@@ -239,7 +253,7 @@ function resolveDownloadUrl({ target, manifest, manifestTarget }) {
     return `${manifestBaseUrl}/${target.targetTag}/${fileName}`;
   }
 
-  return `${DEFAULT_DOWNLOAD_BASE_URL}/${target.targetTag}/${fileName}`;
+  return `${resolveDefaultDownloadBaseUrl(manifest)}/${target.targetTag}/${fileName}`;
 }
 
 async function verifySha256OrReason(filePath, expectedSha256) {

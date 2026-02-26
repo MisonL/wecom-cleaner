@@ -432,3 +432,66 @@ test('detectNativeCore 会合并缓存校验失败与下载失败的提示', asy
   assert.match(result.repairNote || '', /本地缓存校验失败/);
   assert.match(result.repairNote || '', /下载失败/);
 });
+
+test('detectNativeCore 默认下载地址会跟随 manifest 版本标签', async (t) => {
+  const root = await makeTempDir('wecom-native-default-version-base-url-');
+  t.after(async () => removeDir(root));
+
+  const target = resolveRuntimeTarget();
+  const stateRoot = path.join(root, 'state');
+  const binaryScript = buildFakeNativeScript('ok');
+  const digest = sha256Of(binaryScript);
+
+  const manifestPath = path.join(root, 'native', 'manifest.json');
+  await ensureDir(path.dirname(manifestPath));
+  await fs.writeFile(
+    manifestPath,
+    JSON.stringify(
+      {
+        version: '2.3.4',
+        targets: {
+          [target.targetTag]: {
+            binaryName: target.binaryName,
+            sha256: digest,
+          },
+        },
+      },
+      null,
+      2
+    ),
+    'utf-8'
+  );
+
+  const oldFetch = globalThis.fetch;
+  const requestedUrls = [];
+  globalThis.fetch = async (input) => {
+    requestedUrls.push(String(input));
+    return new Response(binaryScript, {
+      status: 200,
+      headers: {
+        'content-type': 'application/octet-stream',
+      },
+    });
+  };
+  t.after(() => {
+    globalThis.fetch = oldFetch;
+  });
+
+  const result = await withEnv(
+    {
+      WECOM_CLEANER_NATIVE_AUTO_REPAIR: 'true',
+      WECOM_CLEANER_NATIVE_BASE_URL: null,
+    },
+    async () => detectNativeCore(root, { stateRoot })
+  );
+
+  assert.equal(requestedUrls.length, 1);
+  assert.equal(
+    requestedUrls[0].includes(`/v2.3.4/native/bin/${target.targetTag}/${target.binaryName}`),
+    true
+  );
+  assert.equal(
+    result.nativeCorePath,
+    path.join(stateRoot, 'native-cache', target.targetTag, target.binaryName)
+  );
+});

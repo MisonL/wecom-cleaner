@@ -87,11 +87,13 @@ test('detectExternalStorageRoots 支持内置/手动/自动探测与缓存', asy
   const builtInRoot = path.join(root, 'Library', 'Containers', 'com.tencent.WeWorkMac', 'Data', 'Documents');
   const manualRoot = path.join(root, 'Custom-Manual-Storage');
   const autoRoot = path.join(root, 'Auto-Storage-Root');
+  const fakeRoot = path.join(root, 'Fake-Storage-Root');
 
   await ensureFile(path.join(profilesRoot, 'placeholder.txt'), 'ok');
   await ensureFile(path.join(builtInRoot, 'WXWork Files', 'Caches', 'Files', '2024-01', 'a.txt'), 'a');
   await ensureFile(path.join(manualRoot, 'WXWork Files', 'Caches', 'Files', '2024-02', 'a.txt'), 'a');
   await ensureFile(path.join(autoRoot, 'WXWork Files', 'Caches', 'Files', '2024-03', 'a.txt'), 'a');
+  await ensureFile(path.join(fakeRoot, 'WXWork Files', 'Caches', 'OtherAppCache', 'a.txt'), 'a');
 
   const first = await detectExternalStorageRoots({
     profilesRoot,
@@ -107,10 +109,12 @@ test('detectExternalStorageRoots 支持内置/手动/自动探测与缓存', asy
   assert.equal(first.roots.includes(path.resolve(builtInRoot)), true);
   assert.equal(first.roots.includes(path.resolve(manualRoot)), true);
   assert.equal(first.roots.includes(path.resolve(autoRoot)), true);
+  assert.equal(first.roots.includes(path.resolve(fakeRoot)), false);
   assert.equal(first.meta.fromCache, false);
   assert.equal(first.meta.sourceCounts.builtin >= 1, true);
   assert.equal(first.meta.sourceCounts.configured >= 1, true);
   assert.equal(first.meta.sourceCounts.auto >= 1, true);
+  assert.equal(first.meta.autoRejectedRootCount >= 1, true);
 
   const second = await detectExternalStorageRoots({
     profilesRoot,

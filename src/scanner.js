@@ -31,6 +31,17 @@ const EXTERNAL_SOURCE_AUTO = 'auto';
 const EXTERNAL_STORAGE_SCAN_MAX_DEPTH_DEFAULT = 2;
 const EXTERNAL_STORAGE_SCAN_MAX_VISITS_DEFAULT = 400;
 const EXTERNAL_STORAGE_CACHE_TTL_MS_DEFAULT = 15_000;
+const EXTERNAL_STORAGE_KNOWN_CATEGORY_DIRS = new Set(
+  CACHE_CATEGORIES.map((item) => {
+    const relativePath = String(item?.relativePath || '');
+    if (!relativePath.startsWith('Caches/')) {
+      return null;
+    }
+    const suffix = relativePath.slice('Caches/'.length);
+    const [head] = suffix.split(/[\\/]+/).filter(Boolean);
+    return head ? head.toLowerCase() : null;
+  }).filter(Boolean)
+);
 const EXTERNAL_STORAGE_SCAN_SKIP_NAMES = new Set([
   '.',
   '..',
@@ -150,6 +161,45 @@ async function isDirectoryPath(targetPath) {
   return Boolean(stat?.isDirectory());
 }
 
+async function detectExternalStorageMarkers(cacheRoot) {
+  const entries = await listDirectoryEntries(cacheRoot);
+  const categoryDirs = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+  const knownCategoryDirs = categoryDirs.filter((name) =>
+    EXTERNAL_STORAGE_KNOWN_CATEGORY_DIRS.has(name.toLowerCase())
+  );
+
+  let monthLikeCategoryCount = 0;
+  for (const categoryName of knownCategoryDirs) {
+    const childDirs = await listSubDirectories(path.join(cacheRoot, categoryName));
+    if (childDirs.some((dirName) => normalizeMonthKey(dirName))) {
+      monthLikeCategoryCount += 1;
+    }
+  }
+
+  return {
+    knownCategoryCount: knownCategoryDirs.length,
+    monthLikeCategoryCount,
+  };
+}
+
+async function isLikelyExternalStorageRoot(rootPath, options = {}) {
+  const strictMarkers = options.strictMarkers === true;
+  const cacheRoot = path.join(rootPath, EXTERNAL_STORAGE_CACHE_RELATIVE);
+  if (!(await isDirectoryPath(cacheRoot))) {
+    return false;
+  }
+
+  if (!strictMarkers) {
+    return true;
+  }
+
+  const markers = await detectExternalStorageMarkers(cacheRoot);
+  if (markers.monthLikeCategoryCount >= 1) {
+    return true;
+  }
+  return markers.knownCategoryCount >= 2;
+}
+
 function normalizeExternalStorageRootCandidate(rawPath) {
   const input = String(rawPath || '').trim();
   if (!input) {
@@ -169,13 +219,13 @@ function normalizeExternalStorageRootCandidate(rawPath) {
   return normalized;
 }
 
-async function resolveExternalStorageRoot(rawPath) {
+async function resolveExternalStorageRoot(rawPath, options = {}) {
   const root = normalizeExternalStorageRootCandidate(rawPath);
   if (!root) {
     return null;
   }
-  const cacheRoot = path.join(root, EXTERNAL_STORAGE_CACHE_RELATIVE);
-  if (!(await isDirectoryPath(cacheRoot))) {
+  const likely = await isLikelyExternalStorageRoot(root, options);
+  if (!likely) {
     return null;
   }
   return root;
@@ -227,10 +277,7 @@ function collectBuiltInStorageRootCandidates(options = {}) {
 async function collectDefaultExternalSearchBaseRoots() {
   const bases = new Set();
   const home = os.homedir();
-  bases.add(home);
   bases.add(path.join(home, 'Documents'));
-  bases.add(path.join(home, 'Desktop'));
-  bases.add(path.join(home, 'Downloads'));
 
   const volumeEntries = await fs.readdir('/Volumes', { withFileTypes: true }).catch(() => []);
   for (const entry of volumeEntries) {
@@ -623,10 +670,11 @@ export async function detectExternalStorageRoots(options = {}) {
     autoDetectedRootCount: 0,
     truncatedRoots: [],
     visitedDirs: 0,
+    autoRejectedRootCount: 0,
   };
 
   for (const candidate of builtInCandidates) {
-    const root = await resolveExternalStorageRoot(candidate);
+    const root = await resolveExternalStorageRoot(candidate, { strictMarkers: true });
     if (!root || seen.has(root)) {
       continue;
     }
@@ -636,7 +684,7 @@ export async function detectExternalStorageRoots(options = {}) {
   }
 
   for (const candidate of configuredRoots) {
-    const root = await resolveExternalStorageRoot(candidate);
+    const root = await resolveExternalStorageRoot(candidate, { strictMarkers: false });
     if (!root || seen.has(root)) {
       continue;
     }
@@ -651,16 +699,26 @@ export async function detectExternalStorageRoots(options = {}) {
         ? options.searchBaseRoots
         : await collectDefaultExternalSearchBaseRoots();
     const autoScan = await findExternalStorageRootsByStructure(baseRoots, options);
-    autoDetectMeta = autoScan.meta;
+    autoDetectMeta = {
+      ...autoScan.meta,
+      autoRejectedRootCount: 0,
+    };
     for (const root of autoScan.roots) {
-      const normalized = await resolveExternalStorageRoot(root);
+      const normalized = await resolveExternalStorageRoot(root, { strictMarkers: true });
       if (!normalized || seen.has(normalized)) {
+        if (!normalized) {
+          autoDetectMeta.autoRejectedRootCount += 1;
+        }
         continue;
       }
       seen.add(normalized);
       resolved.push(normalized);
       sourceByRoot.set(normalized, EXTERNAL_SOURCE_AUTO);
     }
+    autoDetectMeta.autoDetectedRootCount = Math.max(
+      0,
+      autoScan.roots.length - autoDetectMeta.autoRejectedRootCount
+    );
   }
 
   resolved.sort();
@@ -687,6 +745,7 @@ export async function detectExternalStorageRoots(options = {}) {
   const meta = {
     searchedRootsCount: autoDetectMeta.searchedRootsCount,
     autoDetectedRootCount: autoDetectMeta.autoDetectedRootCount,
+    autoRejectedRootCount: autoDetectMeta.autoRejectedRootCount,
     truncatedRoots: autoDetectMeta.truncatedRoots,
     visitedDirs: autoDetectMeta.visitedDirs,
     resolvedRootCount: resolved.length,
