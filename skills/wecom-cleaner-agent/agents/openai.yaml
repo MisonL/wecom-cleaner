@@ -1,5 +1,5 @@
 interface:
-  display_name: 'WeCom Cleaner Agent'
-  short_description: '面向AI Agent的企业微信缓存清理与恢复无交互执行技能'
-  default_prompt: '请使用 $wecom-cleaner-agent 对企业微信缓存执行一次先 dry-run 再确认执行的无交互清理流程。'
-  brand_color: '#0EA5E9'
+  display_name: "WeCom Cleaner Agent"
+  short_description: "面向AI Agent的企业微信缓存清理与恢复无交互执行技能"
+  default_prompt: "请使用 $wecom-cleaner-agent 以最少命令执行清理任务：先dry-run，再执行，并用三段式简报反馈。"
+  brand_color: "#0EA5E9"

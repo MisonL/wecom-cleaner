@@ -139,6 +139,8 @@ function normalizeSpaceGovernance(input, fallback) {
 
 export function parseCliArgs(argv) {
   const parsed = {
+    help: false,
+    version: false,
     rootDir: null,
     externalStorageRoots: null,
     externalStorageAutoDetect: null,
@@ -197,6 +199,14 @@ export function parseCliArgs(argv) {
 
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
+    if (token === '-h' || token === '--help') {
+      parsed.help = true;
+      continue;
+    }
+    if (token === '-v' || token === '--version') {
+      parsed.version = true;
+      continue;
+    }
     if (ACTION_FLAG_MAP.has(token)) {
       parsed.action = ACTION_FLAG_MAP.get(token);
       parsed.actionFlagCount += 1;

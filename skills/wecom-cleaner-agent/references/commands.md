@@ -1,5 +1,25 @@
 # wecom-cleaner 命令参考（Agent）
 
+## 0. 极简执行模板（推荐）
+
+目标：清理 `YYYY-MM` 及之前。
+
+```bash
+# 1) 预演
+wecom-cleaner --cleanup-monthly --accounts all --cutoff-month YYYY-MM --output json
+
+# 2) 真实执行（仅用户明确授权后）
+wecom-cleaner --cleanup-monthly --accounts all --cutoff-month YYYY-MM --dry-run false --yes --output json
+
+# 3) 复核（同条件）
+wecom-cleaner --cleanup-monthly --accounts all --cutoff-month YYYY-MM --output json
+```
+
+说明：
+
+- 默认不传 `--categories`，避免漏清某类缓存。
+- 默认不跑 `analysis-only`，除非出现异常结果再补做。
+
 ## 1. 路径变量
 
 建议先在执行环境准备变量：

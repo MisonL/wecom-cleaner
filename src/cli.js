@@ -1408,6 +1408,46 @@ function resolveActionFromCli(cliArgs, hasAnyArgs) {
   return cliArgs.action;
 }
 
+function printCliUsage(appMeta) {
+  const versionText = appMeta?.version ? ` v${appMeta.version}` : '';
+  const lines = [
+    `${APP_NAME}${versionText}`,
+    '',
+    '用法：',
+    '  wecom-cleaner                             进入交互模式',
+    '  wecom-cleaner <动作参数> [选项]          无交互执行（默认 JSON 输出）',
+    '',
+    '动作参数（必须且只能一个）：',
+    '  --cleanup-monthly',
+    '  --analysis-only',
+    '  --space-governance',
+    '  --restore-batch <batchId>',
+    '  --recycle-maintain',
+    '  --doctor',
+    '',
+    '常用选项：',
+    '  --output json|text',
+    '  --dry-run true|false',
+    '  --yes',
+    '  --accounts all|current|id1,id2',
+    '  --months YYYY-MM,YYYY-MM',
+    '  --cutoff-month YYYY-MM',
+    '  --categories key1,key2',
+    '  --root <path>',
+    '  --state-root <path>',
+    '',
+    '辅助：',
+    '  -h, --help      显示帮助',
+    '  -v, --version   显示版本号',
+    '',
+    '示例：',
+    '  wecom-cleaner --doctor',
+    '  wecom-cleaner --cleanup-monthly --accounts all --cutoff-month 2024-04',
+    '  wecom-cleaner --cleanup-monthly --accounts all --cutoff-month 2024-04 --dry-run false --yes',
+  ];
+  console.log(lines.join('\n'));
+}
+
 function resolveInteractiveStartMode(cliArgs) {
   const rawMode = String(cliArgs.mode || '')
     .trim()
@@ -3379,6 +3419,20 @@ async function main() {
   const rawArgv = process.argv.slice(2);
   const hasAnyArgs = rawArgv.length > 0;
   const cliArgs = parseCliArgs(rawArgv);
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const projectRoot = path.resolve(__dirname, '..');
+  const appMeta = await loadAppMeta(projectRoot);
+
+  if (cliArgs.version) {
+    console.log(appMeta.version);
+    return;
+  }
+  if (cliArgs.help) {
+    printCliUsage(appMeta);
+    return;
+  }
+
   const forceInteractive = cliArgs.interactive === true;
   const hasNonInteractiveArgs = hasAnyArgs && !forceInteractive;
   const action = resolveActionFromCli(cliArgs, hasNonInteractiveArgs);
@@ -3392,9 +3446,6 @@ async function main() {
   });
   const aliases = await loadAliases(config.aliasPath);
 
-  const __filename = fileURLToPath(import.meta.url);
-  const __dirname = path.dirname(__filename);
-  const projectRoot = path.resolve(__dirname, '..');
   const nativeProbe =
     lockMode === MODES.DOCTOR
       ? { nativeCorePath: null, repairNote: null }
@@ -3402,7 +3453,6 @@ async function main() {
           stateRoot: config.stateRoot,
           allowAutoRepair: true,
         });
-  const appMeta = await loadAppMeta(projectRoot);
   const outputMode = normalizeActionOutputMode(cliArgs);
 
   const context = {

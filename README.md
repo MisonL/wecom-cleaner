@@ -228,6 +228,8 @@ wecom-cleaner --doctor
 - `--json`：兼容别名，等价于 `--output json`。
 - `--mode`：兼容参数，建议迁移到动作参数（如 `--cleanup-monthly`）。
 - `--save-config`：将本次全局配置参数写回 `config.json`。
+- `--help` / `-h`：输出命令帮助并退出。
+- `--version` / `-v`：输出版本号并退出。
 
 ### 全局参数
 

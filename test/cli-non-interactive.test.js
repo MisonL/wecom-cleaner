@@ -183,3 +183,18 @@ test('--interactive 可在带参数时进入交互模式并按 --mode 直达功�
   assert.equal(String(result.stdout || '').includes('系统自检'), true);
   assert.equal(String(result.stderr || '').includes('必须指定一个动作参数'), false);
 });
+
+test('CLI 支持 --help 并返回无交互动作说明', () => {
+  const result = runCli(['--help']);
+  assert.equal(result.status, 0);
+  const output = String(result.stdout || '');
+  assert.match(output, /用法：/);
+  assert.match(output, /--cleanup-monthly/);
+  assert.match(output, /--doctor/);
+});
+
+test('CLI 支持 --version 并输出版本号', () => {
+  const result = runCli(['--version']);
+  assert.equal(result.status, 0);
+  assert.match(String(result.stdout || '').trim(), /^\d+\.\d+\.\d+$/);
+});

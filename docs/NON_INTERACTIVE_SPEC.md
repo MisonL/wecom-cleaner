@@ -7,6 +7,8 @@
 - `wecom-cleaner`（不带参数）：进入交互模式（TUI）。
 - `wecom-cleaner ...args`（带参数）：进入无交互模式。
 - `wecom-cleaner ...args --interactive`：即使带参数也强制进入交互模式（常用于本地调试/脚本回放）。
+- `wecom-cleaner --help` / `wecom-cleaner -h`：输出命令帮助并退出（`0`）。
+- `wecom-cleaner --version` / `wecom-cleaner -v`：输出版本号并退出（`0`）。
 
 ## 2. 动作选择（必填且互斥）
 

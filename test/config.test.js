@@ -22,6 +22,8 @@ async function exists(targetPath) {
 
 test('parseCliArgs 可正确解析常用参数', () => {
   const parsed = parseCliArgs([
+    '--help',
+    '--version',
     '--root',
     '/tmp/profiles',
     '--state-root',
@@ -42,6 +44,8 @@ test('parseCliArgs 可正确解析常用参数', () => {
   ]);
 
   assert.equal(parsed.rootDir, '/tmp/profiles');
+  assert.equal(parsed.help, true);
+  assert.equal(parsed.version, true);
   assert.equal(parsed.stateRoot, '/tmp/state');
   assert.equal(parsed.externalStorageRoots, '/tmp/extA,/tmp/extB');
   assert.equal(parsed.externalStorageAutoDetect, false);
