@@ -214,11 +214,15 @@ test('restoreBatch 支持 dry-run 并写入审计', async (t) => {
 
   assert.equal(summary.successCount, 1);
   assert.equal(await pathExists(fixture.recyclePath), true);
+  const sourceText = await fs.readFile(path.join(fixture.sourcePath, 'payload.txt'), 'utf-8');
+  assert.equal(sourceText, 'sentinel-dryrun');
 
   const rows = await readJsonLines(fixture.indexPath);
   const dryRunRow = rows.find((row) => row.action === 'restore' && row.status === 'dry_run');
   assert.ok(dryRunRow);
   assert.equal(dryRunRow.dryRun, true);
+  assert.equal(dryRunRow.conflict_strategy, 'overwrite');
+  assert.equal(dryRunRow.would_overwrite, true);
 });
 
 test('restoreBatch 在移动失败时写入 failed 与 error_type', async (t) => {
@@ -264,4 +268,75 @@ test('restoreBatch 在移动失败时写入 failed 与 error_type', async (t) =>
   assert.ok(failed);
   assert.equal(typeof failed.error_type, 'string');
   assert.equal(typeof failed.error, 'string');
+});
+
+test('restoreBatch 在 overwrite 删除失败时不中断整批并写审计', async (t) => {
+  const root = await makeTempDir('wecom-restore-overwrite-failed-');
+  t.after(async () => removeDir(root));
+
+  const profileRoot = path.join(root, 'Profiles');
+  const recycleRoot = path.join(root, 'state', 'recycle-bin');
+  const indexPath = path.join(root, 'state', 'index.jsonl');
+
+  const srcFail = path.join(profileRoot, 'acc001', 'Caches', 'Files', 'case-fail');
+  const recycleFail = path.join(recycleRoot, 'batch-mix', '0001_fail');
+  await ensureFile(path.join(srcFail, 'payload.txt'), 'sentinel-fail');
+  await ensureFile(path.join(recycleFail, 'payload.txt'), 'restore-fail');
+
+  const srcOk = path.join(profileRoot, 'acc001', 'Caches', 'Files', 'case-ok');
+  const recycleOk = path.join(recycleRoot, 'batch-mix', '0002_ok');
+  await ensureFile(path.join(recycleOk, 'payload.txt'), 'restore-ok');
+
+  const originalRm = fs.rm;
+  fs.rm = async (targetPath, options) => {
+    if (path.resolve(String(targetPath || '')) === path.resolve(srcFail)) {
+      const error = new Error('mock remove failed');
+      error.code = 'EACCES';
+      throw error;
+    }
+    return originalRm(targetPath, options);
+  };
+
+  try {
+    const summary = await restoreBatch({
+      batch: {
+        batchId: 'batch-mix',
+        firstTime: Date.now(),
+        totalBytes: 2,
+        entries: [
+          {
+            batchId: 'batch-mix',
+            scope: 'cleanup_monthly',
+            sourcePath: srcFail,
+            recyclePath: recycleFail,
+            sizeBytes: 1,
+          },
+          {
+            batchId: 'batch-mix',
+            scope: 'cleanup_monthly',
+            sourcePath: srcOk,
+            recyclePath: recycleOk,
+            sizeBytes: 1,
+          },
+        ],
+      },
+      indexPath,
+      profileRoot,
+      recycleRoot,
+      governanceRoot: null,
+      onConflict: async () => ({ action: 'overwrite', applyToAll: false }),
+    });
+
+    assert.equal(summary.failCount, 1);
+    assert.equal(summary.successCount, 1);
+  } finally {
+    fs.rm = originalRm;
+  }
+
+  const rows = await readJsonLines(indexPath);
+  const failedRows = rows.filter((row) => row.action === 'restore' && row.status === 'failed');
+  const successRows = rows.filter((row) => row.action === 'restore' && row.status === 'success');
+  assert.equal(failedRows.length, 1);
+  assert.equal(successRows.length, 1);
+  assert.equal(await pathExists(srcOk), true);
 });

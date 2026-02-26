@@ -41,12 +41,92 @@ function ageDays(tsMillis, nowMillis) {
   return Math.floor(delta / (24 * 3600 * 1000));
 }
 
-function batchRootPath(recycleRoot, batchId) {
-  return path.join(path.resolve(recycleRoot), String(batchId || ''));
+function isPathWithinRoot(rootPath, targetPath) {
+  const rootAbs = path.resolve(String(rootPath || ''));
+  const targetAbs = path.resolve(String(targetPath || ''));
+  const rel = path.relative(rootAbs, targetAbs);
+  if (!rel) {
+    return true;
+  }
+  return !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
-export async function collectRecycleStats({ indexPath, recycleRoot }) {
-  await ensureDir(recycleRoot);
+function resolveBatchRootFromEntries(recycleRoot, batch) {
+  const recycleRootAbs = path.resolve(String(recycleRoot || ''));
+  const entries = Array.isArray(batch?.entries) ? batch.entries : [];
+  if (entries.length === 0) {
+    return {
+      ok: false,
+      invalidReason: 'empty_batch_entries',
+    };
+  }
+
+  const rootSet = new Set();
+  for (const entry of entries) {
+    const recyclePath = String(entry?.recyclePath || '').trim();
+    if (!recyclePath) {
+      return {
+        ok: false,
+        invalidReason: 'invalid_recycle_path',
+      };
+    }
+
+    const recyclePathAbs = path.resolve(recyclePath);
+    if (!isPathWithinRoot(recycleRootAbs, recyclePathAbs)) {
+      return {
+        ok: false,
+        invalidReason: 'recycle_path_outside_recycle_root',
+      };
+    }
+
+    const batchRootAbs = path.dirname(recyclePathAbs);
+    if (!isPathWithinRoot(recycleRootAbs, batchRootAbs)) {
+      return {
+        ok: false,
+        invalidReason: 'batch_root_outside_recycle_root',
+      };
+    }
+    if (batchRootAbs === recycleRootAbs) {
+      return {
+        ok: false,
+        invalidReason: 'batch_root_is_recycle_root',
+      };
+    }
+    rootSet.add(batchRootAbs);
+  }
+
+  if (rootSet.size !== 1) {
+    return {
+      ok: false,
+      invalidReason: 'inconsistent_batch_roots',
+    };
+  }
+
+  return {
+    ok: true,
+    batchRoot: [...rootSet][0],
+  };
+}
+
+export async function collectRecycleStats({ indexPath, recycleRoot, createIfMissing = true }) {
+  if (createIfMissing) {
+    await ensureDir(recycleRoot);
+  } else {
+    const recycleExists = await fs
+      .stat(recycleRoot)
+      .then((stat) => stat.isDirectory())
+      .catch(() => false);
+    if (!recycleExists) {
+      return {
+        batches: [],
+        totalBatches: 0,
+        totalBytes: 0,
+        indexedBytes: 0,
+        oldestTime: null,
+      };
+    }
+  }
+
   const batches = await listRestorableBatches(indexPath, { recycleRoot });
   const totalBatches = batches.length;
   const indexedBytes = batches.reduce((acc, batch) => acc + Number(batch.totalBytes || 0), 0);
@@ -190,15 +270,26 @@ export async function maintainRecycleBin({ indexPath, recycleRoot, policy, dryRu
       onProgress(i + 1, selected.candidates.length);
     }
 
+    const resolvedBatchRoot = resolveBatchRootFromEntries(recycleRoot, batch);
+    if (!resolvedBatchRoot.ok) {
+      summary.failBatches += 1;
+      summary.errors.push({
+        batchId: batch.batchId,
+        message: `批次路径校验失败: ${resolvedBatchRoot.invalidReason}`,
+        errorType: ERROR_TYPES.PATH_VALIDATION_FAILED,
+        invalidReason: resolvedBatchRoot.invalidReason,
+      });
+      continue;
+    }
+
     if (dryRun) {
       summary.deletedBatches += 1;
       summary.deletedBytes += Number(batch.totalBytes || 0);
       continue;
     }
 
-    const targetBatchRoot = batchRootPath(recycleRoot, batch.batchId);
     try {
-      await fs.rm(targetBatchRoot, { recursive: true, force: true });
+      await fs.rm(resolvedBatchRoot.batchRoot, { recursive: true, force: true });
       summary.deletedBatches += 1;
       summary.deletedBytes += Number(batch.totalBytes || 0);
     } catch (error) {

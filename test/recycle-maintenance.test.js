@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import { appendJsonLine, pathExists, readJsonLines } from '../src/utils.js';
+import { ERROR_TYPES } from '../src/error-taxonomy.js';
 import {
   collectRecycleStats,
   maintainRecycleBin,
@@ -178,4 +179,139 @@ test('maintainRecycleBin 支持 disabled/no-candidate/dry-run/real 清理路径'
     maintainRows.some((row) => row.status === 'success'),
     true
   );
+});
+
+test('collectRecycleStats 在只读模式下不会创建缺失回收目录', async (t) => {
+  const root = await makeTempDir('wecom-recycle-stats-readonly-');
+  t.after(async () => removeDir(root));
+
+  const recycleRoot = path.join(root, 'missing-recycle');
+  const indexPath = path.join(root, 'index.jsonl');
+
+  assert.equal(await pathExists(recycleRoot), false);
+  const stats = await collectRecycleStats({
+    indexPath,
+    recycleRoot,
+    createIfMissing: false,
+  });
+
+  assert.equal(stats.totalBatches, 0);
+  assert.equal(stats.totalBytes, 0);
+  assert.equal(stats.indexedBytes, 0);
+  assert.equal(stats.oldestTime, null);
+  assert.equal(await pathExists(recycleRoot), false);
+});
+
+test('maintainRecycleBin 不会因异常 batchId 触发越界删除', async (t) => {
+  const root = await makeTempDir('wecom-recycle-maintain-batchid-');
+  t.after(async () => removeDir(root));
+
+  const recycleRoot = path.join(root, 'recycle-bin');
+  const indexPath = path.join(root, 'index.jsonl');
+  const recyclePath = path.join(recycleRoot, 'safe-batch', '0001_item');
+  const outsideVictim = path.join(root, 'evil', 'keep.txt');
+
+  await ensureFile(path.join(recyclePath, 'payload.bin'), 'cache');
+  await ensureFile(outsideVictim, 'keep');
+  await appendJsonLine(indexPath, {
+    action: 'cleanup',
+    status: 'success',
+    batchId: '../evil',
+    scope: 'cleanup_monthly',
+    sourcePath: '/source/evil',
+    recyclePath,
+    sizeBytes: 16,
+    time: Date.now() - 90 * DAY_MS,
+  });
+  await createBatch({
+    recycleRoot,
+    indexPath,
+    batchId: 'keep-recent',
+    ageDays: 1,
+    sizeBytes: 8,
+  });
+
+  const result = await maintainRecycleBin({
+    indexPath,
+    recycleRoot,
+    policy: {
+      enabled: true,
+      maxAgeDays: 30,
+      minKeepBatches: 1,
+      sizeThresholdGB: 20,
+    },
+    dryRun: false,
+  });
+
+  assert.equal(result.status, 'success');
+  assert.equal(await pathExists(path.join(root, 'evil')), true);
+  assert.equal(await pathExists(outsideVictim), true);
+  assert.equal(await pathExists(path.join(recycleRoot, 'safe-batch')), false);
+});
+
+test('maintainRecycleBin 会拦截批次内 recyclePath 根不一致的异常索引', async (t) => {
+  const root = await makeTempDir('wecom-recycle-maintain-inconsistent-');
+  t.after(async () => removeDir(root));
+
+  const recycleRoot = path.join(root, 'recycle-bin');
+  const indexPath = path.join(root, 'index.jsonl');
+  const recyclePathA = path.join(recycleRoot, 'batch-A', '0001_item');
+  const recyclePathB = path.join(recycleRoot, 'batch-B', '0002_item');
+  await ensureFile(path.join(recyclePathA, 'payload.bin'), 'a');
+  await ensureFile(path.join(recyclePathB, 'payload.bin'), 'b');
+
+  await appendJsonLine(indexPath, {
+    action: 'cleanup',
+    status: 'success',
+    batchId: 'mixed-batch',
+    scope: 'cleanup_monthly',
+    sourcePath: '/source/a',
+    recyclePath: recyclePathA,
+    sizeBytes: 1,
+    time: Date.now() - 90 * DAY_MS,
+  });
+  await appendJsonLine(indexPath, {
+    action: 'cleanup',
+    status: 'success',
+    batchId: 'mixed-batch',
+    scope: 'cleanup_monthly',
+    sourcePath: '/source/b',
+    recyclePath: recyclePathB,
+    sizeBytes: 1,
+    time: Date.now() - 90 * DAY_MS,
+  });
+  await createBatch({
+    recycleRoot,
+    indexPath,
+    batchId: 'keep-recent',
+    ageDays: 1,
+    sizeBytes: 8,
+  });
+
+  const result = await maintainRecycleBin({
+    indexPath,
+    recycleRoot,
+    policy: {
+      enabled: true,
+      maxAgeDays: 30,
+      minKeepBatches: 1,
+      sizeThresholdGB: 20,
+    },
+    dryRun: false,
+  });
+
+  assert.equal(result.status, 'partial_failed');
+  assert.equal(result.deletedBatches, 0);
+  assert.equal(result.failBatches, 1);
+  assert.equal(result.errors[0]?.invalidReason, 'inconsistent_batch_roots');
+  assert.equal(result.errors[0]?.errorType, ERROR_TYPES.PATH_VALIDATION_FAILED);
+  assert.equal(await pathExists(path.join(recycleRoot, 'batch-A')), true);
+  assert.equal(await pathExists(path.join(recycleRoot, 'batch-B')), true);
+
+  const rows = await readJsonLines(indexPath);
+  const maintainRows = rows.filter((row) => row.action === 'recycle_maintain');
+  const lastRow = maintainRows[maintainRows.length - 1];
+  assert.ok(lastRow);
+  assert.equal(lastRow.status, 'partial_failed');
+  assert.equal(lastRow.error_type, ERROR_TYPES.PATH_VALIDATION_FAILED);
 });

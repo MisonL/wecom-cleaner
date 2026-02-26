@@ -2500,13 +2500,22 @@ async function acquireExecutionLock(stateRoot, mode, options = {}) {
 
 async function main() {
   const cliArgs = parseCliArgs(process.argv.slice(2));
-  const config = await loadConfig(cliArgs);
+  const runModeValue = cliArgs.mode || MODES.START;
+  const config = await loadConfig(cliArgs, {
+    readOnly: runModeValue === MODES.DOCTOR,
+  });
   const aliases = await loadAliases(config.aliasPath);
 
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
   const projectRoot = path.resolve(__dirname, '..');
-  const nativeProbe = await detectNativeCore(projectRoot, { stateRoot: config.stateRoot });
+  const nativeProbe =
+    runModeValue === MODES.DOCTOR
+      ? { nativeCorePath: null, repairNote: null }
+      : await detectNativeCore(projectRoot, {
+          stateRoot: config.stateRoot,
+          allowAutoRepair: true,
+        });
   const appMeta = await loadAppMeta(projectRoot);
 
   const context = {
@@ -2518,7 +2527,6 @@ async function main() {
     projectRoot,
   };
 
-  const runModeValue = cliArgs.mode || MODES.START;
   let lockHandle = null;
   if (runModeValue !== MODES.DOCTOR) {
     lockHandle = await acquireExecutionLock(config.stateRoot, runModeValue, { force: cliArgs.force });

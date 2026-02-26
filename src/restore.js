@@ -404,6 +404,8 @@ export async function restoreBatch({
 
     let targetPath = originalPath;
     let strategy = applyAllAction;
+    let conflictStrategy = null;
+    let wouldOverwrite = false;
 
     const sourceExists = await pathExists(originalPath);
     if (sourceExists) {
@@ -422,6 +424,8 @@ export async function restoreBatch({
       if (!strategy) {
         strategy = 'skip';
       }
+      conflictStrategy = strategy;
+      wouldOverwrite = strategy === 'overwrite';
 
       if (strategy === 'skip') {
         summary.skipCount += 1;
@@ -443,10 +447,6 @@ export async function restoreBatch({
         continue;
       }
 
-      if (strategy === 'overwrite') {
-        await removePath(originalPath);
-      }
-
       if (strategy === 'rename') {
         targetPath = buildRenameTarget(originalPath);
       }
@@ -466,6 +466,8 @@ export async function restoreBatch({
         restoredPath: targetPath,
         status: 'dry_run',
         dryRun: true,
+        conflict_strategy: conflictStrategy,
+        would_overwrite: wouldOverwrite,
         profile_root: profileRoot,
         extra_profile_roots: extraProfileRoots,
         recycle_root: recycleRoot,
@@ -476,6 +478,9 @@ export async function restoreBatch({
     }
 
     try {
+      if (sourceExists && strategy === 'overwrite') {
+        await removePath(originalPath);
+      }
       await movePath(recyclePath, targetPath);
       summary.successCount += 1;
       summary.restoredBytes += Number(entry.sizeBytes || 0);

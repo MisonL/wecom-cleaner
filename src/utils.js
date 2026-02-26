@@ -22,14 +22,15 @@ export function inferDataRootFromProfilesRoot(rootDir) {
     return null;
   }
   const normalized = path.resolve(expanded);
-  const marker = `${path.sep}Documents${path.sep}Profiles`;
-  const idx = normalized.lastIndexOf(marker);
+  const normalizedLower = normalized.toLowerCase();
+  const marker = `${path.sep}documents${path.sep}profiles`;
+  const idx = normalizedLower.lastIndexOf(marker);
   if (idx > 0) {
     return normalized.slice(0, idx);
   }
-  const baseName = path.basename(normalized);
-  const parentName = path.basename(path.dirname(normalized));
-  if (baseName === 'Profiles' && parentName === 'Documents') {
+  const baseName = path.basename(normalized).toLowerCase();
+  const parentName = path.basename(path.dirname(normalized)).toLowerCase();
+  if (baseName === 'profiles' && parentName === 'documents') {
     return path.resolve(normalized, '..', '..');
   }
   return null;

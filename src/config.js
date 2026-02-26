@@ -184,7 +184,7 @@ function normalizePathList(value) {
   return [];
 }
 
-export async function loadConfig(cliArgs = {}) {
+export async function loadConfig(cliArgs = {}, options = {}) {
   const base = defaultConfig();
   const bootstrapStateRoot = expandHome(cliArgs.stateRoot || base.stateRoot);
   const bootstrapConfigPath = path.join(bootstrapStateRoot, 'config.json');
@@ -230,8 +230,10 @@ export async function loadConfig(cliArgs = {}) {
   merged.aliasPath = expandHome(fileConfig.aliasPath || path.join(stateRoot, 'account-aliases.json'));
   merged.configPath = configPath;
 
-  await ensureDir(merged.stateRoot);
-  await ensureDir(merged.recycleRoot);
+  if (!options.readOnly) {
+    await ensureDir(merged.stateRoot);
+    await ensureDir(merged.recycleRoot);
+  }
 
   return merged;
 }

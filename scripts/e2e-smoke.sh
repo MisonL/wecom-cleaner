@@ -15,7 +15,13 @@ if ! command -v expect >/dev/null 2>&1; then
   exit 2
 fi
 
-BASE_DIR="${WECOM_CLEANER_E2E_BASE:-$(mktemp -d /tmp/wecom-e2e-XXXXXX)}"
+BASE_DIR_AUTO_CREATED=0
+if [[ -n "${WECOM_CLEANER_E2E_BASE:-}" ]]; then
+  BASE_DIR="${WECOM_CLEANER_E2E_BASE}"
+else
+  BASE_DIR="$(mktemp -d /tmp/wecom-e2e-XXXXXX)"
+  BASE_DIR_AUTO_CREATED=1
+fi
 DATA_ROOT="$BASE_DIR/ContainerData"
 PROFILE_ROOT="$DATA_ROOT/Documents/Profiles"
 DOCS_ROOT="$DATA_ROOT/Documents"
@@ -39,6 +45,14 @@ export E2E_UI_STATE_ROOT="$UI_STATE"
 cleanup() {
   if [[ "$KEEP_ARTIFACTS" -eq 1 ]]; then
     echo "已保留测试目录: $BASE_DIR"
+    return
+  fi
+  if [[ "$BASE_DIR_AUTO_CREATED" -ne 1 ]]; then
+    echo "已保留测试目录(外部指定，不自动删除): $BASE_DIR"
+    return
+  fi
+  if [[ "$BASE_DIR" != /tmp/wecom-e2e-* ]]; then
+    echo "跳过删除：目录不在安全范围内: $BASE_DIR"
     return
   fi
   rm -rf "$BASE_DIR"

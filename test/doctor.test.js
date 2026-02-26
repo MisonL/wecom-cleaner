@@ -8,6 +8,13 @@ import { ensureFile, makeTempDir, removeDir, toBase64Utf8 } from './helpers/temp
 
 const GB = 1024 * 1024 * 1024;
 
+async function exists(targetPath) {
+  return fs
+    .stat(targetPath)
+    .then(() => true)
+    .catch(() => false);
+}
+
 function resolveRuntimeTarget() {
   const runtimePlatform = process.platform;
   const runtimeArch = process.arch;
@@ -205,4 +212,41 @@ test('runDoctor 在异常场景下返回 fail/warn 并给出建议', async (t) =
   assert.equal(report.metrics.recycleOverThreshold, true);
   assert.equal(Array.isArray(report.recommendations), true);
   assert.equal(report.recommendations.length >= 1, true);
+});
+
+test('runDoctor 不会在只读巡检时创建缺失回收目录', async (t) => {
+  const root = await makeTempDir('wecom-doctor-readonly-');
+  t.after(async () => removeDir(root));
+
+  const projectRoot = path.join(root, 'project');
+  const profilesRoot = path.join(root, 'ContainerData', 'Documents', 'Profiles');
+  const stateRoot = path.join(root, 'state');
+  const recycleRoot = path.join(stateRoot, 'recycle-bin');
+  const indexPath = path.join(stateRoot, 'index.jsonl');
+
+  await ensureDir(profilesRoot);
+  assert.equal(await exists(recycleRoot), false);
+
+  const report = await runDoctor({
+    config: {
+      rootDir: profilesRoot,
+      stateRoot,
+      recycleRoot,
+      indexPath,
+      externalStorageRoots: [],
+      externalStorageAutoDetect: false,
+      recycleRetention: {
+        enabled: true,
+        maxAgeDays: 30,
+        minKeepBatches: 20,
+        sizeThresholdGB: 20,
+      },
+    },
+    aliases: {},
+    projectRoot,
+    appVersion: '1.0.0',
+  });
+
+  assert.equal(Array.isArray(report.checks), true);
+  assert.equal(await exists(recycleRoot), false);
 });

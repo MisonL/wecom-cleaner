@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import { promises as fs } from 'node:fs';
 import {
   CliArgError,
   defaultConfig,
@@ -11,6 +12,13 @@ import {
   saveConfig,
 } from '../src/config.js';
 import { makeTempDir, removeDir } from './helpers/temp.js';
+
+async function exists(targetPath) {
+  return fs
+    .stat(targetPath)
+    .then(() => true)
+    .catch(() => false);
+}
 
 test('parseCliArgs 可正确解析常用参数', () => {
   const parsed = parseCliArgs([
@@ -101,4 +109,27 @@ test('defaultConfig 输出基础字段完整', () => {
   assert.equal(cfg.theme, 'auto');
   assert.equal(typeof cfg.recycleRetention, 'object');
   assert.equal(cfg.recycleRetention.enabled, true);
+});
+
+test('loadConfig 在 readOnly 模式下不会创建状态目录与回收区', async (t) => {
+  const root = await makeTempDir('wecom-config-readonly-');
+  t.after(async () => removeDir(root));
+
+  const stateRoot = path.join(root, 'state-readonly');
+  const recycleRoot = path.join(stateRoot, 'recycle-bin');
+  assert.equal(await exists(stateRoot), false);
+  assert.equal(await exists(recycleRoot), false);
+
+  const loaded = await loadConfig(
+    {
+      rootDir: path.join(root, 'Profiles'),
+      stateRoot,
+    },
+    { readOnly: true }
+  );
+
+  assert.equal(loaded.stateRoot, stateRoot);
+  assert.equal(loaded.recycleRoot, recycleRoot);
+  assert.equal(await exists(stateRoot), false);
+  assert.equal(await exists(recycleRoot), false);
 });

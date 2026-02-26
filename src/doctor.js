@@ -7,6 +7,15 @@ import { detectExternalStorageRoots, discoverAccounts } from './scanner.js';
 const STATUS_PASS = 'pass';
 const STATUS_WARN = 'warn';
 const STATUS_FAIL = 'fail';
+const DEFAULT_PROBE_TIMEOUT_MS = 3_000;
+
+function resolveProbeTimeoutMs() {
+  const raw = Number.parseInt(String(process.env.WECOM_CLEANER_NATIVE_PROBE_TIMEOUT_MS || ''), 10);
+  if (Number.isFinite(raw) && raw >= 500) {
+    return raw;
+  }
+  return DEFAULT_PROBE_TIMEOUT_MS;
+}
 
 function resolveRuntimeTarget() {
   const runtimePlatform = process.platform;
@@ -78,10 +87,32 @@ function buildCheck(id, title, status, detail, suggestion = '') {
 }
 
 function probeNativeBinary(binPath) {
+  const timeoutMs = resolveProbeTimeoutMs();
   const probe = spawnSync(binPath, ['--ping'], {
     encoding: 'utf-8',
     maxBuffer: 1024 * 1024,
+    timeout: timeoutMs,
   });
+
+  if (probe.error) {
+    if (probe.error?.code === 'ETIMEDOUT') {
+      return {
+        ok: false,
+        detail: `探针超时(${timeoutMs}ms)`,
+      };
+    }
+    return {
+      ok: false,
+      detail: `探针异常(${probe.error.message || 'unknown'})`,
+    };
+  }
+
+  if (probe.signal) {
+    return {
+      ok: false,
+      detail: `探针被信号中断(${probe.signal})`,
+    };
+  }
 
   if (probe.status !== 0) {
     return {
@@ -290,6 +321,7 @@ export async function runDoctor({ config, aliases, projectRoot, appVersion }) {
   const recycleStats = await collectRecycleStats({
     indexPath: config.indexPath,
     recycleRoot: config.recycleRoot,
+    createIfMissing: false,
   });
   const thresholdBytes = Math.max(1, Number(retention.sizeThresholdGB || 20)) * 1024 * 1024 * 1024;
   const recycleOverThreshold = recycleStats.totalBytes > thresholdBytes;

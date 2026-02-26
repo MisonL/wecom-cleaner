@@ -30,6 +30,8 @@ test('expandHome 与 inferDataRootFromProfilesRoot 解析正确', () => {
 
   const root = path.join('/tmp', 'a', 'Data', 'Documents', 'Profiles');
   assert.equal(inferDataRootFromProfilesRoot(root), path.join('/tmp', 'a', 'Data'));
+  const mixedCaseRoot = path.join('/tmp', 'a', 'Data', 'DoCuMeNtS', 'PrOfIlEs');
+  assert.equal(inferDataRootFromProfilesRoot(mixedCaseRoot), path.join('/tmp', 'a', 'Data'));
   assert.equal(inferDataRootFromProfilesRoot('/tmp/other/path'), null);
 });
 
