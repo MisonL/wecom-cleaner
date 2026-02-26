@@ -51,8 +51,23 @@ function isPathWithinRoot(rootPath, targetPath) {
   return !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
-function resolveBatchRootFromEntries(recycleRoot, batch) {
+async function safeRealpath(targetPath) {
+  try {
+    return await fs.realpath(targetPath);
+  } catch {
+    return null;
+  }
+}
+
+async function resolveBatchRootFromEntries(recycleRoot, batch) {
   const recycleRootAbs = path.resolve(String(recycleRoot || ''));
+  const recycleRootReal = await safeRealpath(recycleRootAbs);
+  if (!recycleRootReal) {
+    return {
+      ok: false,
+      invalidReason: 'missing_recycle_root',
+    };
+  }
   const entries = Array.isArray(batch?.entries) ? batch.entries : [];
   if (entries.length === 0) {
     return {
@@ -78,6 +93,19 @@ function resolveBatchRootFromEntries(recycleRoot, batch) {
         invalidReason: 'recycle_path_outside_recycle_root',
       };
     }
+    const recyclePathReal = await safeRealpath(recyclePathAbs);
+    if (!recyclePathReal) {
+      return {
+        ok: false,
+        invalidReason: 'recycle_path_unresolvable',
+      };
+    }
+    if (!isPathWithinRoot(recycleRootReal, recyclePathReal)) {
+      return {
+        ok: false,
+        invalidReason: 'recycle_path_symlink_escape',
+      };
+    }
 
     const batchRootAbs = path.dirname(recyclePathAbs);
     if (!isPathWithinRoot(recycleRootAbs, batchRootAbs)) {
@@ -92,7 +120,20 @@ function resolveBatchRootFromEntries(recycleRoot, batch) {
         invalidReason: 'batch_root_is_recycle_root',
       };
     }
-    rootSet.add(batchRootAbs);
+    const batchRootReal = await safeRealpath(batchRootAbs);
+    if (!batchRootReal) {
+      return {
+        ok: false,
+        invalidReason: 'batch_root_unresolvable',
+      };
+    }
+    if (!isPathWithinRoot(recycleRootReal, batchRootReal)) {
+      return {
+        ok: false,
+        invalidReason: 'batch_root_symlink_escape',
+      };
+    }
+    rootSet.add(batchRootReal);
   }
 
   if (rootSet.size !== 1) {
@@ -282,7 +323,7 @@ export async function maintainRecycleBin({ indexPath, recycleRoot, policy, dryRu
       onProgress(i + 1, selected.candidates.length);
     }
 
-    const resolvedBatchRoot = resolveBatchRootFromEntries(recycleRoot, batch);
+    const resolvedBatchRoot = await resolveBatchRootFromEntries(recycleRoot, batch);
     if (!resolvedBatchRoot.ok) {
       summary.failBatches += 1;
       summary.operations.push({

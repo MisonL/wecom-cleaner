@@ -111,6 +111,11 @@ async function readLastCleanupBatchId(indexPath) {
   return null;
 }
 
+async function appendJsonLine(filePath, payload) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.appendFile(filePath, `${JSON.stringify(payload)}\n`, 'utf-8');
+}
+
 test('无交互 JSON 契约：公共字段与类型稳定（关键动作）', async (t) => {
   const root = await makeTempDir('wecom-cli-ni-contract-');
   t.after(async () => removeDir(root));
@@ -303,6 +308,92 @@ test('无交互 text/json 在无目标场景下结论一致', async (t) => {
   ]);
   assert.equal(recycleText.status, 0);
   assert.match(String(recycleText.stdout || ''), /已跳过（无候选批次）|当前没有需要治理的回收批次/);
+});
+
+test('无交互业务失败场景仍返回稳定 JSON 契约（recycle partial_failed）', async (t) => {
+  const root = await makeTempDir('wecom-cli-ni-fail-contract-');
+  t.after(async () => removeDir(root));
+
+  const profilesRoot = await prepareFixture(root);
+  const stateRoot = path.join(root, 'state');
+  const recycleRoot = path.join(stateRoot, 'recycle-bin');
+  const indexPath = path.join(stateRoot, 'index.jsonl');
+  const recyclePathA = path.join(recycleRoot, 'batch-A', '0001_item');
+  const recyclePathB = path.join(recycleRoot, 'batch-B', '0002_item');
+
+  await fs.mkdir(path.dirname(path.dirname(recyclePathA)), { recursive: true });
+  await fs.mkdir(path.dirname(path.dirname(recyclePathB)), { recursive: true });
+  await fs.mkdir(recyclePathA, { recursive: true });
+  await fs.mkdir(recyclePathB, { recursive: true });
+  await fs.writeFile(path.join(recyclePathA, 'payload.bin'), 'a', 'utf-8');
+  await fs.writeFile(path.join(recyclePathB, 'payload.bin'), 'b', 'utf-8');
+
+  await appendJsonLine(indexPath, {
+    action: 'cleanup',
+    status: 'success',
+    batchId: 'mixed-batch',
+    scope: 'cleanup_monthly',
+    sourcePath: '/source/a',
+    recyclePath: recyclePathA,
+    sizeBytes: 1,
+    time: Date.now() - 90 * 24 * 3600 * 1000,
+  });
+  await appendJsonLine(indexPath, {
+    action: 'cleanup',
+    status: 'success',
+    batchId: 'mixed-batch',
+    scope: 'cleanup_monthly',
+    sourcePath: '/source/b',
+    recyclePath: recyclePathB,
+    sizeBytes: 1,
+    time: Date.now() - 90 * 24 * 3600 * 1000,
+  });
+  await appendJsonLine(indexPath, {
+    action: 'cleanup',
+    status: 'success',
+    batchId: 'keep-recent',
+    scope: 'cleanup_monthly',
+    sourcePath: '/source/c',
+    recyclePath: path.join(recycleRoot, 'keep-recent', '0003_item'),
+    sizeBytes: 1,
+    time: Date.now(),
+  });
+  await fs.mkdir(path.join(recycleRoot, 'keep-recent', '0003_item'), { recursive: true });
+  await fs.writeFile(path.join(recycleRoot, 'keep-recent', '0003_item', 'payload.bin'), 'c', 'utf-8');
+
+  const result = runCli([
+    '--recycle-maintain',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--retention-enabled',
+    'true',
+    '--retention-max-age-days',
+    '30',
+    '--retention-min-keep-batches',
+    '1',
+    '--retention-size-threshold-gb',
+    '1',
+    '--dry-run',
+    'false',
+    '--yes',
+    '--external-storage-auto-detect',
+    'false',
+  ]);
+
+  assert.equal(result.status, 1);
+  const payload = JSON.parse(String(result.stdout || '{}'));
+  assert.equal(payload.action, 'recycle_maintain');
+  assert.equal(payload.ok, false);
+  assert.equal(payload.summary.status, 'partial_failed');
+  assert.equal(payload.summary.failedBatches >= 1, true);
+  assert.equal(Array.isArray(payload.errors), true);
+  assert.equal(payload.errors.length >= 1, true);
+  assert.equal(typeof payload.errors[0].code, 'string');
+  assert.equal(typeof payload.errors[0].message, 'string');
+  assert.equal(typeof payload.meta.durationMs, 'number');
+  assert.equal(typeof payload.meta.engine, 'string');
 });
 
 test('无交互 cleanup 默认返回 JSON 且未加 --yes 时强制 dry-run', async (t) => {

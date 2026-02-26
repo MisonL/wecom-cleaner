@@ -181,6 +181,63 @@ test('maintainRecycleBin 支持 disabled/no-candidate/dry-run/real 清理路径'
   );
 });
 
+test('maintainRecycleBin 真实执行后同策略复核应无候选批次', async (t) => {
+  const root = await makeTempDir('wecom-recycle-maintain-verify-');
+  t.after(async () => removeDir(root));
+
+  const recycleRoot = path.join(root, 'recycle-bin');
+  const indexPath = path.join(root, 'index.jsonl');
+
+  await createBatch({
+    recycleRoot,
+    indexPath,
+    batchId: 'batch-old-a',
+    ageDays: 90,
+    sizeBytes: 1024,
+  });
+  await createBatch({
+    recycleRoot,
+    indexPath,
+    batchId: 'batch-old-b',
+    ageDays: 120,
+    sizeBytes: 2048,
+  });
+  await createBatch({
+    recycleRoot,
+    indexPath,
+    batchId: 'batch-recent',
+    ageDays: 1,
+    sizeBytes: 512,
+  });
+
+  const policy = {
+    enabled: true,
+    maxAgeDays: 30,
+    minKeepBatches: 1,
+    sizeThresholdGB: 20,
+  };
+
+  const realResult = await maintainRecycleBin({
+    indexPath,
+    recycleRoot,
+    policy,
+    dryRun: false,
+  });
+  assert.equal(realResult.status, 'success');
+  assert.equal(realResult.deletedBatches >= 2, true);
+
+  const verifyResult = await maintainRecycleBin({
+    indexPath,
+    recycleRoot,
+    policy,
+    dryRun: true,
+  });
+  assert.equal(verifyResult.status, 'skipped_no_candidate');
+  assert.equal(verifyResult.candidateCount, 0);
+  assert.equal(verifyResult.deletedBatches, 0);
+  assert.equal(verifyResult.deletedBytes, 0);
+});
+
 test('collectRecycleStats 在只读模式下不会创建缺失回收目录', async (t) => {
   const root = await makeTempDir('wecom-recycle-stats-readonly-');
   t.after(async () => removeDir(root));
@@ -337,4 +394,59 @@ test('maintainRecycleBin 会拦截批次内 recyclePath 根不一致的异常索
   assert.ok(lastRow);
   assert.equal(lastRow.status, 'partial_failed');
   assert.equal(lastRow.error_type, ERROR_TYPES.PATH_VALIDATION_FAILED);
+});
+
+test('maintainRecycleBin 会拦截 recyclePath 符号链接越界', async (t) => {
+  const root = await makeTempDir('wecom-recycle-maintain-symlink-escape-');
+  t.after(async () => removeDir(root));
+
+  const recycleRoot = path.join(root, 'recycle-bin');
+  const indexPath = path.join(root, 'index.jsonl');
+  const outsideRoot = path.join(root, 'outside');
+  const outsideBatchRoot = path.join(outsideRoot, 'batch-evil');
+  const symlinkBatchRoot = path.join(recycleRoot, 'batch-evil');
+  const recyclePath = path.join(symlinkBatchRoot, '0001_item');
+  const outsidePayload = path.join(outsideBatchRoot, '0001_item', 'payload.bin');
+
+  await ensureFile(outsidePayload, 'outside');
+  await fs.mkdir(recycleRoot, { recursive: true });
+  await fs.symlink(outsideBatchRoot, symlinkBatchRoot);
+
+  await appendJsonLine(indexPath, {
+    action: 'cleanup',
+    status: 'success',
+    batchId: 'batch-evil',
+    scope: 'cleanup_monthly',
+    sourcePath: '/source/evil',
+    recyclePath,
+    sizeBytes: 16,
+    time: Date.now() - 90 * DAY_MS,
+  });
+  await createBatch({
+    recycleRoot,
+    indexPath,
+    batchId: 'keep-recent',
+    ageDays: 1,
+    sizeBytes: 8,
+  });
+
+  const result = await maintainRecycleBin({
+    indexPath,
+    recycleRoot,
+    policy: {
+      enabled: true,
+      maxAgeDays: 30,
+      minKeepBatches: 1,
+      sizeThresholdGB: 20,
+    },
+    dryRun: false,
+  });
+
+  assert.equal(result.status, 'partial_failed');
+  assert.equal(result.deletedBatches, 0);
+  assert.equal(result.failBatches, 1);
+  assert.equal(result.errors[0]?.errorType, ERROR_TYPES.PATH_VALIDATION_FAILED);
+  assert.equal(result.errors[0]?.invalidReason, 'recycle_path_symlink_escape');
+  assert.equal(await pathExists(outsidePayload), true);
+  assert.equal(await pathExists(symlinkBatchRoot), true);
 });
