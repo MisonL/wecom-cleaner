@@ -199,6 +199,59 @@ test('restoreBatch 会拦截越界恢复并写入审计', async (t) => {
   assert.equal(record.error_type, ERROR_TYPES.PATH_VALIDATION_FAILED);
 });
 
+test('restoreBatch 会拦截符号链接逃逸路径并写入审计', async (t) => {
+  const root = await makeTempDir('wecom-restore-symlink-escape-');
+  t.after(async () => removeDir(root));
+
+  const profileRoot = path.join(root, 'Profiles');
+  const recycleRoot = path.join(root, 'state', 'recycle-bin');
+  const indexPath = path.join(root, 'state', 'index.jsonl');
+  const outsideRoot = path.join(root, 'outside');
+  const outsideSource = path.join(outsideRoot, 'real-source');
+  const symlinkSource = path.join(profileRoot, 'acc001', 'Caches', 'Files', 'link-source');
+  const recyclePath = path.join(recycleRoot, 'batch-symlink', '0001_case');
+
+  await ensureFile(path.join(outsideSource, 'payload.txt'), 'outside');
+  await ensureDir(path.dirname(symlinkSource));
+  await fs.symlink(outsideSource, symlinkSource);
+  await ensureFile(path.join(recyclePath, 'payload.txt'), 'from-recycle');
+
+  const batch = {
+    batchId: 'batch-symlink',
+    firstTime: Date.now(),
+    totalBytes: 1,
+    entries: [
+      {
+        batchId: 'batch-symlink',
+        scope: 'cleanup_monthly',
+        sourcePath: symlinkSource,
+        recyclePath,
+        sizeBytes: 1,
+      },
+    ],
+  };
+
+  const summary = await restoreBatch({
+    batch,
+    indexPath,
+    profileRoot,
+    recycleRoot,
+    governanceRoot: null,
+    dryRun: true,
+  });
+
+  assert.equal(summary.skipCount, 1);
+  assert.equal(summary.successCount, 0);
+  assert.equal(await pathExists(recyclePath), true);
+  assert.equal(await pathExists(outsideSource), true);
+
+  const rows = await readJsonLines(indexPath);
+  const record = rows.find((row) => row.action === 'restore' && row.status === 'skipped_invalid_path');
+  assert.ok(record);
+  assert.equal(record.error_type, ERROR_TYPES.PATH_VALIDATION_FAILED);
+  assert.equal(record.invalid_reason, 'source_symlink_escape');
+});
+
 test('restoreBatch 支持 dry-run 并写入审计', async (t) => {
   const root = await makeTempDir('wecom-restore-dryrun-');
   t.after(async () => removeDir(root));

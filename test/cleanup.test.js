@@ -224,3 +224,50 @@ test('executeCleanup 会拦截白名单根目录之外的目标路径', async (t
   assert.equal(rows[0].error_type, ERROR_TYPES.PATH_VALIDATION_FAILED);
   assert.equal(rows[0].invalid_reason, 'source_outside_allowed_root');
 });
+
+test('executeCleanup 会拦截符号链接逃逸路径并写入审计', async (t) => {
+  const root = await makeTempDir('wecom-cleanup-symlink-escape-');
+  t.after(async () => removeDir(root));
+
+  const allowedRoot = path.join(root, 'allowed-root');
+  const outsideRoot = path.join(root, 'outside-root');
+  const outsideSource = path.join(outsideRoot, 'real-source');
+  const symlinkPath = path.join(allowedRoot, 'linked-source');
+  const recycleRoot = path.join(root, 'recycle-bin');
+  const indexPath = path.join(root, 'index.jsonl');
+
+  await ensureFile(path.join(outsideSource, 'payload.txt'), 'escape');
+  await fs.mkdir(allowedRoot, { recursive: true });
+  await fs.symlink(outsideSource, symlinkPath);
+
+  const result = await executeCleanup({
+    targets: [
+      {
+        path: symlinkPath,
+        accountId: 'acc001',
+        accountShortId: 'acc001',
+        userName: '用户A',
+        corpName: '企业A',
+        categoryKey: 'files',
+        categoryLabel: '聊天文件',
+        monthKey: '2024-01',
+        sizeBytes: 6,
+      },
+    ],
+    recycleRoot,
+    indexPath,
+    dryRun: false,
+    allowedRoots: [allowedRoot],
+  });
+
+  assert.equal(result.successCount, 0);
+  assert.equal(result.skippedCount, 1);
+  assert.equal(await pathExists(symlinkPath), true);
+  assert.equal(await pathExists(outsideSource), true);
+
+  const rows = await readJsonLines(indexPath);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].status, 'skipped_invalid_path');
+  assert.equal(rows[0].error_type, ERROR_TYPES.PATH_VALIDATION_FAILED);
+  assert.equal(rows[0].invalid_reason, 'source_symlink_escape');
+});

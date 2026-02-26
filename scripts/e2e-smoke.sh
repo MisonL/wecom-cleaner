@@ -66,7 +66,11 @@ pass() {
 fail() {
   local name="$1"
   local log_path="${2:-}"
+  local context="${3:-}"
   echo "[FAIL] $name"
+  if [[ -n "$context" ]]; then
+    echo "上下文: $context"
+  fi
   if [[ -n "$log_path" && -f "$log_path" ]]; then
     echo "日志: $log_path"
     tail -n 80 "$log_path" || true
@@ -84,12 +88,17 @@ run_expect() {
   local name="$1"
   local script_path="$2"
   shift 2
+  local args=("$@")
+  local log_path=""
+  if [[ "${#args[@]}" -gt 0 ]]; then
+    log_path="${args[${#args[@]}-1]}"
+  fi
   clear_e2e_locks
-  if "$script_path" "$@"; then
+  if "$script_path" "${args[@]}"; then
     pass "$name"
     return
   fi
-  fail "$name" "${*: -1}"
+  fail "$name" "$log_path" "expect脚本: $script_path"
 }
 
 prepare_fixture() {
@@ -635,18 +644,41 @@ run_smoke() {
   run_expect "space_governance" "$SPECS_DIR/governance.expect" "$PROFILE_ROOT" "$STATE_ROOT" "$EXTERNAL_ROOT" "$LOG_DIR/governance.log"
 
   local doctor_output
+  local doctor_log="$LOG_DIR/doctor-json.log"
   clear_e2e_locks
-  doctor_output="$(node src/cli.js --mode doctor --json --root "$PROFILE_ROOT" --state-root "$STATE_ROOT" --external-storage-root "$EXTERNAL_ROOT" --external-storage-auto-detect false)"
+  doctor_output="$(
+    node src/cli.js \
+      --mode doctor \
+      --json \
+      --root "$PROFILE_ROOT" \
+      --state-root "$STATE_ROOT" \
+      --external-storage-root "$EXTERNAL_ROOT" \
+      --external-storage-auto-detect false \
+      2>&1
+  )"
+  printf '%s\n' "$doctor_output" >"$doctor_log"
   if ! printf '%s' "$doctor_output" | rg -q '"overall"'; then
-    fail "doctor_json" ""
+    fail "doctor_json" "$doctor_log" "命令: node src/cli.js --mode doctor --json ..."
   fi
   pass "doctor_json"
 
   local maintain_output
+  local maintain_log="$LOG_DIR/recycle-maintain.log"
   clear_e2e_locks
-  maintain_output="$(node src/cli.js --mode recycle_maintain --output text --force --root "$PROFILE_ROOT" --state-root "$STATE_ROOT" --external-storage-root "$EXTERNAL_ROOT" --external-storage-auto-detect false)"
+  maintain_output="$(
+    node src/cli.js \
+      --mode recycle_maintain \
+      --output text \
+      --force \
+      --root "$PROFILE_ROOT" \
+      --state-root "$STATE_ROOT" \
+      --external-storage-root "$EXTERNAL_ROOT" \
+      --external-storage-auto-detect false \
+      2>&1
+  )"
+  printf '%s\n' "$maintain_output" >"$maintain_log"
   if ! printf '%s' "$maintain_output" | rg -q "(\[SUCCESS\] recycle_maintain|动作：回收区治理|=== 任务结论 ===)"; then
-    fail "recycle_maintain" ""
+    fail "recycle_maintain" "$maintain_log" "命令: node src/cli.js --mode recycle_maintain --output text ..."
   fi
   pass "recycle_maintain"
 

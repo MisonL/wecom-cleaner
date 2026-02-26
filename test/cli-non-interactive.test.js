@@ -64,6 +64,27 @@ function runCli(args, env = {}) {
   });
 }
 
+function assertCommonPayloadEnvelope(payload, action, expectedDryRun) {
+  assert.equal(typeof payload, 'object');
+  assert.equal(payload.action, action);
+  assert.equal(typeof payload.ok, 'boolean');
+  assert.equal(Array.isArray(payload.warnings), true);
+  assert.equal(Array.isArray(payload.errors), true);
+  assert.equal(typeof payload.summary, 'object');
+  assert.equal(typeof payload.meta, 'object');
+  assert.equal(typeof payload.meta.durationMs, 'number');
+  assert.equal(typeof payload.meta.engine, 'string');
+
+  if (expectedDryRun === null) {
+    assert.equal(payload.dryRun, null);
+    return;
+  }
+  assert.equal(typeof payload.dryRun, 'boolean');
+  if (typeof expectedDryRun === 'boolean') {
+    assert.equal(payload.dryRun, expectedDryRun);
+  }
+}
+
 async function readLastCleanupBatchId(indexPath) {
   const exists = await fs
     .stat(indexPath)
@@ -89,6 +110,200 @@ async function readLastCleanupBatchId(indexPath) {
   }
   return null;
 }
+
+test('无交互 JSON 契约：公共字段与类型稳定（关键动作）', async (t) => {
+  const root = await makeTempDir('wecom-cli-ni-contract-');
+  t.after(async () => removeDir(root));
+
+  const profilesRoot = await prepareFixture(root);
+  const stateRoot = path.join(root, 'state');
+
+  const cleanupDryRun = runCli([
+    '--cleanup-monthly',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--accounts',
+    'all',
+    '--months',
+    '2024-01',
+    '--categories',
+    'files',
+    '--external-storage-auto-detect',
+    'false',
+  ]);
+  assert.equal(cleanupDryRun.status, 0);
+  assertCommonPayloadEnvelope(JSON.parse(String(cleanupDryRun.stdout || '{}')), 'cleanup_monthly', true);
+
+  const analysis = runCli([
+    '--analysis-only',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--accounts',
+    'all',
+    '--external-storage-auto-detect',
+    'false',
+  ]);
+  assert.equal(analysis.status, 0);
+  assertCommonPayloadEnvelope(JSON.parse(String(analysis.stdout || '{}')), 'analysis_only', null);
+
+  const governance = runCli([
+    '--space-governance',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--accounts',
+    'all',
+    '--tiers',
+    'safe,caution',
+    '--external-storage-auto-detect',
+    'false',
+  ]);
+  assert.equal(governance.status, 0);
+  assertCommonPayloadEnvelope(JSON.parse(String(governance.stdout || '{}')), 'space_governance', true);
+
+  const recycle = runCli([
+    '--recycle-maintain',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--external-storage-auto-detect',
+    'false',
+  ]);
+  assert.equal(recycle.status, 0);
+  assertCommonPayloadEnvelope(JSON.parse(String(recycle.stdout || '{}')), 'recycle_maintain', true);
+
+  const doctor = runCli([
+    '--doctor',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--external-storage-auto-detect',
+    'false',
+  ]);
+  assert.equal(doctor.status, 0);
+  assertCommonPayloadEnvelope(JSON.parse(String(doctor.stdout || '{}')), 'doctor', null);
+
+  const cleanupReal = runCli([
+    '--cleanup-monthly',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--accounts',
+    'all',
+    '--months',
+    '2024-01',
+    '--categories',
+    'files',
+    '--external-storage-auto-detect',
+    'false',
+    '--dry-run',
+    'false',
+    '--yes',
+  ]);
+  assert.equal(cleanupReal.status, 0);
+  const batchId = await readLastCleanupBatchId(path.join(stateRoot, 'index.jsonl'));
+  assert.equal(typeof batchId, 'string');
+  assert.equal(Boolean(batchId), true);
+
+  const restore = runCli([
+    '--restore-batch',
+    batchId,
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--conflict',
+    'rename',
+    '--external-storage-auto-detect',
+    'false',
+  ]);
+  assert.equal(restore.status, 0);
+  assertCommonPayloadEnvelope(JSON.parse(String(restore.stdout || '{}')), 'restore', true);
+});
+
+test('无交互 text/json 在无目标场景下结论一致', async (t) => {
+  const root = await makeTempDir('wecom-cli-ni-text-json-consistency-');
+  t.after(async () => removeDir(root));
+
+  const profilesRoot = await prepareFixture(root);
+  const stateRoot = path.join(root, 'state');
+
+  const cleanupJson = runCli([
+    '--cleanup-monthly',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--accounts',
+    'all',
+    '--categories',
+    'files',
+    '--months',
+    '2024-02',
+    '--external-storage-auto-detect',
+    'false',
+  ]);
+  assert.equal(cleanupJson.status, 0);
+  const cleanupJsonPayload = JSON.parse(String(cleanupJson.stdout || '{}'));
+  assert.equal(cleanupJsonPayload.summary.noTarget, true);
+  assert.equal(cleanupJsonPayload.summary.matchedTargets, 0);
+
+  const cleanupText = runCli([
+    '--cleanup-monthly',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--accounts',
+    'all',
+    '--categories',
+    'files',
+    '--months',
+    '2024-02',
+    '--external-storage-auto-detect',
+    'false',
+    '--output',
+    'text',
+  ]);
+  assert.equal(cleanupText.status, 0);
+  assert.match(String(cleanupText.stdout || ''), /未发现可清理目录/);
+  assert.match(String(cleanupText.stdout || ''), /未执行真实删除/);
+
+  const recycleJson = runCli([
+    '--recycle-maintain',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--external-storage-auto-detect',
+    'false',
+  ]);
+  assert.equal(recycleJson.status, 0);
+  const recycleJsonPayload = JSON.parse(String(recycleJson.stdout || '{}'));
+  assert.equal(recycleJsonPayload.summary.candidateCount, 0);
+
+  const recycleText = runCli([
+    '--recycle-maintain',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--external-storage-auto-detect',
+    'false',
+    '--output',
+    'text',
+  ]);
+  assert.equal(recycleText.status, 0);
+  assert.match(String(recycleText.stdout || ''), /已跳过（无候选批次）|当前没有需要治理的回收批次/);
+});
 
 test('无交互 cleanup 默认返回 JSON 且未加 --yes 时强制 dry-run', async (t) => {
   const root = await makeTempDir('wecom-cli-ni-cleanup-');
