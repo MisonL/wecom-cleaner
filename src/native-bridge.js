@@ -1,12 +1,13 @@
 import { promises as fs, createReadStream } from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 const NATIVE_CACHE_DIR = 'native-cache';
 const MANIFEST_RELATIVE_PATH = path.join('native', 'manifest.json');
-const DEFAULT_DOWNLOAD_BASE_URL = 'https://raw.githubusercontent.com/MisonL/wecom-cleaner/v0.1.0/native/bin';
+const DEFAULT_DOWNLOAD_BASE_URL = 'https://raw.githubusercontent.com/MisonL/wecom-cleaner/v1.0.0/native/bin';
 const DEFAULT_DOWNLOAD_TIMEOUT_MS = 15_000;
+const DEFAULT_PROBE_TIMEOUT_MS = 3_000;
 
 function resolveRuntimeTarget() {
   const runtimePlatform = process.platform;
@@ -63,11 +64,19 @@ async function probeNativeCore(binPath) {
     return false;
   }
 
+  const probeTimeoutMs = getProbeTimeoutMs();
   const probe = spawnSync(binPath, ['--ping'], {
     encoding: 'utf-8',
     maxBuffer: 1024 * 1024,
+    timeout: probeTimeoutMs,
   });
 
+  if (probe.error) {
+    return false;
+  }
+  if (probe.signal) {
+    return false;
+  }
   if (probe.status !== 0) {
     return false;
   }
@@ -103,6 +112,14 @@ function getDownloadTimeoutMs() {
   return DEFAULT_DOWNLOAD_TIMEOUT_MS;
 }
 
+function getProbeTimeoutMs() {
+  const raw = Number.parseInt(process.env.WECOM_CLEANER_NATIVE_PROBE_TIMEOUT_MS || '', 10);
+  if (Number.isFinite(raw) && raw >= 500) {
+    return raw;
+  }
+  return DEFAULT_PROBE_TIMEOUT_MS;
+}
+
 async function downloadNativeCore(url, destinationPath) {
   const timeout = getDownloadTimeoutMs();
   const controller = new AbortController();
@@ -111,7 +128,7 @@ async function downloadNativeCore(url, destinationPath) {
     timer.unref();
   }
 
-  const tmpPath = `${destinationPath}.tmp-${Date.now()}`;
+  const tmpPath = `${destinationPath}.tmp-${process.pid}-${Date.now()}-${randomUUID()}`;
 
   try {
     const response = await fetch(url, {
@@ -317,6 +334,7 @@ async function repairNativeCore({ stateRoot, target, manifest, manifestTarget })
 
 export async function detectNativeCore(projectRoot, options = {}) {
   const stateRoot = typeof options.stateRoot === 'string' ? options.stateRoot : null;
+  const allowAutoRepair = options.allowAutoRepair !== false;
   const target = resolveRuntimeTarget();
   const manifest = await readNativeManifest(projectRoot);
   const manifestTarget = resolveManifestTarget(manifest, target);
@@ -360,8 +378,18 @@ export async function detectNativeCore(projectRoot, options = {}) {
     }
   }
 
-  if (!shouldAutoRepair()) {
-    return { nativeCorePath: null, repairNote: cacheCheckNote };
+  const autoRepairEnabled = allowAutoRepair && shouldAutoRepair();
+  if (!autoRepairEnabled) {
+    if (cacheCheckNote) {
+      return { nativeCorePath: null, repairNote: cacheCheckNote };
+    }
+    if (!manifestTarget) {
+      return {
+        nativeCorePath: null,
+        repairNote: `自动修复: 当前平台(${target.targetTag})缺少可信核心清单，已继续使用Node`,
+      };
+    }
+    return { nativeCorePath: null, repairNote: null };
   }
 
   const repaired = await repairNativeCore({ stateRoot, target, manifest, manifestTarget });
