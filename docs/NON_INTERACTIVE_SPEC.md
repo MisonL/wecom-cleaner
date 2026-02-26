@@ -6,6 +6,7 @@
 
 - `wecom-cleaner`（不带参数）：进入交互模式（TUI）。
 - `wecom-cleaner ...args`（带参数）：进入无交互模式。
+- `wecom-cleaner ...args --interactive`：即使带参数也强制进入交互模式（常用于本地调试/脚本回放）。
 
 ## 2. 动作选择（必填且互斥）
 
@@ -64,7 +65,8 @@ JSON 顶层字段：
 - `--external-roots <path[,path...]>`：动作层临时覆盖文件存储目录
 - `--external-roots-source <preset|configured|auto|all>`：按来源筛选探测目录（默认 `preset`）
 - `--theme <auto|light|dark>`
-- `--force`：陈旧锁自动清理
+- `--interactive`：强制交互模式（与无交互动作参数互斥使用时，优先按交互模式执行）
+- `--force`：锁异常场景下强制清理并继续（兜底参数）
 - `--save-config`：把本次全局参数落盘到 `config.json`
 
 ## 7. 动作参数

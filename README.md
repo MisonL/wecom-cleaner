@@ -63,7 +63,7 @@
 2. 文件存储目录识别
 
 - 支持默认路径、手动配置路径、自动探测路径。
-- 自动探测采用结构匹配（如 `*/WXWork Files/Caches`），不依赖目录名。
+- 自动探测采用“结构 + 缓存特征”联合识别（如 `*/WXWork Files/Caches` + 企业微信缓存类别/月目录信号），不依赖目录名且降低误判。
 - 自动探测结果默认不预选，需用户确认后纳入处理。
 
 3. 删除与恢复链路
@@ -88,7 +88,7 @@
 
 - `doctor` 模式可输出人类可读报告，或通过 `--output json` 输出结构化结果。
 - `doctor` 模式为只读体检：不会自动创建状态目录/回收区，也不会触发 Zig 自动修复下载。
-- 多实例并发默认加锁，检测到陈旧锁可交互清理或通过 `--force` 自动清理。
+- 多实例并发默认加锁；检测到陈旧锁会优先自动恢复，异常场景可用 `--force` 兜底清理。
 
 ## 能力边界
 
@@ -134,6 +134,7 @@ npm run e2e:smoke
 
 - 不带参数：进入交互菜单（TUI）。
 - 带参数：进入无交互执行（默认输出 JSON，适合 AI Agent）。
+- 带参数但需交互：可追加 `--interactive` 强制进入交互流程（支持配合 `--mode` 直达功能）。
 - 完整契约文档：[`docs/NON_INTERACTIVE_SPEC.md`](./docs/NON_INTERACTIVE_SPEC.md)。
 
 ### 无交互动作参数（互斥，必须且只能一个）
@@ -201,7 +202,8 @@ wecom-cleaner --doctor
 - `--external-roots <path[,path...]>`：本次动作临时覆盖的文件存储目录
 - `--external-roots-source <preset|configured|auto|all>`：按来源筛选探测目录（默认 `preset`）
 - `--theme <auto|light|dark>`：Logo 主题
-- `--force`：检测到陈旧锁时自动清理
+- `--interactive`：即使携带参数也进入交互流程（可配合 `--mode`）
+- `--force`：锁异常场景下强制清理并继续（兜底参数，通常无需）
 
 ### `--theme` 可选值
 
