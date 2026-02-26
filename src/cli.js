@@ -34,6 +34,17 @@ import { acquireLock, breakLock, LockHeldError } from './lock.js';
 import { classifyErrorType, errorTypeToLabel } from './error-taxonomy.js';
 import { collectRecycleStats, maintainRecycleBin, normalizeRecycleRetention } from './recycle-maintenance.js';
 import {
+  applyUpdateCheckResult,
+  channelLabel,
+  checkLatestVersion,
+  normalizeSelfUpdateConfig,
+  normalizeUpgradeChannel,
+  runUpgrade,
+  shouldCheckForUpdate,
+  shouldSkipVersion,
+  updateWarningMessage,
+} from './updater.js';
+import {
   compareMonthKey,
   expandHome,
   formatBytes,
@@ -91,6 +102,8 @@ const NON_INTERACTIVE_ACTIONS = new Set([
   MODES.RESTORE,
   MODES.RECYCLE_MAINTAIN,
   MODES.DOCTOR,
+  MODES.CHECK_UPDATE,
+  MODES.UPGRADE,
 ]);
 const INTERACTIVE_MODE_ALIASES = new Map([
   ['start', MODES.START],
@@ -104,10 +117,22 @@ const INTERACTIVE_MODE_ALIASES = new Map([
   ['recycle_maintain', MODES.RECYCLE_MAINTAIN],
   ['recycle-maintain', MODES.RECYCLE_MAINTAIN],
   ['doctor', MODES.DOCTOR],
+  ['check_update', MODES.CHECK_UPDATE],
+  ['check-update', MODES.CHECK_UPDATE],
   ['settings', MODES.SETTINGS],
 ]);
 const OUTPUT_JSON = 'json';
 const OUTPUT_TEXT = 'text';
+const UPDATE_REPO_OWNER = 'MisonL';
+const UPDATE_REPO_NAME = 'wecom-cleaner';
+const UPDATE_TIMEOUT_MS = 2500;
+
+function allowAutoUpdateByEnv() {
+  const raw = String(process.env.WECOM_CLEANER_AUTO_UPDATE || 'true')
+    .trim()
+    .toLowerCase();
+  return !['0', 'false', 'no', 'off'].includes(raw);
+}
 
 function isBackCommand(inputValue) {
   const normalized = String(inputValue || '')
@@ -1798,6 +1823,12 @@ function actionFlagName(action) {
   if (action === MODES.DOCTOR) {
     return '--doctor';
   }
+  if (action === MODES.CHECK_UPDATE) {
+    return '--check-update';
+  }
+  if (action === MODES.UPGRADE) {
+    return '--upgrade <npm|github-script>';
+  }
   return `--${String(action || '').replace(/_/g, '-')}`;
 }
 
@@ -1809,7 +1840,7 @@ function resolveActionFromCli(cliArgs, hasAnyArgs) {
     throw new UsageError(
       [
         '无交互模式必须指定一个动作参数：',
-        '--cleanup-monthly | --analysis-only | --space-governance | --restore-batch <batchId> | --recycle-maintain | --doctor',
+        '--cleanup-monthly | --analysis-only | --space-governance | --restore-batch <batchId> | --recycle-maintain | --doctor | --check-update | --upgrade <npm|github-script>',
       ].join('\n')
     );
   }
@@ -1832,6 +1863,8 @@ function printCliUsage(appMeta) {
     '  --restore-batch <batchId>',
     '  --recycle-maintain',
     '  --doctor',
+    '  --check-update',
+    '  --upgrade <npm|github-script>',
     '',
     '常用选项：',
     '  --output json|text',
@@ -1841,6 +1874,9 @@ function printCliUsage(appMeta) {
     '  --months YYYY-MM,YYYY-MM',
     '  --cutoff-month YYYY-MM',
     '  --categories key1,key2',
+    '  --upgrade-version x.y.z',
+    '  --upgrade-channel stable|pre',
+    '  --upgrade-yes',
     '  --root <path>',
     '  --state-root <path>',
     '',
@@ -1869,6 +1905,9 @@ function resolveInteractiveStartMode(cliArgs) {
   }
 
   if (NON_INTERACTIVE_ACTIONS.has(cliArgs.action)) {
+    if (cliArgs.action === MODES.UPGRADE) {
+      throw new UsageError('参数 --upgrade 仅支持无交互模式，请移除 --interactive 后重试。');
+    }
     return cliArgs.action;
   }
   return MODES.START;
@@ -2120,6 +2159,180 @@ function toStructuredError(item = {}, fallbackCode = 'E_ACTION_FAILED') {
   };
 }
 
+function summarizeDimensionRows(rows, { labelKey = 'label', countKey = 'targetCount' } = {}, limit = 20) {
+  const list = Array.isArray(rows) ? rows : [];
+  return list.slice(0, limit).map((row) => ({
+    label:
+      row?.[labelKey] ||
+      row?.categoryLabel ||
+      row?.targetLabel ||
+      row?.monthKey ||
+      row?.rootPath ||
+      row?.accountShortId ||
+      '-',
+    count: Number(row?.[countKey] || row?.count || 0),
+    sizeBytes: Number(row?.sizeBytes || 0),
+  }));
+}
+
+function buildUserFacingSummary(action, result) {
+  const summary = result?.summary || {};
+  const report = result?.data?.report || {};
+  const matched = report?.matched || {};
+
+  if (action === MODES.CLEANUP_MONTHLY) {
+    return {
+      scope: {
+        accountCount: Number(summary.accountCount || 0),
+        monthCount: Number(summary.monthCount || 0),
+        categoryCount: Number(summary.categoryCount || 0),
+        rootPathCount: Number(summary.rootPathCount || 0),
+        cutoffMonth: summary.cutoffMonth || null,
+        monthRange: {
+          from: summary.matchedMonthStart || matched?.monthRange?.from || null,
+          to: summary.matchedMonthEnd || matched?.monthRange?.to || null,
+        },
+      },
+      result: {
+        noTarget: Boolean(summary.noTarget),
+        matchedTargets: Number(summary.matchedTargets || 0),
+        matchedBytes: Number(summary.matchedBytes || 0),
+        reclaimedBytes: Number(summary.reclaimedBytes || 0),
+        successCount: Number(summary.successCount || 0),
+        skippedCount: Number(summary.skippedCount || 0),
+        failedCount: Number(summary.failedCount || 0),
+        batchId: summary.batchId || null,
+      },
+      byMonth: summarizeDimensionRows(matched.monthStats, { labelKey: 'monthKey' }),
+      byCategory: summarizeDimensionRows(matched.categoryStats, { labelKey: 'categoryLabel' }),
+      byRoot: summarizeDimensionRows(matched.rootStats, { labelKey: 'rootPath' }),
+    };
+  }
+
+  if (action === MODES.ANALYSIS_ONLY) {
+    return {
+      scope: {
+        accountCount: Number(summary.accountCount || 0),
+        matchedAccountCount: Number(summary.matchedAccountCount || 0),
+        categoryCount: Number(summary.categoryCount || 0),
+        monthBucketCount: Number(summary.monthBucketCount || 0),
+      },
+      result: {
+        targetCount: Number(summary.targetCount || 0),
+        totalBytes: Number(summary.totalBytes || 0),
+      },
+      byMonth: summarizeDimensionRows(matched.monthStats, { labelKey: 'monthKey' }),
+      byCategory: summarizeDimensionRows(matched.categoryStats, { labelKey: 'categoryLabel' }),
+      byRoot: summarizeDimensionRows(matched.rootStats, { labelKey: 'rootPath' }),
+    };
+  }
+
+  if (action === MODES.SPACE_GOVERNANCE) {
+    return {
+      scope: {
+        accountCount: Number(summary.accountCount || 0),
+        tierCount: Number(summary.tierCount || 0),
+        targetTypeCount: Number(summary.targetTypeCount || 0),
+        rootPathCount: Number(summary.rootPathCount || 0),
+      },
+      result: {
+        noTarget: Boolean(summary.noTarget),
+        matchedTargets: Number(summary.matchedTargets || 0),
+        matchedBytes: Number(summary.matchedBytes || 0),
+        reclaimedBytes: Number(summary.reclaimedBytes || 0),
+        successCount: Number(summary.successCount || 0),
+        skippedCount: Number(summary.skippedCount || 0),
+        failedCount: Number(summary.failedCount || 0),
+        batchId: summary.batchId || null,
+      },
+      byTier: summarizeDimensionRows(matched.byTier, { labelKey: 'tierLabel' }),
+      byCategory: summarizeDimensionRows(matched.byTargetType, { labelKey: 'targetLabel' }),
+      byRoot: summarizeDimensionRows(matched.byRoot, { labelKey: 'rootPath' }),
+    };
+  }
+
+  if (action === MODES.RESTORE) {
+    return {
+      scope: {
+        entryCount: Number(summary.entryCount || 0),
+        conflictStrategy: summary.conflictStrategy || null,
+        rootPathCount: Number(summary.rootPathCount || 0),
+      },
+      result: {
+        batchId: summary.batchId || null,
+        matchedBytes: Number(summary.matchedBytes || 0),
+        restoredBytes: Number(summary.restoredBytes || 0),
+        successCount: Number(summary.successCount || 0),
+        skippedCount: Number(summary.skippedCount || 0),
+        failedCount: Number(summary.failedCount || 0),
+      },
+      byMonth: summarizeDimensionRows(matched.byMonth, { labelKey: 'monthKey' }),
+      byCategory: summarizeDimensionRows(matched.byCategory, { labelKey: 'categoryLabel' }),
+      byRoot: summarizeDimensionRows(matched.byRoot, { labelKey: 'rootPath' }),
+    };
+  }
+
+  if (action === MODES.RECYCLE_MAINTAIN) {
+    return {
+      scope: {
+        candidateCount: Number(summary.candidateCount || 0),
+        selectedByAge: Number(summary.selectedByAge || 0),
+        selectedBySize: Number(summary.selectedBySize || 0),
+      },
+      result: {
+        status: summary.status || null,
+        deletedBatches: Number(summary.deletedBatches || 0),
+        deletedBytes: Number(summary.deletedBytes || 0),
+        failedBatches: Number(summary.failedBatches || 0),
+        remainingBatches: Number(summary.remainingBatches || 0),
+        remainingBytes: Number(summary.remainingBytes || 0),
+      },
+    };
+  }
+
+  if (action === MODES.DOCTOR) {
+    return {
+      scope: {
+        platform: result?.data?.runtime?.targetTag || null,
+      },
+      result: {
+        overall: summary.overall || null,
+        pass: Number(summary.pass || 0),
+        warn: Number(summary.warn || 0),
+        fail: Number(summary.fail || 0),
+      },
+    };
+  }
+
+  if (action === MODES.CHECK_UPDATE) {
+    return {
+      result: {
+        checked: Boolean(summary.checked),
+        hasUpdate: Boolean(summary.hasUpdate),
+        currentVersion: summary.currentVersion || null,
+        latestVersion: summary.latestVersion || null,
+        source: summary.source || null,
+        channel: summary.channel || null,
+      },
+    };
+  }
+
+  if (action === MODES.UPGRADE) {
+    return {
+      result: {
+        executed: Boolean(summary.executed),
+        method: summary.method || null,
+        targetVersion: summary.targetVersion || null,
+        status: hasDisplayValue(summary.status) ? Number(summary.status) : null,
+      },
+    };
+  }
+
+  return {
+    result: summary,
+  };
+}
+
 const ACTION_DISPLAY_NAMES = new Map([
   [MODES.CLEANUP_MONTHLY, '年月清理'],
   [MODES.ANALYSIS_ONLY, '会话分析（只读）'],
@@ -2127,6 +2340,8 @@ const ACTION_DISPLAY_NAMES = new Map([
   [MODES.RESTORE, '恢复已删除批次'],
   [MODES.RECYCLE_MAINTAIN, '回收区治理'],
   [MODES.DOCTOR, '系统自检'],
+  [MODES.CHECK_UPDATE, '检查更新'],
+  [MODES.UPGRADE, '程序升级'],
 ]);
 
 const CONFLICT_STRATEGY_DISPLAY = new Map([
@@ -2744,6 +2959,61 @@ function printDoctorTextResult(payload) {
   printRuntimeAndRisk(payload);
 }
 
+function printCheckUpdateTextResult(payload) {
+  const summary = payload.summary || {};
+  const update = payload.data?.update || {};
+  const conclusion = summary.hasUpdate
+    ? `检测到新版本 v${summary.latestVersion}，可选择 npm 或 GitHub 脚本升级。`
+    : summary.checked
+      ? '当前已是最新版本。'
+      : '本次更新检查失败，请稍后重试。';
+
+  printTextRows('任务结论', [
+    { label: '动作', value: actionDisplayName(payload.action) },
+    { label: '结论', value: conclusion },
+    { label: '状态', value: summary.checked ? '检查完成' : '检查失败' },
+  ]);
+
+  printTextRows('检查结果', [
+    { label: '当前版本', value: summary.currentVersion || '-' },
+    { label: '最新版本', value: summary.latestVersion || '-' },
+    { label: '来源', value: summary.source || '-' },
+    { label: '通道', value: channelLabel(summary.channel) },
+    { label: '跳过提醒', value: formatYesNo(Boolean(summary.skippedByUser)) },
+    { label: '检查时间', value: formatLocalDate(update.checkedAt || Date.now()) },
+  ]);
+
+  printRuntimeAndRisk(payload);
+}
+
+function printUpgradeTextResult(payload) {
+  const summary = payload.summary || {};
+  const upgrade = payload.data?.upgrade || {};
+  const executed = Boolean(summary.executed);
+  const conclusion = !executed
+    ? summary.reason === 'already_latest'
+      ? '当前已是最新版本，无需执行升级。'
+      : '升级前置检查失败，未执行升级。'
+    : payload.ok
+      ? '升级已执行成功，建议重启程序后继续使用。'
+      : '升级执行失败，请按错误提示排查。';
+
+  printTextRows('任务结论', [
+    { label: '动作', value: actionDisplayName(payload.action) },
+    { label: '结论', value: conclusion },
+    { label: '升级方式', value: summary.method || '-' },
+    { label: '目标版本', value: summary.targetVersion || '-' },
+  ]);
+
+  printTextRows('执行明细', [
+    { label: '已执行升级', value: formatYesNo(executed) },
+    { label: '退出码', value: hasDisplayValue(summary.status) ? summary.status : '-' },
+    { label: '命令', value: summary.command || upgrade.command || '-' },
+  ]);
+
+  printRuntimeAndRisk(payload);
+}
+
 function printGenericTextResult(payload) {
   printTextRows('任务结论', [
     { label: '动作', value: actionDisplayName(payload.action) },
@@ -2780,6 +3050,14 @@ function printNonInteractiveTextResult(payload) {
   }
   if (payload.action === MODES.DOCTOR) {
     printDoctorTextResult(payload);
+    return;
+  }
+  if (payload.action === MODES.CHECK_UPDATE) {
+    printCheckUpdateTextResult(payload);
+    return;
+  }
+  if (payload.action === MODES.UPGRADE) {
+    printUpgradeTextResult(payload);
     return;
   }
   printGenericTextResult(payload);
@@ -3287,6 +3565,337 @@ async function runDoctorModeNonInteractive(context, _cliArgs, warnings = []) {
   };
 }
 
+function resolveUpdateChannel(cliArgs, config) {
+  const fallback = normalizeSelfUpdateConfig(config?.selfUpdate).channel;
+  return normalizeUpgradeChannel(cliArgs.upgradeChannel, fallback);
+}
+
+function buildUpdateData(result, skipVersion = '') {
+  const data = result && typeof result === 'object' ? result : {};
+  return {
+    checked: Boolean(data.checked),
+    currentVersion: data.currentVersion || '',
+    latestVersion: data.latestVersion || null,
+    hasUpdate: Boolean(data.hasUpdate),
+    sourceUsed: data.sourceUsed || 'none',
+    channel: data.channel || 'stable',
+    checkReason: data.checkReason || 'manual',
+    checkedAt: Number(data.checkedAt || Date.now()),
+    skippedByUser: shouldSkipVersion(data, skipVersion),
+    errors: Array.isArray(data.errors) ? data.errors : [],
+    upgradeMethods: Array.isArray(data.upgradeMethods) ? data.upgradeMethods : ['npm', 'github-script'],
+  };
+}
+
+async function persistSelfUpdateState(context) {
+  if (context.readOnlyConfig) {
+    return;
+  }
+  await saveConfig(context.config).catch(() => {});
+}
+
+async function runCheckUpdateModeNonInteractive(context, cliArgs, warnings = []) {
+  const channel = resolveUpdateChannel(cliArgs, context.config);
+  const checkResult = await checkLatestVersion({
+    currentVersion: context.appMeta?.version || '0.0.0',
+    packageName: PACKAGE_NAME,
+    githubOwner: UPDATE_REPO_OWNER,
+    githubRepo: UPDATE_REPO_NAME,
+    channel,
+    timeoutMs: UPDATE_TIMEOUT_MS,
+    reason: 'manual',
+  });
+  const normalizedSelfUpdate = normalizeSelfUpdateConfig({
+    ...context.config.selfUpdate,
+    channel,
+  });
+  context.config.selfUpdate = applyUpdateCheckResult(normalizedSelfUpdate, checkResult, '');
+  await persistSelfUpdateState(context);
+  const updateData = buildUpdateData(checkResult, context.config.selfUpdate.skipVersion);
+
+  if (updateData.hasUpdate && !updateData.skippedByUser) {
+    warnings.push(updateWarningMessage(updateData, context.config.selfUpdate.skipVersion));
+  }
+
+  return {
+    ok: updateData.checked,
+    action: MODES.CHECK_UPDATE,
+    dryRun: null,
+    summary: {
+      checked: updateData.checked,
+      hasUpdate: updateData.hasUpdate,
+      currentVersion: updateData.currentVersion || '-',
+      latestVersion: updateData.latestVersion || '-',
+      source: updateData.sourceUsed,
+      channel: updateData.channel,
+      skippedByUser: updateData.skippedByUser,
+    },
+    warnings: uniqueStrings(warnings),
+    errors: updateData.errors.map((message) => ({
+      code: 'E_UPDATE_CHECK_FAILED',
+      message,
+    })),
+    data: {
+      update: updateData,
+    },
+  };
+}
+
+async function runUpgradeModeNonInteractive(context, cliArgs, warnings = []) {
+  const method = String(cliArgs.upgradeMethod || '').trim();
+  if (!method) {
+    throw new UsageError('参数 --upgrade 缺少升级方式（npm|github-script）');
+  }
+  if (!cliArgs.upgradeYes) {
+    throw new ConfirmationRequiredError('检测到升级请求，但未提供 --upgrade-yes 确认参数。');
+  }
+
+  const channel = resolveUpdateChannel(cliArgs, context.config);
+  let targetVersion = String(cliArgs.upgradeVersion || '').trim();
+  let checkResult = null;
+
+  if (!targetVersion) {
+    checkResult = await checkLatestVersion({
+      currentVersion: context.appMeta?.version || '0.0.0',
+      packageName: PACKAGE_NAME,
+      githubOwner: UPDATE_REPO_OWNER,
+      githubRepo: UPDATE_REPO_NAME,
+      channel,
+      timeoutMs: UPDATE_TIMEOUT_MS,
+      reason: 'manual',
+    });
+
+    if (!checkResult.checked) {
+      return {
+        ok: false,
+        action: MODES.UPGRADE,
+        dryRun: null,
+        summary: {
+          executed: false,
+          method,
+          targetVersion: '-',
+          reason: 'check_failed',
+        },
+        warnings: uniqueStrings(warnings),
+        errors: (checkResult.errors || []).map((message) => ({
+          code: 'E_UPGRADE_CHECK_FAILED',
+          message,
+        })),
+        data: {
+          update: buildUpdateData(checkResult, context.config.selfUpdate.skipVersion),
+        },
+      };
+    }
+    if (!checkResult.hasUpdate) {
+      return {
+        ok: true,
+        action: MODES.UPGRADE,
+        dryRun: null,
+        summary: {
+          executed: false,
+          method,
+          targetVersion: checkResult.currentVersion || '-',
+          reason: 'already_latest',
+        },
+        warnings: uniqueStrings(warnings),
+        errors: [],
+        data: {
+          update: buildUpdateData(checkResult, context.config.selfUpdate.skipVersion),
+        },
+      };
+    }
+    targetVersion = checkResult.latestVersion;
+  }
+
+  const upgrade = runUpgrade({
+    method,
+    packageName: PACKAGE_NAME,
+    targetVersion,
+    githubOwner: UPDATE_REPO_OWNER,
+    githubRepo: UPDATE_REPO_NAME,
+  });
+
+  if (upgrade.ok) {
+    context.config.selfUpdate = normalizeSelfUpdateConfig({
+      ...context.config.selfUpdate,
+      skipVersion: '',
+      lastKnownLatest: targetVersion,
+      lastKnownSource: upgrade.method,
+    });
+    await persistSelfUpdateState(context);
+  }
+
+  return {
+    ok: upgrade.ok,
+    action: MODES.UPGRADE,
+    dryRun: null,
+    summary: {
+      executed: true,
+      method: upgrade.method,
+      targetVersion: upgrade.targetVersion || targetVersion || '-',
+      command: upgrade.command,
+      status: upgrade.status,
+    },
+    warnings: uniqueStrings(warnings),
+    errors: upgrade.ok
+      ? []
+      : [
+          {
+            code: 'E_UPGRADE_FAILED',
+            message: upgrade.error || upgrade.stderr || 'upgrade_failed',
+          },
+        ],
+    data: {
+      update: checkResult ? buildUpdateData(checkResult, context.config.selfUpdate.skipVersion) : null,
+      upgrade,
+    },
+  };
+}
+
+function attachStartupUpdateToResult(result, startupUpdate, skipVersion) {
+  if (!startupUpdate) {
+    return result;
+  }
+  const output = result && typeof result === 'object' ? result : {};
+  const warnings = uniqueStrings(Array.isArray(output.warnings) ? output.warnings : []);
+  const updateData = buildUpdateData(startupUpdate, skipVersion);
+  if (updateData.hasUpdate && !updateData.skippedByUser) {
+    warnings.push(updateWarningMessage(updateData, skipVersion));
+  }
+  return {
+    ...output,
+    warnings: uniqueStrings(warnings),
+    data: {
+      ...(output.data || {}),
+      update: updateData,
+    },
+  };
+}
+
+async function maybeRunStartupUpdateCheck(context, cliArgs, action, interactiveMode) {
+  if (!allowAutoUpdateByEnv()) {
+    return null;
+  }
+  const selfUpdate = normalizeSelfUpdateConfig(context.config.selfUpdate);
+  context.config.selfUpdate = selfUpdate;
+
+  if (!selfUpdate.enabled) {
+    return null;
+  }
+  if (action === MODES.CHECK_UPDATE || action === MODES.UPGRADE) {
+    return null;
+  }
+  if (!interactiveMode && action === MODES.DOCTOR) {
+    return null;
+  }
+
+  const decision = shouldCheckForUpdate(selfUpdate, Date.now());
+  if (!decision.shouldCheck) {
+    return null;
+  }
+
+  const channel = resolveUpdateChannel(cliArgs, context.config);
+  const checkResult = await checkLatestVersion({
+    currentVersion: context.appMeta?.version || '0.0.0',
+    packageName: PACKAGE_NAME,
+    githubOwner: UPDATE_REPO_OWNER,
+    githubRepo: UPDATE_REPO_NAME,
+    channel,
+    timeoutMs: UPDATE_TIMEOUT_MS,
+    reason: 'startup_slot',
+  });
+  context.config.selfUpdate = applyUpdateCheckResult(
+    normalizeSelfUpdateConfig({
+      ...context.config.selfUpdate,
+      channel,
+    }),
+    checkResult,
+    decision.slot || ''
+  );
+  await persistSelfUpdateState(context);
+  return buildUpdateData(checkResult, context.config.selfUpdate.skipVersion);
+}
+
+async function maybePromptInteractiveUpgrade(context, startupUpdate) {
+  if (!startupUpdate || !startupUpdate.hasUpdate || startupUpdate.skippedByUser) {
+    return false;
+  }
+
+  printSection('可用更新');
+  printTextRows('更新提示', [
+    {
+      label: '版本',
+      value: `当前 v${startupUpdate.currentVersion || '-'} -> 最新 v${startupUpdate.latestVersion || '-'}`,
+    },
+    { label: '来源', value: startupUpdate.sourceUsed || '-' },
+    { label: '通道', value: channelLabel(startupUpdate.channel) },
+  ]);
+
+  const choice = await askSelect({
+    message: '检测到新版本，是否升级？',
+    default: 'npm',
+    choices: [
+      { name: '通过 npm 升级（默认）', value: 'npm' },
+      { name: '通过 GitHub 脚本升级', value: 'github-script' },
+      { name: '稍后提醒', value: 'later' },
+      { name: '跳过该版本（不再提醒）', value: 'skip-version' },
+    ],
+  });
+
+  if (choice === 'later') {
+    return false;
+  }
+  if (choice === 'skip-version') {
+    context.config.selfUpdate = normalizeSelfUpdateConfig({
+      ...context.config.selfUpdate,
+      skipVersion: startupUpdate.latestVersion || '',
+    });
+    await persistSelfUpdateState(context);
+    console.log(`已记录：v${startupUpdate.latestVersion} 将不再自动提醒。`);
+    return false;
+  }
+
+  const confirmed = await askConfirm({
+    message: `确认升级到 v${startupUpdate.latestVersion}？`,
+    default: true,
+  });
+  if (!confirmed) {
+    return false;
+  }
+
+  const upgrade = runUpgrade({
+    method: choice,
+    packageName: PACKAGE_NAME,
+    targetVersion: startupUpdate.latestVersion,
+    githubOwner: UPDATE_REPO_OWNER,
+    githubRepo: UPDATE_REPO_NAME,
+  });
+  if (!upgrade.ok) {
+    printTextRows('升级结果', [
+      { label: '状态', value: '失败' },
+      { label: '方式', value: choice },
+      { label: '命令', value: upgrade.command },
+      { label: '错误', value: upgrade.error || upgrade.stderr || 'unknown_error' },
+    ]);
+    return false;
+  }
+
+  context.config.selfUpdate = normalizeSelfUpdateConfig({
+    ...context.config.selfUpdate,
+    skipVersion: '',
+    lastKnownLatest: startupUpdate.latestVersion || '',
+    lastKnownSource: choice,
+  });
+  await persistSelfUpdateState(context);
+  printTextRows('升级结果', [
+    { label: '状态', value: '成功' },
+    { label: '方式', value: choice },
+    { label: '版本', value: `v${startupUpdate.latestVersion}` },
+  ]);
+  console.log('升级已完成，建议重新启动 wecom-cleaner 后继续。');
+  return true;
+}
+
 async function runNonInteractiveAction(action, context, cliArgs) {
   const warnings = [];
   if (cliArgs.actionFromMode) {
@@ -3310,6 +3919,12 @@ async function runNonInteractiveAction(action, context, cliArgs) {
   }
   if (action === MODES.DOCTOR) {
     return runDoctorModeNonInteractive(context, cliArgs, warnings);
+  }
+  if (action === MODES.CHECK_UPDATE) {
+    return runCheckUpdateModeNonInteractive(context, cliArgs, warnings);
+  }
+  if (action === MODES.UPGRADE) {
+    return runUpgradeModeNonInteractive(context, cliArgs, warnings);
   }
   throw new UsageError(`不支持的无交互动作: ${action}`);
 }
@@ -4078,6 +4693,74 @@ async function runDoctorMode(context, options = {}) {
   await printDoctorReport(report, Boolean(options.jsonOutput));
 }
 
+async function runCheckUpdateMode(context, cliArgs = {}) {
+  const channel = resolveUpdateChannel(cliArgs, context.config);
+  const startedAt = Date.now();
+  const checkResult = await checkLatestVersion({
+    currentVersion: context.appMeta?.version || '0.0.0',
+    packageName: PACKAGE_NAME,
+    githubOwner: UPDATE_REPO_OWNER,
+    githubRepo: UPDATE_REPO_NAME,
+    channel,
+    timeoutMs: UPDATE_TIMEOUT_MS,
+    reason: 'manual',
+  });
+
+  context.config.selfUpdate = applyUpdateCheckResult(
+    normalizeSelfUpdateConfig({
+      ...context.config.selfUpdate,
+      channel,
+    }),
+    checkResult,
+    ''
+  );
+  await persistSelfUpdateState(context);
+
+  const payload = {
+    ok: checkResult.checked,
+    action: MODES.CHECK_UPDATE,
+    dryRun: null,
+    summary: {
+      checked: Boolean(checkResult.checked),
+      hasUpdate: Boolean(checkResult.hasUpdate),
+      currentVersion: checkResult.currentVersion || '-',
+      latestVersion: checkResult.latestVersion || '-',
+      source: checkResult.sourceUsed || 'none',
+      channel: checkResult.channel || channel,
+      skippedByUser: shouldSkipVersion(checkResult, context.config.selfUpdate.skipVersion),
+    },
+    warnings: [],
+    errors: Array.isArray(checkResult.errors)
+      ? checkResult.errors.map((message) => ({
+          code: 'E_UPDATE_CHECK_FAILED',
+          message,
+        }))
+      : [],
+    data: {
+      update: buildUpdateData(checkResult, context.config.selfUpdate.skipVersion),
+    },
+    meta: {
+      app: APP_NAME,
+      package: PACKAGE_NAME,
+      version: context.appMeta?.version || '0.0.0',
+      timestamp: Date.now(),
+      durationMs: Date.now() - startedAt,
+      output: OUTPUT_TEXT,
+      engine: context.lastRunEngineUsed || (context.nativeCorePath ? 'zig_ready' : 'node'),
+    },
+  };
+
+  if (payload.summary.hasUpdate && !payload.summary.skippedByUser) {
+    payload.warnings.push(updateWarningMessage(payload.data.update, context.config.selfUpdate.skipVersion));
+  }
+  printCheckUpdateTextResult(payload);
+
+  const upgraded = await maybePromptInteractiveUpgrade(context, payload.data.update);
+  if (upgraded) {
+    return;
+  }
+}
+
 async function runRecycleMaintainMode(context, options = {}) {
   const { config } = context;
   const policy = normalizeRecycleRetention(config.recycleRetention);
@@ -4438,6 +5121,10 @@ async function runMode(mode, context, options = {}) {
     await runDoctorMode(context, options);
     return;
   }
+  if (mode === MODES.CHECK_UPDATE) {
+    await runCheckUpdateMode(context, options.cliArgs || {});
+    return;
+  }
   if (mode === MODES.RECYCLE_MAINTAIN) {
     await runRecycleMaintainMode(context, options);
     return;
@@ -4528,6 +5215,7 @@ async function runInteractiveLoop(context) {
         { name: '恢复已删除批次', value: MODES.RESTORE },
         { name: '回收区治理（保留策略）', value: MODES.RECYCLE_MAINTAIN },
         { name: '系统自检（doctor）', value: MODES.DOCTOR },
+        { name: '检查更新与升级', value: MODES.CHECK_UPDATE },
         { name: '交互配置', value: MODES.SETTINGS },
         { name: '退出', value: 'exit' },
       ],
@@ -4540,6 +5228,7 @@ async function runInteractiveLoop(context) {
     await runMode(mode, context, {
       jsonOutput: false,
       force: false,
+      cliArgs: {},
     });
 
     const back = await askConfirm({
@@ -4602,6 +5291,7 @@ async function main() {
     nativeRepairNote: nativeProbe.repairNote || null,
     appMeta,
     projectRoot,
+    readOnlyConfig,
   };
 
   let lockHandle = null;
@@ -4610,11 +5300,18 @@ async function main() {
   }
 
   try {
+    const startupUpdate = await maybeRunStartupUpdateCheck(context, cliArgs, action, interactiveMode);
+
     if (interactiveMode) {
+      const upgraded = await maybePromptInteractiveUpgrade(context, startupUpdate);
+      if (upgraded) {
+        return;
+      }
       if (interactiveStartMode !== MODES.START) {
         await runMode(interactiveStartMode, context, {
           jsonOutput: false,
           force: cliArgs.force,
+          cliArgs,
         });
         return;
       }
@@ -4623,7 +5320,17 @@ async function main() {
     }
 
     const startedAt = Date.now();
-    const result = await runNonInteractiveAction(action, context, cliArgs);
+    let result = await runNonInteractiveAction(action, context, cliArgs);
+    if (action !== MODES.CHECK_UPDATE && action !== MODES.UPGRADE) {
+      result = attachStartupUpdateToResult(result, startupUpdate, context.config.selfUpdate.skipVersion);
+    }
+    result = {
+      ...(result || {}),
+      data: {
+        ...((result && result.data) || {}),
+        userFacingSummary: buildUserFacingSummary(action, result),
+      },
+    };
     if (cliArgs.saveConfig) {
       await saveConfig(config);
     }

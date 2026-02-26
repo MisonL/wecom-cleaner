@@ -58,6 +58,7 @@ function runCli(args, env = {}) {
     env: {
       ...process.env,
       WECOM_CLEANER_NATIVE_AUTO_REPAIR: 'false',
+      WECOM_CLEANER_AUTO_UPDATE: 'false',
       ...env,
     },
     encoding: 'utf-8',
@@ -633,12 +634,20 @@ test('CLI 支持 --help 并返回无交互动作说明', () => {
   assert.match(output, /用法：/);
   assert.match(output, /--cleanup-monthly/);
   assert.match(output, /--doctor/);
+  assert.match(output, /--check-update/);
+  assert.match(output, /--upgrade <npm\|github-script>/);
 });
 
 test('CLI 支持 --version 并输出版本号', () => {
   const result = runCli(['--version']);
   assert.equal(result.status, 0);
   assert.match(String(result.stdout || '').trim(), /^\d+\.\d+\.\d+$/);
+});
+
+test('无交互 --upgrade 未确认时返回确认错误', () => {
+  const result = runCli(['--upgrade', 'npm', '--upgrade-version', '1.2.1']);
+  assert.equal(result.status, 3);
+  assert.match(String(result.stderr || ''), /确认错误/);
 });
 
 test('无交互 analysis 返回用户报告统计结构', async (t) => {

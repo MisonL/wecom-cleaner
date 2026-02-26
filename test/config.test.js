@@ -39,6 +39,8 @@ test('parseCliArgs 可正确解析常用参数', () => {
     '--theme',
     'dark',
     '--json',
+    '--upgrade-channel',
+    'pre',
     '--force',
     '--interactive',
   ]);
@@ -56,6 +58,7 @@ test('parseCliArgs 可正确解析常用参数', () => {
   assert.equal(parsed.theme, 'dark');
   assert.equal(parsed.jsonOutput, true);
   assert.equal(parsed.output, 'json');
+  assert.equal(parsed.upgradeChannel, 'pre');
   assert.equal(parsed.force, true);
   assert.equal(parsed.interactive, true);
 });
@@ -107,6 +110,32 @@ test('parseCliArgs 对非法参数会抛出 CliArgError', () => {
     /不能与动作参数同时使用/
   );
   assert.throws(() => parseCliArgs(['--months', '2024-01', '--cutoff-month', '2024-02']), /不能同时使用/);
+  assert.throws(() => parseCliArgs(['--upgrade-channel', 'beta']), CliArgError);
+  assert.throws(() => parseCliArgs(['--upgrade', 'script']), CliArgError);
+});
+
+test('parseCliArgs 可解析升级动作参数', () => {
+  const parsed = parseCliArgs([
+    '--upgrade',
+    'github-script',
+    '--upgrade-version',
+    '1.3.0',
+    '--upgrade-channel',
+    'stable',
+    '--upgrade-yes',
+  ]);
+  assert.equal(parsed.action, 'upgrade');
+  assert.equal(parsed.actionFlagCount, 1);
+  assert.equal(parsed.upgradeMethod, 'github-script');
+  assert.equal(parsed.upgradeVersion, '1.3.0');
+  assert.equal(parsed.upgradeChannel, 'stable');
+  assert.equal(parsed.upgradeYes, true);
+});
+
+test('parseCliArgs 可解析检查更新动作', () => {
+  const parsed = parseCliArgs(['--check-update']);
+  assert.equal(parsed.action, 'check_update');
+  assert.equal(parsed.actionFlagCount, 1);
 });
 
 test('loadConfig/saveConfig/aliases 读写链路正常', async (t) => {
@@ -136,6 +165,8 @@ test('loadConfig/saveConfig/aliases 读写链路正常', async (t) => {
   loaded.spaceGovernance.autoSuggest.sizeThresholdMB = 1024;
   loaded.recycleRetention.maxAgeDays = 45;
   loaded.recycleRetention.minKeepBatches = 12;
+  loaded.selfUpdate.channel = 'pre';
+  loaded.selfUpdate.skipVersion = '1.2.2';
   await saveConfig(loaded);
 
   const reloaded = await loadConfig({ stateRoot });
@@ -143,6 +174,8 @@ test('loadConfig/saveConfig/aliases 读写链路正常', async (t) => {
   assert.equal(reloaded.spaceGovernance.autoSuggest.sizeThresholdMB, 1024);
   assert.equal(reloaded.recycleRetention.maxAgeDays, 45);
   assert.equal(reloaded.recycleRetention.minKeepBatches, 12);
+  assert.equal(reloaded.selfUpdate.channel, 'pre');
+  assert.equal(reloaded.selfUpdate.skipVersion, '1.2.2');
 
   const aliasPath = path.join(stateRoot, 'account-aliases.json');
   await saveAliases(aliasPath, {
@@ -161,6 +194,8 @@ test('defaultConfig 输出基础字段完整', () => {
   assert.equal(cfg.theme, 'auto');
   assert.equal(typeof cfg.recycleRetention, 'object');
   assert.equal(cfg.recycleRetention.enabled, true);
+  assert.equal(typeof cfg.selfUpdate, 'object');
+  assert.equal(cfg.selfUpdate.channel, 'stable');
 });
 
 test('loadConfig 在 readOnly 模式下不会创建状态目录与回收区', async (t) => {

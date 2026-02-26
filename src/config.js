@@ -2,18 +2,22 @@ import path from 'node:path';
 import { DEFAULT_PROFILE_ROOT, DEFAULT_STATE_ROOT } from './constants.js';
 import { ensureDir, expandHome, readJson, writeJson } from './utils.js';
 import { normalizeRecycleRetention } from './recycle-maintenance.js';
+import { normalizeSelfUpdateConfig } from './updater.js';
 
 const ALLOWED_THEMES = new Set(['auto', 'light', 'dark']);
 const ALLOWED_OUTPUTS = new Set(['json', 'text']);
 const ALLOWED_CONFLICT_STRATEGIES = new Set(['skip', 'overwrite', 'rename']);
 const ALLOWED_EXTERNAL_ROOT_SOURCES = new Set(['preset', 'configured', 'auto', 'all']);
 const ALLOWED_GOVERNANCE_TIERS = new Set(['safe', 'caution', 'protected']);
+const ALLOWED_UPGRADE_METHODS = new Set(['npm', 'github-script']);
+const ALLOWED_UPGRADE_CHANNELS = new Set(['stable', 'pre']);
 const ACTION_FLAG_MAP = new Map([
   ['--cleanup-monthly', 'cleanup_monthly'],
   ['--analysis-only', 'analysis_only'],
   ['--space-governance', 'space_governance'],
   ['--recycle-maintain', 'recycle_maintain'],
   ['--doctor', 'doctor'],
+  ['--check-update', 'check_update'],
 ]);
 const MODE_TO_ACTION_MAP = new Map([
   ['cleanup_monthly', 'cleanup_monthly'],
@@ -22,6 +26,8 @@ const MODE_TO_ACTION_MAP = new Map([
   ['recycle_maintain', 'recycle_maintain'],
   ['restore', 'restore'],
   ['doctor', 'doctor'],
+  ['check_update', 'check_update'],
+  ['upgrade', 'upgrade'],
 ]);
 
 export class CliArgError extends Error {
@@ -106,6 +112,17 @@ export function defaultConfig() {
       lastSelectedTargets: [],
     },
     recycleRetention,
+    selfUpdate: normalizeSelfUpdateConfig({
+      enabled: true,
+      channel: 'stable',
+      checkSchedule: 'tri_daily',
+      autoCheckOnStartup: true,
+      lastCheckAt: 0,
+      lastCheckSlot: '',
+      lastKnownLatest: '',
+      lastKnownSource: '',
+      skipVersion: '',
+    }),
     theme: 'auto',
   };
 }
@@ -175,6 +192,10 @@ export function parseCliArgs(argv) {
     retentionMaxAgeDays: null,
     retentionMinKeepBatches: null,
     retentionSizeThresholdGB: null,
+    upgradeMethod: null,
+    upgradeVersion: null,
+    upgradeChannel: null,
+    upgradeYes: false,
   };
   const actionValues = [];
 
@@ -249,6 +270,34 @@ export function parseCliArgs(argv) {
       parsed.actionFlagCount += 1;
       actionValues.push('restore');
       i += 1;
+      continue;
+    }
+    if (token === '--check-update') {
+      parsed.action = 'check_update';
+      parsed.actionFlagCount += 1;
+      actionValues.push('check_update');
+      continue;
+    }
+    if (token === '--upgrade') {
+      parsed.upgradeMethod = parseEnumValue(token, takeValue(token, i), ALLOWED_UPGRADE_METHODS);
+      parsed.action = 'upgrade';
+      parsed.actionFlagCount += 1;
+      actionValues.push('upgrade');
+      i += 1;
+      continue;
+    }
+    if (token === '--upgrade-version') {
+      parsed.upgradeVersion = takeValue(token, i);
+      i += 1;
+      continue;
+    }
+    if (token === '--upgrade-channel') {
+      parsed.upgradeChannel = parseEnumValue(token, takeValue(token, i), ALLOWED_UPGRADE_CHANNELS);
+      i += 1;
+      continue;
+    }
+    if (token === '--upgrade-yes') {
+      parsed.upgradeYes = true;
       continue;
     }
     if (token === '--theme') {
@@ -480,6 +529,7 @@ export async function loadConfig(cliArgs = {}, options = {}) {
 
   merged.spaceGovernance = normalizeSpaceGovernance(fileConfig.spaceGovernance, base.spaceGovernance);
   merged.recycleRetention = normalizeRecycleRetention(fileConfig.recycleRetention, base.recycleRetention);
+  merged.selfUpdate = normalizeSelfUpdateConfig(fileConfig.selfUpdate, base.selfUpdate);
 
   merged.recycleRoot = expandHome(fileConfig.recycleRoot || path.join(stateRoot, 'recycle-bin'));
   merged.indexPath = expandHome(fileConfig.indexPath || path.join(stateRoot, 'index.jsonl'));
@@ -508,6 +558,7 @@ export async function saveConfig(config) {
     defaultCategories: Array.isArray(config.defaultCategories) ? config.defaultCategories : [],
     spaceGovernance: normalizeSpaceGovernance(config.spaceGovernance, defaultConfig().spaceGovernance),
     recycleRetention: normalizeRecycleRetention(config.recycleRetention, defaultConfig().recycleRetention),
+    selfUpdate: normalizeSelfUpdateConfig(config.selfUpdate, defaultConfig().selfUpdate),
     theme: normalizeTheme(config.theme) || 'auto',
   };
   await writeJson(config.configPath, payload);

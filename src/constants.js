@@ -106,6 +106,8 @@ export const MODES = {
   RESTORE: 'restore',
   DOCTOR: 'doctor',
   RECYCLE_MAINTAIN: 'recycle_maintain',
+  CHECK_UPDATE: 'check_update',
+  UPGRADE: 'upgrade',
   SETTINGS: 'settings',
 };
 

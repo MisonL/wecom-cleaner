@@ -3,6 +3,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { collectRecycleStats, normalizeRecycleRetention } from './recycle-maintenance.js';
 import { detectExternalStorageRoots, discoverAccounts } from './scanner.js';
+import { normalizeSelfUpdateConfig } from './updater.js';
 
 const STATUS_PASS = 'pass';
 const STATUS_WARN = 'warn';
@@ -151,6 +152,14 @@ function overallStatus(checks) {
   return STATUS_PASS;
 }
 
+function formatTimestamp(ts) {
+  const value = Number(ts || 0);
+  if (!Number.isFinite(value) || value <= 0) {
+    return '无';
+  }
+  return new Date(value).toLocaleString('zh-CN', { hour12: false });
+}
+
 async function readManifest(projectRoot) {
   const manifestPath = path.join(projectRoot, 'native', 'manifest.json');
   try {
@@ -264,6 +273,21 @@ export async function runDoctor({ config, aliases, projectRoot, appVersion }) {
       externalStorage.roots.length > 0 ? STATUS_PASS : STATUS_WARN,
       `共 ${externalStorage.roots.length} 个（默认${sourceCounts.builtin || 0}/手动${sourceCounts.configured || 0}/自动${sourceCounts.auto || 0}）`,
       externalStorage.roots.length > 0 ? '' : '若您修改过企业微信文件存储路径，请在设置中手动追加。'
+    )
+  );
+
+  const selfUpdate = normalizeSelfUpdateConfig(config.selfUpdate);
+  checks.push(
+    buildCheck(
+      'self_update',
+      '升级检查配置',
+      selfUpdate.enabled ? STATUS_PASS : STATUS_WARN,
+      `${selfUpdate.enabled ? '已启用' : '已关闭'}，通道 ${selfUpdate.channel}，最近检查 ${formatTimestamp(selfUpdate.lastCheckAt)}`,
+      selfUpdate.enabled
+        ? selfUpdate.skipVersion
+          ? `当前跳过版本: v${selfUpdate.skipVersion}，如需恢复提醒请清空 skipVersion。`
+          : ''
+        : '建议启用升级检查，及时获取功能与安全修复。'
     )
   );
 
