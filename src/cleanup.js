@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { appendJsonLine, ensureDir, pathExists } from './utils.js';
+import { classifyErrorType, ERROR_TYPES } from './error-taxonomy.js';
 
 function generateBatchId() {
   const date = new Date();
@@ -92,6 +93,7 @@ export async function executeCleanup({
         targetKey: target.targetKey || null,
         tier: target.tier || null,
         status: skipByPolicy,
+        error_type: ERROR_TYPES.POLICY_SKIPPED,
         dryRun: Boolean(dryRun),
       });
       continue;
@@ -118,6 +120,7 @@ export async function executeCleanup({
         targetKey: target.targetKey || null,
         tier: target.tier || null,
         status: 'skipped_missing_source',
+        error_type: ERROR_TYPES.PATH_NOT_FOUND,
         dryRun: Boolean(dryRun),
       });
       continue;
@@ -203,6 +206,7 @@ export async function executeCleanup({
         targetKey: target.targetKey || null,
         tier: target.tier || null,
         status: 'failed',
+        error_type: classifyErrorType(message),
         dryRun: false,
         error: message,
       });

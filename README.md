@@ -1,97 +1,121 @@
 # wecom-cleaner
 
-企业微信本地缓存清理工具（交互式 CLI/TUI 风格）。
+<p align="left">
+  <a href="https://www.npmjs.com/package/@mison/wecom-cleaner"><img alt="npm" src="https://img.shields.io/npm/v/%40mison%2Fwecom-cleaner?style=flat-square" /></a>
+  <a href="./LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-2ea043?style=flat-square" /></a>
+  <img alt="node" src="https://img.shields.io/badge/node-%3E%3D20-1f6feb?style=flat-square" />
+  <img alt="platform" src="https://img.shields.io/badge/platform-macOS-0ea5e9?style=flat-square" />
+  <img alt="engine" src="https://img.shields.io/badge/engine-Node%20%2B%20Zig-0891b2?style=flat-square" />
+</p>
+
+企业微信本地缓存清理工具（交互式 CLI/TUI）。
 
 - 软件名：`wecom-cleaner`
-- npm 包名：`@mison/wecom-cleaner`
+- npm 包：`@mison/wecom-cleaner`
 - 命令名：`wecom-cleaner`
+- 仓库：<https://github.com/MisonL/wecom-cleaner>
 
-## 核心能力
+> 定位：在“可回收、可恢复、可审计”前提下，清理企业微信本地缓存，避免误删业务资料。
 
-1. 开始菜单
+## 目录
 
-- 年月清理（默认，可执行删除）
-- 会话分析（只读，不处理）
-- 全量空间治理（分级，安全优先）
-- 恢复已删除批次
-- 交互配置
+- [项目定位](#项目定位)
+- [功能总览](#功能总览)
+- [能力边界](#能力边界)
+- [安装与运行](#安装与运行)
+- [常用参数](#常用参数)
+- [数据与审计文件](#数据与审计文件)
+- [开发与质量门禁](#开发与质量门禁)
+- [发布与打包](#发布与打包)
+- [FAQ](#faq)
 
-2. 多账号支持
+## 项目定位
 
-- 自动识别 `Profiles` 下多个账号。
-- 账号列表按 `用户名 | 企业名 | 短ID` 三列显示并可勾选处理范围。
-- 支持账号别名管理（用于修正不可读的本地字段）。
-- 当 `Profile` 根目录不存在或未识别到账号时，启动页会给出候选目录提示（不自动改配置）。
+`wecom-cleaner` 解决的是“本地缓存空间治理”问题，不改变服务端数据。
 
-3. 年月清理（默认）
+设计原则：
 
-- 进入模式即弹出“年月筛选配置”。
-- 支持按截止年月自动筛选，或手动勾选月份。
-- 支持按缓存类型筛选（图片、视频、文件、表情、缩略图、语音、`wwsecurity` 等）。
-- `wwsecurity` 默认不勾选（需手动勾选后才会进入清理范围）。
-- 自动识别文件存储目录（含默认路径与自定义路径，按结构匹配 `*/WXWork Files/Caches`，不依赖目录名称），并在执行前让用户确认是否纳入本次扫描。
-- 文件存储目录选择默认策略：仅预选“默认路径 + 手动配置路径”，自动探测路径默认不预选（降低误选风险）。
-- 删除时自动移动到程序回收区，并记录索引，便于恢复。
+- 安全优先：默认以回收区搬移代替直接删除。
+- 可恢复：所有可执行删除都记录索引并支持按批次恢复。
+- 可审计：关键分支会写入状态码，便于追踪与复盘。
+- 渐进增强：有 Zig 核心则加速，无则自动回退 Node。
 
-4. 全量空间治理（新增）
+## 功能总览
 
-- 独立模式，覆盖 `Profiles` 外及账号内的高占用缓存/临时目录（如 `WXWork/Temp/ScreenCapture`、`cefcache`、`WebsiteDataStore`、`tmp`、`Publishsys/pkg`、`WXWork/Log` 等）。
-- 若检测到文件存储目录，会额外纳入 `WXWork Files/Caches` 作为谨慎层治理项。
-- 三层分级：
-  - 安全层：可建议清理
-  - 谨慎层：可选清理，执行前额外确认
-  - 受保护层：只分析，不允许删除
-- 支持通配目录匹配（如 `WeDrive/.WeDriveTrash-*`），用于识别同类临时目录。
-- 自动建议规则：`体积阈值 + 静置天数`（默认 `>=512MB` 且 `>=7天`）。
-- 删除保护：双确认 + 冷静期 + 确认词 `CLEAN`。
-- 所有处理仍走回收区，可按批次恢复。
-- 若 `--root` 不是标准 `.../Data/Documents/Profiles` 结构，程序会禁用容器级目录推导，仅扫描账号目录相关目标。
-- 默认不把普通业务文档目录（例如 `WeDrive/<企业名>/...`）纳入治理规则，避免误删工作资料。
+| 模块               | 是否可执行删除 | 说明                                               |
+| ------------------ | -------------- | -------------------------------------------------- |
+| 年月清理（默认）   | 是             | 按账号 + 年月 + 类型筛选缓存，支持 dry-run。       |
+| 会话分析           | 否             | 只读分析目录/体积分布，不做删除。                  |
+| 全量空间治理       | 是             | 分级治理高占用缓存目录（安全层/谨慎层/受保护层）。 |
+| 回收区治理         | 是             | 按保留策略清理回收区历史批次，支持 dry-run。       |
+| 恢复已删除批次     | 是             | 基于索引恢复，支持覆盖/重命名/跳过。               |
+| 系统自检（doctor） | 否             | 检查目录权限、账号发现、核心可用性与回收区健康。   |
+| 交互配置           | 否             | 配置根目录、主题、文件存储目录、外部自动探测等。   |
 
-5. 恢复机制
+### 关键能力
 
-- 按删除批次恢复。
-- 冲突处理支持：`覆盖 / 重命名 / 跳过`。
-- 可选择“后续冲突沿用同一策略”。
-- 恢复路径强约束：
-  - 月度清理批次：`sourcePath` 必须位于 `Profiles` 根目录或已登记文件存储根目录内
-  - 全量治理批次：优先使用容器 `Data` 根目录校验；若无法推断，会自动回退到 `Profiles` 根目录 + 文件存储根目录白名单
-  - 通用：`recyclePath` 必须位于回收区目录内
-  - 校验基于 `realpath`（防止符号链接越界恢复）
-  - 越界记录直接拦截并审计（`skipped_invalid_path`）。
+1. 多账号支持
 
-6. 会话分析（只读）
+- 自动识别 `Profiles` 下账号目录。
+- 账号以 `用户名 | 企业名 | 短ID` 显示，可多选。
+- 支持账号别名，修正常见不可读字段。
 
-- 分析可见缓存目录分布（账号、类型、月份、体积）。
-- 默认包含 `wwsecurity` 目录体积分析（只读，不自动删除）。
-- 不执行删除。
+2. 文件存储目录识别
 
-## 能力边界（重要）
+- 支持默认路径、手动配置路径、自动探测路径。
+- 自动探测采用结构匹配（如 `*/WXWork Files/Caches`），不依赖目录名。
+- 自动探测结果默认不预选，需用户确认后纳入处理。
 
-企业微信会话数据库为私有/加密格式，工具无法稳定建立“会话名 -> 本地缓存目录”的强映射。
+3. 删除与恢复链路
+
+- 删除动作统一进入程序回收区，而不是直接 `rm`。
+- 写入 `index.jsonl` 审计记录，恢复按批次回放。
+- 恢复时做路径边界校验（含 `realpath` 防符号链接越界）。
+- 恢复支持先 `dry-run` 预演，再选择是否执行真实恢复。
+
+4. 回收区保留策略
+
+- 支持“保留最近 N 批 + 保留近 N 天 + 容量阈值”联合治理。
+- 超过阈值会给出空间提示，可一键进入回收区治理。
+
+5. Zig 核心与自动修复
+
+- 有可用 Zig 核心时自动启用加速。
+- 不可用时自动回退 Node，功能不受影响。
+- 可按 manifest 下载并校验 SHA256 后修复核心。
+
+6. 可观测性与并发安全
+
+- `doctor` 模式可输出人类可读报告，或通过 `--json` 输出结构化结果。
+- 多实例并发默认加锁，检测到陈旧锁可交互清理或通过 `--force` 自动清理。
+
+## 能力边界
+
+企业微信会话数据库为私有/加密格式，当前无法稳定建立“会话名 -> 本地缓存目录”的强映射。
+
 因此：
 
-- 支持按“年月目录”直接清理（可执行）。
-- 支持按“会话维度”做只读分析提示，但不自动按会话删除。
+- 支持按“年月目录”执行清理。
+- 支持按“会话维度”做只读分析。
+- 不提供“按会话自动删除”。
 
 ## 安装与运行
 
-### 方式一：直接运行（发布后）
+### 方式一：直接运行
 
 ```bash
 npx @mison/wecom-cleaner
 ```
 
-### 方式二：本地开发运行
+### 方式二：本地开发
 
 ```bash
 npm install
-# 编译 Zig 核心（可选但推荐）
-./native/zig/build.sh
+npm run build:native
 npm run dev
 ```
 
-### 开发回归（全菜单 smoke）
+### 全菜单 smoke 回归
 
 ```bash
 npm run e2e:smoke
@@ -99,75 +123,9 @@ npm run e2e:smoke
 
 说明：
 
-- 该脚本会在 `/tmp/wecom-e2e-*` 下构造隔离测试夹具，不会触碰真实企业微信目录。
-- 覆盖菜单与关键交互：年月清理、会话分析、全量治理、恢复、设置，以及恢复冲突分支验证。
-- 依赖 `expect`（macOS 通常自带）；可用 `npm run e2e:smoke -- --keep` 保留测试目录与日志。
-
-### 单元测试与覆盖率
-
-```bash
-# 运行单元测试
-npm run test
-
-# 生成覆盖率（排除交互入口 src/cli.js）
-npm run test:coverage
-
-# 覆盖率门禁（lines/statements >= 75%，functions >= 80%，branches >= 60%）
-npm run test:coverage:check
-```
-
-### 代码风格与格式化
-
-```bash
-# 执行格式化
-npm run format
-
-# 仅检查格式（不改文件）
-npm run format:check
-```
-
-发布前手动门禁（推荐）：
-
-```bash
-npm run check
-npm run test:coverage:check
-npm run format:check
-npm run e2e:smoke -- --keep
-npm run pack:tgz:dry-run
-```
-
-发布打包（`npm pack` / `npm publish`）默认会在 `prepack` 阶段同时构建：
-
-- `native/bin/darwin-x64/wecom-cleaner-core`
-- `native/bin/darwin-arm64/wecom-cleaner-core`
-
-如果你要生成本地交付包（避免作用域前缀），建议使用：
-
-```bash
-npm run pack:tgz
-```
-
-该命令会生成：`wecom-cleaner-<version>.tgz`（不会带 `mison-` 前缀）。
-
-如果你看到标题栏 `Zig加速:已生效`，表示正在使用 Zig 扫描引擎；
-否则会自动回退到 Node 引擎（功能不受影响，只是扫描速度可能较慢）。
-
-当 Zig 核心缺失或损坏时，程序会自动尝试下载修复到状态目录：
-`~/.wecom-cleaner-state/native-cache/<platform-arch>/`
-
-自动修复安全策略：
-
-- 下载目标由 `native/manifest.json` 提供（固定版本清单，避免漂移到 `main`）。
-- 下载完成后必须通过 `SHA256` 校验。
-- 通过校验后仍需通过 `--ping` 探针，才会启用该核心。
-- 本地缓存核心命中时也会先做校验，再进入扫描。
-
-状态含义：
-
-- `Zig加速:已生效(本次扫描更快)`：本次扫描实际使用 Zig。
-- `Zig加速:本次未生效(已自动改用Node)`：检测到 Zig，但本次运行回退到 Node。
-- `Zig加速:已就绪(开始扫描后自动使用)`：已经检测到 Zig，可直接开始使用。
-- `Zig加速:未开启(当前使用Node)`：未检测到可用 Zig 核心。
+- 脚本会在 `/tmp/wecom-e2e-*` 构造隔离夹具，不触碰真实企业微信目录。
+- 覆盖开始菜单与关键分支：年月清理、会话分析、全量治理、回收区治理、恢复、系统自检、设置。
+- 可用 `npm run e2e:smoke -- --keep` 保留日志与测试目录。
 
 ## 常用参数
 
@@ -179,88 +137,149 @@ wecom-cleaner --external-storage-auto-detect false
 wecom-cleaner --dry-run-default true
 wecom-cleaner --mode cleanup_monthly
 wecom-cleaner --mode space_governance
+wecom-cleaner --mode recycle_maintain
+wecom-cleaner --mode doctor
 wecom-cleaner --theme auto
+wecom-cleaner --json
+wecom-cleaner --force
 ```
 
-可选 `--mode`：
+### `--mode` 可选值
 
 - `cleanup_monthly`
 - `analysis_only`
 - `space_governance`
+- `recycle_maintain`
 - `restore`
+- `doctor`
 - `settings`
 
-参数错误会直接报错并返回非 0 状态码，例如：
+### `--theme` 可选值
+
+- `auto`：自动判断终端主题
+- `light`：亮色
+- `dark`：暗色
+
+### 额外环境变量
+
+- `WECOM_CLEANER_NATIVE_AUTO_REPAIR=true|false`：Zig 自动修复总开关（默认 `true`）
+- `WECOM_CLEANER_NATIVE_BASE_URL=<url>`：核心下载基地址
+- `WECOM_CLEANER_NATIVE_DOWNLOAD_TIMEOUT_MS=<ms>`：下载超时（默认 `15000`）
+- `WECOM_CLEANER_EXTERNAL_AUTO_DETECT=true|false`：外部存储自动探测总开关
+
+## 数据与审计文件
+
+默认状态目录：`~/.wecom-cleaner-state`
+
+- `config.json`：交互配置
+- `account-aliases.json`：账号别名
+- `index.jsonl`：删除/恢复流水审计
+- `recycle-bin/`：回收区
+- `.wecom-cleaner.lock`：运行锁文件（防并发误操作）
+
+`index.jsonl` 常见字段：
+
+- `scope`：`cleanup_monthly` 或 `space_governance`
+- `tier`：`safe` / `caution` / `protected`
+- `status`：`success`、`dry_run`、`skipped_*`、`failed`
+- `error_type`：错误分类（如 `path_not_found`、`path_validation_failed`、`permission_denied`）
+
+回收区治理审计（`action=recycle_maintain`）常见字段：
+
+- `selected_by_age`：按年龄规则选中的批次数
+- `selected_by_size`：按容量规则补选的批次数
+- `remaining_bytes`：治理后回收区总占用
+
+常见越界拦截原因（`skipped_invalid_path.invalid_reason`）：
+
+- `source_outside_profile_root`
+- `source_outside_governance_root`
+- `source_symlink_escape`
+- `recycle_symlink_escape`
+- `missing_allowed_root`
+- `missing_recycle_root`
+- `source_path_unresolvable`
+- `recycle_path_unresolvable`
+
+## 开发与质量门禁
 
 ```bash
-wecom-cleaner --root --mode analysis_only
-# 参数错误: 参数 --root 缺少值
+# 语法检查
+npm run check
 
-wecom-cleaner --mode foo
-# 运行失败: 不支持的运行模式: foo
+# 单元测试
+npm run test
+
+# 覆盖率报告
+npm run test:coverage
+
+# 覆盖率门禁（lines/statements >= 75%，functions >= 80%，branches >= 60%）
+npm run test:coverage:check
+
+# 格式化与风格检查
+npm run format
+npm run format:check
 ```
 
-可选 `--theme`：
-
-- `auto`：自动判断（优先读取终端环境，如 `COLORFGBG`）
-- `light`：亮色主题色板
-- `dark`：暗色主题色板
-
-可选 `--external-storage-root`：
-
-- 手动追加文件存储根目录（示例：`/Volumes/Data/MyWeComStorage`）。
-- 支持多路径，使用逗号分隔（示例：`--external-storage-root /Volumes/A/WXWork_Data,/Volumes/B/WXWork_Data`）。
-
-可选 `--external-storage-auto-detect`：
-
-- `true`（默认）：自动探测默认/自定义文件存储目录。
-- `false`：关闭自动探测，仅使用默认路径与手动配置路径（更适合受控测试环境）。
-
-可选环境变量：
-
-- `WECOM_CLEANER_NATIVE_AUTO_REPAIR=true|false`：是否开启 Zig 自动修复下载（默认 `true`）
-- `WECOM_CLEANER_NATIVE_BASE_URL=<url>`：自定义核心下载基地址
-- `WECOM_CLEANER_NATIVE_DOWNLOAD_TIMEOUT_MS=<ms>`：下载超时时间（默认 `15000`）
-- `WECOM_CLEANER_EXTERNAL_AUTO_DETECT=true|false`：外部存储自动探测总开关（未传 `--external-storage-auto-detect` 时生效，默认 `true`）
-
-跨平台编译 Zig 核心示例：
+发布前推荐全量门禁：
 
 ```bash
-# 按当前机器平台编译
+npm run check
+npm run test:coverage:check
+npm run format:check
+npm run e2e:smoke -- --keep
+npm run pack:tgz:dry-run
+```
+
+## 发布与打包
+
+`prepack` 会自动执行：
+
+- `npm run build:native:release`
+- `npm run check`
+
+默认构建两个 macOS 核心：
+
+- `native/bin/darwin-x64/wecom-cleaner-core`
+- `native/bin/darwin-arm64/wecom-cleaner-core`
+
+本地交付包（无作用域前缀）建议：
+
+```bash
+npm run pack:tgz
+```
+
+输出示例：`wecom-cleaner-<version>.tgz`
+
+跨平台构建示例：
+
+```bash
+# 按当前机器平台
 ./native/zig/build.sh
 
-# 发布前一次构建 macOS 双架构（默认由 prepack 自动触发）
+# 发布前构建 macOS 双架构
 npm run build:native:release
 
-# 指定目标平台编译（示例）
+# 指定目标编译（示例）
 TARGET_OS=darwin TARGET_ARCH=arm64 ./native/zig/build.sh
 TARGET_OS=windows TARGET_ARCH=x64 ./native/zig/build.sh
 ```
 
-## 数据与日志位置
+## FAQ
 
-默认状态目录：`~/.wecom-cleaner-state`
+### 1) “Zig加速:已就绪” 和 “已生效” 有什么区别？
 
-- `config.json`：配置文件
-- `config.externalStorageRoots`：手动登记的文件存储根目录（默认路径与自动探测仍会生效）
-- `config.externalStorageAutoDetect`：是否启用外部存储自动探测（可在“交互配置”里开关）
-- `account-aliases.json`：账号别名
-- `index.jsonl`：删除/恢复流水索引
-- `recycle-bin/`：回收区
+- 已就绪：检测到 Zig 核心，但当前仅在菜单阶段，还没进入扫描。
+- 已生效：已经进入扫描，且本次实际使用 Zig。
 
-常见 `index.jsonl` 字段：
+### 2) 为什么显示 “Node回退”？
 
-- `scope`：`cleanup_monthly` 或 `space_governance`
-- `tier`：`safe` / `caution` / `protected`（全量治理模式）
+检测到 Zig 核心，但本次运行探针失败或运行异常，已自动切回 Node，功能可继续使用。
 
-常见 `index.jsonl` 状态值：
+### 3) 会不会误删企业文档？
 
-- 清理：`success`、`dry_run`、`skipped_missing_source`、`skipped_recently_active`、`skipped_policy_protected`、`failed`
-- 恢复：`success`、`skipped_missing_recycle`、`skipped_conflict`、`skipped_invalid_path`、`failed`
+默认策略不会把普通业务文档目录（例如 `WeDrive/<企业名>/...`）纳入治理规则；执行前还有分级提示、确认和回收区兜底。
 
-常见 `skipped_invalid_path.invalid_reason`：
+---
 
-- `source_outside_profile_root` / `source_outside_governance_root`
-- `source_symlink_escape` / `recycle_symlink_escape`
-- `missing_allowed_root` / `missing_recycle_root`
-- `source_path_unresolvable` / `recycle_path_unresolvable`
+如果你希望我提供“按你当前机器目录结构定制的一键安全清理方案”，可以直接给我一份 `--dry-run` 输出。

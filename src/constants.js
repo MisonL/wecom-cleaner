@@ -104,6 +104,8 @@ export const MODES = {
   ANALYSIS_ONLY: 'analysis_only',
   SPACE_GOVERNANCE: 'space_governance',
   RESTORE: 'restore',
+  DOCTOR: 'doctor',
+  RECYCLE_MAINTAIN: 'recycle_maintain',
   SETTINGS: 'settings',
 };
 

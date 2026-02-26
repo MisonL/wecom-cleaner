@@ -29,6 +29,10 @@ import {
 import { executeCleanup } from './cleanup.js';
 import { listRestorableBatches, restoreBatch } from './restore.js';
 import { printAnalysisSummary } from './analysis.js';
+import { runDoctor } from './doctor.js';
+import { acquireLock, breakLock, LockHeldError } from './lock.js';
+import { classifyErrorType, errorTypeToLabel } from './error-taxonomy.js';
+import { collectRecycleStats, maintainRecycleBin, normalizeRecycleRetention } from './recycle-maintenance.js';
 import {
   compareMonthKey,
   expandHome,
@@ -65,9 +69,55 @@ function isPromptAbort(error) {
   );
 }
 
+const PROMPT_BACK = '__prompt_back__';
+
+function isBackCommand(inputValue) {
+  const normalized = String(inputValue || '')
+    .trim()
+    .toLowerCase();
+  return normalized === '/b' || normalized === 'b' || normalized === 'back' || normalized === '返回';
+}
+
+function withBackChoice(choices, allowBack) {
+  const inputChoices = Array.isArray(choices) ? [...choices] : [];
+  if (!allowBack) {
+    return inputChoices;
+  }
+  const already = inputChoices.some((choice) => choice?.value === PROMPT_BACK);
+  if (!already) {
+    inputChoices.push({
+      name: '← 返回上一步',
+      value: PROMPT_BACK,
+    });
+  }
+  return inputChoices;
+}
+
+function withConfirmDefaultHint(message, defaultValue) {
+  const text = String(message || '').trim();
+  if (!text) {
+    return text;
+  }
+  if (text.includes('回车默认')) {
+    return text;
+  }
+  const hint = defaultValue ? '（y/n，回车默认: y）' : '（y/n，回车默认: n）';
+  return `${text} ${hint}`;
+}
+
+function isPromptBack(value) {
+  return value === PROMPT_BACK;
+}
+
 async function askSelect(config) {
   try {
-    return await select(config);
+    const allowBack = Boolean(config?.allowBack);
+    const normalizedConfig = {
+      ...config,
+      choices: withBackChoice(config?.choices, allowBack),
+    };
+    delete normalizedConfig.allowBack;
+    return await select(normalizedConfig);
   } catch (error) {
     if (isPromptAbort(error)) {
       throw new PromptAbortError();
@@ -78,7 +128,28 @@ async function askSelect(config) {
 
 async function askCheckbox(config) {
   try {
-    return await checkbox(config);
+    const allowBack = Boolean(config?.allowBack);
+    const originalValidate = config?.validate;
+    const normalizedConfig = {
+      ...config,
+      choices: withBackChoice(config?.choices, allowBack),
+      validate: (values) => {
+        if (allowBack && Array.isArray(values) && values.includes(PROMPT_BACK)) {
+          return true;
+        }
+        if (typeof originalValidate === 'function') {
+          return originalValidate(values);
+        }
+        return true;
+      },
+    };
+    delete normalizedConfig.allowBack;
+
+    const values = await checkbox(normalizedConfig);
+    if (allowBack && Array.isArray(values) && values.includes(PROMPT_BACK)) {
+      return PROMPT_BACK;
+    }
+    return values;
   } catch (error) {
     if (isPromptAbort(error)) {
       throw new PromptAbortError();
@@ -89,7 +160,28 @@ async function askCheckbox(config) {
 
 async function askInput(config) {
   try {
-    return await input(config);
+    const allowBack = Boolean(config?.allowBack);
+    const originalValidate = config?.validate;
+    const normalizedConfig = {
+      ...config,
+      message: allowBack ? `${String(config?.message || '').trim()}（输入 /b 返回上一步）` : config?.message,
+      validate: (value) => {
+        if (allowBack && isBackCommand(value)) {
+          return true;
+        }
+        if (typeof originalValidate === 'function') {
+          return originalValidate(value);
+        }
+        return true;
+      },
+    };
+    delete normalizedConfig.allowBack;
+
+    const value = await input(normalizedConfig);
+    if (allowBack && isBackCommand(value)) {
+      return PROMPT_BACK;
+    }
+    return value;
   } catch (error) {
     if (isPromptAbort(error)) {
       throw new PromptAbortError();
@@ -100,13 +192,37 @@ async function askInput(config) {
 
 async function askConfirm(config) {
   try {
-    return await confirm(config);
+    const defaultValue = config?.default === undefined ? false : Boolean(config.default);
+    const normalizedConfig = {
+      ...config,
+      message: withConfirmDefaultHint(config?.message, defaultValue),
+      default: defaultValue,
+    };
+    return await confirm(normalizedConfig);
   } catch (error) {
     if (isPromptAbort(error)) {
       throw new PromptAbortError();
     }
     throw error;
   }
+}
+
+async function askConfirmWithBack(config) {
+  const defaultValue = config?.default === undefined ? false : Boolean(config.default);
+  const selected = await askSelect({
+    message: `${String(config?.message || '').trim()}（回车默认: ${defaultValue ? '是' : '否'}）`,
+    default: defaultValue ? '__yes__' : '__no__',
+    choices: [
+      { name: `是${defaultValue ? '（默认）' : ''}`, value: '__yes__' },
+      { name: `否${!defaultValue ? '（默认）' : ''}`, value: '__no__' },
+    ],
+    allowBack: true,
+  });
+
+  if (isPromptBack(selected)) {
+    return PROMPT_BACK;
+  }
+  return selected === '__yes__';
 }
 
 function categoryChoices(defaultKeys = [], options = {}) {
@@ -405,19 +521,168 @@ function renderHeaderDivider(resolvedThemeMode, options = {}) {
   return `${INFO_LEFT_PADDING}${colorizeText('─'.repeat(width), palette.dividerColor)}`;
 }
 
-function renderHeaderInfoLine(label, value, resolvedThemeMode, options = {}) {
+function renderHeaderInfoLines(label, value, resolvedThemeMode, options = {}) {
   const palette = resolveInfoPalette(resolvedThemeMode);
-  const maxValueWidth = Math.max(28, Number(process.stdout.columns || 120) - 18);
+  const valueIndent = `${INFO_LEFT_PADDING}  `;
+  const maxValueWidth = Math.max(28, Number(process.stdout.columns || 120) - valueIndent.length - 2);
   const clippedValue = trimToWidth(String(value || '-'), maxValueWidth);
   if (options.adaptiveText) {
-    const labelText = colorizeText(`${label}:`, AUTO_ADAPTIVE_LABEL_COLOR, { bold: true });
+    const labelText = colorizeText(`${label}：`, AUTO_ADAPTIVE_LABEL_COLOR, { bold: true });
     const valueText = styleWithTerminalDefault(clippedValue);
-    return `${INFO_LEFT_PADDING}${labelText} ${valueText}`;
+    return [`${INFO_LEFT_PADDING}${labelText}`, `${valueIndent}${valueText}`];
   }
-  const labelText = colorizeText(`${label}:`, palette.labelColor, { bold: true });
+  const labelText = colorizeText(`${label}：`, palette.labelColor, { bold: true });
   const isDarkTheme = resolvedThemeMode === THEME_DARK;
-  const valueColor = options.muted ? (isDarkTheme ? palette.valueColor : palette.mutedColor) : palette.valueColor;
-  return `${INFO_LEFT_PADDING}${labelText} ${colorizeText(clippedValue, valueColor)}`;
+  const valueColor = options.muted
+    ? isDarkTheme
+      ? palette.valueColor
+      : palette.mutedColor
+    : palette.valueColor;
+  return [`${INFO_LEFT_PADDING}${labelText}`, `${valueIndent}${colorizeText(clippedValue, valueColor)}`];
+}
+
+function guideLabelStyle(text) {
+  if (!canUseAnsiColor()) {
+    return text;
+  }
+  return colorizeText(text, AUTO_ADAPTIVE_LABEL_COLOR, { bold: true });
+}
+
+function printGuideBlock(title, rows = []) {
+  const list = Array.isArray(rows) ? rows : [];
+  const labelWidth = 6;
+  const maxValueWidth = Math.max(28, Number(process.stdout.columns || 120) - INFO_LEFT_PADDING.length - 12);
+  console.log(`${INFO_LEFT_PADDING}┌ ${styleWithTerminalDefault(title, { bold: true })}`);
+
+  if (list.length === 0) {
+    console.log(`${INFO_LEFT_PADDING}└`);
+    return;
+  }
+
+  list.forEach((row, idx) => {
+    const prefix = idx === list.length - 1 ? '└' : '│';
+    if (typeof row === 'string') {
+      console.log(`${INFO_LEFT_PADDING}${prefix} ${trimToWidth(row, maxValueWidth + labelWidth + 2)}`);
+      return;
+    }
+    const label = padToWidth(String(row?.label || '-'), labelWidth);
+    const value = trimToWidth(String(row?.value || '-'), maxValueWidth);
+    const labelText = guideLabelStyle(label);
+    console.log(`${INFO_LEFT_PADDING}${prefix} ${labelText}：${value}`);
+  });
+}
+
+function summarizeErrorsByType(errors, options = {}) {
+  const list = Array.isArray(errors) ? errors : [];
+  const pickMessage =
+    typeof options.pickMessage === 'function' ? options.pickMessage : (item) => item?.message;
+  const counts = new Map();
+  for (const item of list) {
+    const label = errorTypeToLabel(classifyErrorType(pickMessage(item)));
+    counts.set(label, (counts.get(label) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([label, count]) => ({ label, count }))
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, 'zh-Hans-CN'));
+}
+
+async function printErrorDiagnostics(errors, options = {}) {
+  const list = Array.isArray(errors) ? errors : [];
+  if (list.length === 0) {
+    return;
+  }
+
+  const summaryRows = summarizeErrorsByType(list, options).map((item) => ({
+    label: item.label,
+    value: `${item.count} 项`,
+  }));
+  printGuideBlock('失败汇总', summaryRows);
+
+  const defaultLimit = Math.max(1, Number(options.defaultLimit || 5));
+  const headers =
+    Array.isArray(options.headers) && options.headers.length > 0 ? options.headers : ['路径', '错误'];
+  const mapRow =
+    typeof options.mapRow === 'function'
+      ? options.mapRow
+      : (item) => [item?.path || '-', item?.message || '-'];
+  const showAll = await askConfirm({
+    message: `失败明细共 ${list.length} 条，是否展开查看全部？`,
+    default: false,
+  });
+  const limit = showAll ? list.length : Math.min(defaultLimit, list.length);
+  const rows = list.slice(0, limit).map((item) => mapRow(item).map((cell) => trimToWidth(cell, 50)));
+  const detailTitle = showAll ? `失败明细（全部 ${limit} 条）` : `失败明细（前 ${limit} 条）`;
+  console.log(`\n${detailTitle}：`);
+  console.log(renderTable(headers, rows));
+  if (!showAll && list.length > limit) {
+    console.log(`... 已省略其余 ${list.length - limit} 条。`);
+  }
+}
+
+function doctorStatusText(status) {
+  if (status === 'pass') {
+    return '通过';
+  }
+  if (status === 'warn') {
+    return '警告';
+  }
+  return '失败';
+}
+
+async function printDoctorReport(report, asJson) {
+  if (asJson) {
+    console.log(JSON.stringify(report, null, 2));
+    return;
+  }
+
+  printSection('系统自检结果');
+  printGuideBlock('总体状态', [
+    { label: '结果', value: doctorStatusText(report.overall) },
+    { label: '通过', value: `${report.summary.pass} 项` },
+    { label: '警告', value: `${report.summary.warn} 项` },
+    { label: '失败', value: `${report.summary.fail} 项` },
+    { label: '平台', value: `${report.runtime.targetTag}` },
+  ]);
+
+  const rows = report.checks.map((item) => [
+    item.title,
+    doctorStatusText(item.status),
+    trimToWidth(item.detail, 58),
+  ]);
+  console.log(renderTable(['检查项', '状态', '详情'], rows));
+
+  if (Array.isArray(report.recommendations) && report.recommendations.length > 0) {
+    printGuideBlock(
+      '修复建议',
+      report.recommendations.slice(0, 8).map((item) => ({ label: '建议', value: item }))
+    );
+  }
+}
+
+function recycleThresholdBytes(config) {
+  const policy = normalizeRecycleRetention(config.recycleRetention);
+  return Math.max(1, Number(policy.sizeThresholdGB || 20)) * 1024 * 1024 * 1024;
+}
+
+async function printRecyclePressureHint(config) {
+  const policy = normalizeRecycleRetention(config.recycleRetention);
+  if (!policy.enabled) {
+    return;
+  }
+
+  const stats = await collectRecycleStats({
+    indexPath: config.indexPath,
+    recycleRoot: config.recycleRoot,
+  });
+  const threshold = recycleThresholdBytes(config);
+  if (stats.totalBytes <= threshold) {
+    return;
+  }
+  printGuideBlock('回收区容量提示', [
+    { label: '当前', value: `${formatBytes(stats.totalBytes)}（${stats.totalBatches} 批）` },
+    { label: '阈值', value: `${formatBytes(threshold)}` },
+    { label: '建议', value: '建议执行“回收区治理（保留策略）”释放空间。' },
+  ]);
 }
 
 function renderAsciiLogoLines(appMeta, resolvedThemeMode) {
@@ -560,11 +825,15 @@ function printHeader({
   const palette = resolveInfoPalette(resolvedThemeMode);
   const engineStatus = resolveEngineStatus({ nativeCorePath, lastRunEngineUsed });
   const adaptiveHeaderText = normalizedThemeMode === THEME_AUTO;
-  const renderLine = (label, value, options = {}) =>
-    renderHeaderInfoLine(label, value, resolvedThemeMode, {
+  const printLine = (label, value, options = {}) => {
+    const lines = renderHeaderInfoLines(label, value, resolvedThemeMode, {
       adaptiveText: adaptiveHeaderText,
       ...options,
     });
+    for (const line of lines) {
+      console.log(line);
+    }
+  };
 
   console.log(renderAsciiLogoLines(appMeta, resolvedThemeMode).join('\n'));
 
@@ -574,70 +843,52 @@ function printHeader({
     renderBadge(formatThemeStatus(config.theme, resolvedThemeMode), 'muted', palette),
   ];
   console.log(`${INFO_LEFT_PADDING}${stateBadges.join(' ')}`);
-  console.log(renderLine('引擎说明', engineStatus.detail, { muted: true }));
+  printLine('引擎说明', engineStatus.detail, { muted: true });
   console.log(renderHeaderDivider(resolvedThemeMode, { adaptiveText: adaptiveHeaderText }));
 
-  console.log(renderLine('应用', `${APP_NAME} v${appMeta.version} (${PACKAGE_NAME})`));
-  console.log(renderLine('作者/许可', `${appMeta.author} | ${appMeta.license}`));
-  console.log(renderLine('仓库', appMeta.repository));
-  console.log(renderLine('根目录', config.rootDir));
-  console.log(renderLine('状态目录', config.stateRoot));
+  printLine('应用', `${APP_NAME} v${appMeta.version} (${PACKAGE_NAME})`);
+  printLine('作者/许可', `${appMeta.author} | ${appMeta.license}`);
+  printLine('仓库', appMeta.repository);
+  printLine('根目录', config.rootDir);
+  printLine('状态目录', config.stateRoot);
 
   const sourceCounts = externalStorageMeta?.sourceCounts || null;
   if (externalStorageRoots.length > 0) {
     if (sourceCounts) {
-      console.log(
-        renderLine(
-          '文件存储',
-          `共${externalStorageRoots.length}个（默认${sourceCounts.builtin || 0} / 手动${sourceCounts.configured || 0} / 自动${sourceCounts.auto || 0}）`
-        )
+      printLine(
+        '文件存储',
+        `共${externalStorageRoots.length}个（默认${sourceCounts.builtin || 0} / 手动${sourceCounts.configured || 0} / 自动${sourceCounts.auto || 0}）`
       );
     } else {
-      console.log(
-        renderLine(
-          '文件存储',
-          `已检测 ${externalStorageRoots.length} 个（含默认/自定义，示例: ${externalStorageRoots[0]}）`
-        )
+      printLine(
+        '文件存储',
+        `已检测 ${externalStorageRoots.length} 个（含默认/自定义，示例: ${externalStorageRoots[0]}）`
       );
     }
   } else {
-    console.log(renderLine('文件存储', '未检测到（可在设置里手动添加）'));
+    printLine('文件存储', '未检测到（可在设置里手动添加）');
   }
   if ((sourceCounts?.auto || 0) > 0) {
-    console.log(renderLine('探测提示', '自动探测目录默认不预选，纳入处理前请确认。', { muted: true }));
+    printLine('探测提示', '自动探测目录默认不预选，纳入处理前请确认。', { muted: true });
   }
   if ((sourceCounts?.auto || 0) > 0 && (sourceCounts?.builtin || 0) + (sourceCounts?.configured || 0) === 0) {
-    console.log(
-      renderLine(
-        '操作建议',
-        '建议在“交互配置 -> 手动追加文件存储根目录”先确认常用路径。',
-        { muted: true }
-      )
-    );
+    printLine('操作建议', '建议在“交互配置 -> 手动追加文件存储根目录”先确认常用路径。', { muted: true });
   }
   if (
     externalStorageMeta &&
     Array.isArray(externalStorageMeta.truncatedRoots) &&
     externalStorageMeta.truncatedRoots.length > 0
   ) {
-    console.log(
-      renderLine(
-        '探测提示',
-        `${externalStorageMeta.truncatedRoots.length} 个搜索根达到扫描预算上限，建议手动补充路径`,
-        { muted: true }
-      )
+    printLine(
+      '探测提示',
+      `${externalStorageMeta.truncatedRoots.length} 个搜索根达到扫描预算上限，建议手动补充路径`,
+      { muted: true }
     );
   }
   if (profileRootHealth?.status === 'missing') {
-    console.log(
-      renderLine(
-        '目录提示',
-        '当前 Profile 根目录不存在，请在“交互配置”中修正。',
-        { muted: true }
-      )
-    );
+    printLine('目录提示', '当前 Profile 根目录不存在，请在“交互配置”中修正。', { muted: true });
   } else if (profileRootHealth?.status === 'empty') {
-    console.log(renderLine('目录提示', '当前 Profile 根目录未识别到账号目录。', { muted: true }));
+    printLine('目录提示', '当前 Profile 根目录未识别到账号目录。', { muted: true });
   }
   if (
     profileRootHealth &&
@@ -648,11 +899,11 @@ function printHeader({
       .slice(0, 3)
       .map((item) => `${item.rootDir} (${item.accountCount}账号)`)
       .join(' ; ');
-    console.log(renderLine('候选目录', candidateText, { muted: true }));
-    console.log(renderLine('操作建议', '进入“交互配置 -> Profile 根目录”修改。', { muted: true }));
+    printLine('候选目录', candidateText, { muted: true });
+    printLine('操作建议', '进入“交互配置 -> Profile 根目录”修改。', { muted: true });
   }
   if (nativeRepairNote) {
-    console.log(renderLine('修复状态', nativeRepairNote, { muted: true }));
+    printLine('修复状态', nativeRepairNote, { muted: true });
   }
   console.log(renderHeaderDivider(resolvedThemeMode, { adaptiveText: adaptiveHeaderText }));
 }
@@ -734,7 +985,17 @@ function formatExternalStorageChoiceLabel(rootPath, source = 'auto') {
   return `[${externalStorageSourceLabel(source)}] ${padToWidth(name, 14)} | ${padToWidth(rootPath, pathWidth)}`;
 }
 
-async function chooseExternalStorageRoots(detectedExternalStorage, modeText) {
+async function chooseExternalStorageRoots(detectedExternalStorage, modeText, options = {}) {
+  const allowBack = Boolean(options.allowBack);
+  const showGuide = options.showGuide !== false;
+  const guideTitle = options.guideTitle || '文件存储目录范围';
+  const guideRows = Array.isArray(options.guideRows)
+    ? options.guideRows
+    : [
+        { label: '默认', value: '已预选默认路径与手动配置路径' },
+        { label: '自动', value: '自动探测目录默认不预选，需显式确认' },
+        { label: '回退', value: allowBack ? '可选“← 返回上一步”' : '当前步骤不支持回退' },
+      ];
   const normalized = normalizeExternalStorageDetection(detectedExternalStorage);
   const externalStorageRoots = normalized.roots;
   const rootSources = normalized.meta?.rootSources || {};
@@ -744,25 +1005,41 @@ async function chooseExternalStorageRoots(detectedExternalStorage, modeText) {
   }
 
   printSection(`文件存储目录（默认/自定义，${modeText}）`);
+  if (showGuide) {
+    printGuideBlock(guideTitle, guideRows);
+  }
   const selected = await askCheckbox({
     message: '检测到文件存储目录，选择要纳入本次扫描的目录',
     required: false,
+    allowBack,
     choices: externalStorageRoots.map((rootPath) => ({
       name: formatExternalStorageChoiceLabel(rootPath, rootSources[rootPath]),
       value: rootPath,
       checked: rootSources[rootPath] !== 'auto',
     })),
   });
+  if (isPromptBack(selected)) {
+    return PROMPT_BACK;
+  }
 
   const autoSelected = selected.filter((item) => rootSources[item] === 'auto');
   if (autoSelected.length === 0) {
     return selected;
   }
 
-  const allowAuto = await askConfirm({
-    message: `你勾选了自动探测目录 ${autoSelected.length} 项，可能包含非企业微信目录。确认纳入本次扫描吗？`,
-    default: false,
-  });
+  const allowAuto = allowBack
+    ? await askConfirmWithBack({
+        message: `你勾选了自动探测目录 ${autoSelected.length} 项，可能包含非企业微信目录。确认纳入本次扫描吗？`,
+        default: false,
+      })
+    : await askConfirm({
+        message: `你勾选了自动探测目录 ${autoSelected.length} 项，可能包含非企业微信目录。确认纳入本次扫描吗？`,
+        default: false,
+      });
+  if (isPromptBack(allowAuto)) {
+    return PROMPT_BACK;
+  }
+
   if (allowAuto) {
     return selected;
   }
@@ -771,13 +1048,26 @@ async function chooseExternalStorageRoots(detectedExternalStorage, modeText) {
   return selected.filter((item) => rootSources[item] !== 'auto');
 }
 
-async function chooseAccounts(accounts, modeText) {
+async function chooseAccounts(accounts, modeText, options = {}) {
+  const allowBack = Boolean(options.allowBack);
+  const showGuide = options.showGuide !== false;
+  const guideTitle = options.guideTitle || '账号范围';
+  const guideRows = Array.isArray(options.guideRows)
+    ? options.guideRows
+    : [
+        { label: '默认', value: '优先选中“当前登录”账号；若无则全选' },
+        { label: '操作', value: '空格勾选，Enter 确认' },
+        { label: '目的', value: '缩小扫描范围，提高执行效率' },
+      ];
   if (accounts.length === 0) {
     console.log('\n未发现可用账号目录。');
     return [];
   }
 
   printSection(`账号选择（${modeText}）`);
+  if (showGuide) {
+    printGuideBlock(guideTitle, guideRows);
+  }
   console.log(renderTable(['序号', '用户名', '企业名', '短ID', '状态'], accountTableRows(accounts)));
 
   const defaults = accounts.filter((x) => x.isCurrent).map((x) => x.id);
@@ -786,6 +1076,7 @@ async function chooseAccounts(accounts, modeText) {
   const selected = await askCheckbox({
     message: '请选择要处理的账号（空格勾选，Enter确认）',
     required: true,
+    allowBack,
     choices: accounts.map((account) => ({
       name: formatAccountChoiceLabel(account),
       value: account.id,
@@ -797,45 +1088,67 @@ async function chooseAccounts(accounts, modeText) {
   return selected;
 }
 
-async function configureMonths(availableMonths) {
+async function configureMonths(availableMonths, options = {}) {
+  const allowBack = Boolean(options.allowBack);
   if (availableMonths.length === 0) {
     return [];
   }
 
   printSection('年月筛选（进入清理模式后必须设置）');
-  console.log(`检测到 ${availableMonths.length} 个可选年月。`);
+  printGuideBlock('步骤 3/6 · 年月策略', [
+    { label: '检测', value: `已发现 ${availableMonths.length} 个可选年月` },
+    { label: '推荐', value: '先按截止年月自动筛选，再按需微调' },
+    { label: '回退', value: allowBack ? '可选“← 返回上一步”' : '当前步骤不支持回退' },
+  ]);
 
   const mode = await askSelect({
     message: '请选择筛选方式',
     default: 'cutoff',
+    allowBack,
     choices: [
       { name: '按截止年月自动筛选（推荐）', value: 'cutoff' },
       { name: '手动勾选年月', value: 'manual' },
     ],
   });
+  if (isPromptBack(mode)) {
+    return PROMPT_BACK;
+  }
 
   if (mode === 'cutoff') {
     const defaultCutoff = monthByDaysBefore(730);
     const cutoff = await askInput({
       message: '请输入截止年月（含此年月，例如 2024-02）',
       default: defaultCutoff,
+      allowBack,
       validate: (value) => (normalizeMonthKey(value) ? true : '格式必须是 YYYY-MM，且月份在 01-12'),
     });
+    if (isPromptBack(cutoff)) {
+      return PROMPT_BACK;
+    }
 
     const cutoffKey = normalizeMonthKey(cutoff);
     let selected = availableMonths.filter((month) => compareMonthKey(month, cutoffKey) <= 0);
 
     console.log(`自动命中 ${selected.length} 个年月。`);
 
-    const tweak = await askConfirm({
-      message: '是否手动微调月份列表？',
-      default: false,
-    });
+    const tweak = allowBack
+      ? await askConfirmWithBack({
+          message: '是否手动微调月份列表？',
+          default: false,
+        })
+      : await askConfirm({
+          message: '是否手动微调月份列表？',
+          default: false,
+        });
+    if (isPromptBack(tweak)) {
+      return PROMPT_BACK;
+    }
 
     if (tweak) {
       selected = await askCheckbox({
         message: '微调月份（空格勾选，Enter确认）',
         required: true,
+        allowBack,
         choices: availableMonths.map((month) => ({
           name: month,
           value: month,
@@ -843,14 +1156,18 @@ async function configureMonths(availableMonths) {
         })),
         validate: (values) => (values.length > 0 ? true : '至少选择一个年月'),
       });
+      if (isPromptBack(selected)) {
+        return PROMPT_BACK;
+      }
     }
 
     return selected;
   }
 
-  return askCheckbox({
+  const selected = await askCheckbox({
     message: '手动选择要清理的年月',
     required: true,
+    allowBack,
     choices: availableMonths.map((month) => ({
       name: month,
       value: month,
@@ -858,6 +1175,7 @@ async function configureMonths(availableMonths) {
     })),
     validate: (values) => (values.length > 0 ? true : '至少选择一个年月'),
   });
+  return selected;
 }
 
 function summarizeTargets(targets) {
@@ -1014,42 +1332,153 @@ async function runCleanupMode(context) {
     autoDetect: config.externalStorageAutoDetect !== false,
     returnMeta: true,
   });
-  const selectedAccountIds = await chooseAccounts(accounts, '年月清理');
-  if (selectedAccountIds.length === 0) {
-    return;
-  }
-  const selectedExternalStorageRoots = await chooseExternalStorageRoots(detectedExternalStorage, '年月清理');
-
   const allCategoryKeys = CACHE_CATEGORIES.map((x) => x.key);
-  const availableMonths = await collectAvailableMonths(
-    accounts,
-    selectedAccountIds,
-    allCategoryKeys,
-    selectedExternalStorageRoots
-  );
 
-  if (availableMonths.length === 0) {
-    console.log('\n未发现按年月分组的缓存目录。你仍可清理非月份目录。');
+  let selectedAccountIds = [];
+  let selectedExternalStorageRoots = [];
+  let selectedMonths = [];
+  let selectedCategories = [];
+  let includeNonMonthDirs = false;
+  let dryRun = Boolean(config.dryRunDefault);
+
+  let step = 0;
+  while (step < 6) {
+    if (step === 0) {
+      const selected = await chooseAccounts(accounts, '年月清理', {
+        allowBack: false,
+        guideTitle: '步骤 1/6 · 账号范围',
+      });
+      if (!Array.isArray(selected) || selected.length === 0) {
+        return;
+      }
+      selectedAccountIds = selected;
+      step = 1;
+      continue;
+    }
+
+    if (step === 1) {
+      const selected = await chooseExternalStorageRoots(detectedExternalStorage, '年月清理', {
+        allowBack: true,
+        guideTitle: '步骤 2/6 · 文件存储目录范围',
+      });
+      if (isPromptBack(selected)) {
+        step = Math.max(0, step - 1);
+        continue;
+      }
+      selectedExternalStorageRoots = Array.isArray(selected) ? selected : [];
+      step = 2;
+      continue;
+    }
+
+    if (step === 2) {
+      const availableMonths = await collectAvailableMonths(
+        accounts,
+        selectedAccountIds,
+        allCategoryKeys,
+        selectedExternalStorageRoots
+      );
+
+      if (availableMonths.length === 0) {
+        console.log('\n未发现按年月分组的缓存目录。你仍可清理非月份目录。');
+        selectedMonths = [];
+        step = 3;
+        continue;
+      }
+
+      const selected = await configureMonths(availableMonths, { allowBack: true });
+      if (isPromptBack(selected)) {
+        step = Math.max(0, step - 1);
+        continue;
+      }
+      selectedMonths = Array.isArray(selected) ? selected : [];
+      step = 3;
+      continue;
+    }
+
+    if (step === 3) {
+      printSection('缓存类型筛选');
+      printGuideBlock('步骤 4/6 · 缓存类型', [
+        { label: '范围', value: '按类型限制清理目标，降低误删风险' },
+        { label: '建议', value: '默认推荐项已预选，可按需调整' },
+        { label: '回退', value: '可选“← 返回上一步”' },
+      ]);
+      const selected = await askCheckbox({
+        message: '选择要清理的缓存类型',
+        required: true,
+        allowBack: true,
+        choices: categoryChoices(config.defaultCategories),
+        validate: (values) => (values.length > 0 ? true : '至少选择一个类型'),
+      });
+      if (isPromptBack(selected)) {
+        step = Math.max(0, step - 1);
+        continue;
+      }
+      selectedCategories = selected;
+      step = 4;
+      continue;
+    }
+
+    if (step === 4) {
+      printSection('目录粒度策略');
+      printGuideBlock('步骤 5/6 · 非月份目录策略', [
+        { label: '含义', value: '非月份目录常见于临时目录、数字目录等' },
+        { label: '风险', value: '勾选后命中范围会更大，请先预览' },
+        { label: '回退', value: '可选“← 返回上一步”' },
+      ]);
+      const selected = await askConfirmWithBack({
+        message: '是否包含非月份目录（如数字目录、临时目录）？',
+        default: false,
+      });
+      if (isPromptBack(selected)) {
+        step = Math.max(0, step - 1);
+        continue;
+      }
+      includeNonMonthDirs = selected;
+      step = 5;
+      continue;
+    }
+
+    printSection('执行方式');
+    printGuideBlock('步骤 6/6 · 预览与执行', [
+      { label: 'dry-run', value: '只预览命中结果，不执行删除' },
+      { label: '真实删', value: '移动到程序回收区，可按批次恢复' },
+      { label: '回退', value: '可选“← 返回上一步”' },
+    ]);
+    const selected = await askConfirmWithBack({
+      message: '先 dry-run 预览（不执行删除）？',
+      default: Boolean(config.dryRunDefault),
+    });
+    if (isPromptBack(selected)) {
+      step = Math.max(0, step - 1);
+      continue;
+    }
+    dryRun = selected;
+    step = 6;
   }
 
-  const selectedMonths = availableMonths.length > 0 ? await configureMonths(availableMonths) : [];
-
-  const selectedCategories = await askCheckbox({
-    message: '选择要清理的缓存类型',
-    required: true,
-    choices: categoryChoices(config.defaultCategories),
-    validate: (values) => (values.length > 0 ? true : '至少选择一个类型'),
-  });
-
-  const includeNonMonthDirs = await askConfirm({
-    message: '是否包含非月份目录（如数字目录、临时目录）？',
-    default: false,
-  });
-
-  const dryRun = await askConfirm({
-    message: '先 dry-run 预览（不执行删除）？',
-    default: Boolean(config.dryRunDefault),
-  });
+  printSection('向导配置确认');
+  const categoryLabelByKey = new Map(CACHE_CATEGORIES.map((cat) => [cat.key, cat.label]));
+  const selectedCategoryText = selectedCategories.map((key) => categoryLabelByKey.get(key) || key).join('、');
+  printGuideBlock('即将执行的配置', [
+    { label: '账号', value: `${selectedAccountIds.length} 个` },
+    {
+      label: '年月',
+      value: selectedMonths.length > 0 ? `${selectedMonths.length} 个` : '不过滤（仅非月份或按类型命中）',
+    },
+    {
+      label: '类型',
+      value: selectedCategoryText || '-',
+    },
+    {
+      label: '文件存储',
+      value:
+        selectedExternalStorageRoots.length > 0
+          ? `${selectedExternalStorageRoots.length} 个目录`
+          : '未纳入额外文件存储目录',
+    },
+    { label: '非月份', value: includeNonMonthDirs ? '包含' : '不包含' },
+    { label: '模式', value: dryRun ? 'dry-run（预览）' : '真实删除（回收区）' },
+  ]);
 
   printSection('扫描目录并计算大小');
   const scan = await collectCleanupTargets({
@@ -1134,17 +1563,28 @@ async function runCleanupMode(context) {
   });
 
   printSection('删除结果');
+  printGuideBlock('结果摘要', [
+    { label: '批次', value: result.batchId },
+    { label: '模式', value: executeDryRun ? 'dry-run（预览）' : '真实删除（回收区）' },
+    { label: '成功', value: `${result.successCount} 项` },
+    { label: '跳过', value: `${result.skippedCount} 项` },
+    { label: '失败', value: `${result.failedCount} 项` },
+    { label: '释放', value: formatBytes(result.reclaimedBytes) },
+  ]);
+  if (result.failedCount > 0) {
+    printGuideBlock('结果建议', [{ label: '建议', value: '请查看失败明细，修复路径或权限后重试。' }]);
+  }
   console.log(`批次ID   : ${result.batchId}`);
   console.log(`成功数量 : ${result.successCount}`);
   console.log(`跳过数量 : ${result.skippedCount}`);
   console.log(`失败数量 : ${result.failedCount}`);
   console.log(`释放体积 : ${formatBytes(result.reclaimedBytes)}`);
 
-  if (result.errors.length > 0) {
-    console.log('\n失败明细（最多 8 条）：');
-    const rows = result.errors.slice(0, 8).map((e) => [trimToWidth(e.path, 50), trimToWidth(e.message, 40)]);
-    console.log(renderTable(['路径', '错误'], rows));
-  }
+  await printErrorDiagnostics(result.errors, {
+    defaultLimit: 5,
+    headers: ['路径', '错误'],
+    mapRow: (item) => [item.path || '-', item.message || '-'],
+  });
 }
 
 async function runAnalysisMode(context) {
@@ -1157,15 +1597,36 @@ async function runAnalysisMode(context) {
     returnMeta: true,
   });
 
-  const selectedAccountIds = await chooseAccounts(accounts, '会话分析（只读）');
+  const selectedAccountIds = await chooseAccounts(accounts, '会话分析（只读）', {
+    guideTitle: '步骤 1/3 · 账号范围',
+    guideRows: [
+      { label: '模式', value: '只读分析，不执行删除' },
+      { label: '范围', value: '建议先聚焦常用账号，避免分析结果过载' },
+      { label: '操作', value: '空格勾选，Enter 确认' },
+    ],
+  });
   if (selectedAccountIds.length === 0) {
     return;
   }
   const selectedExternalStorageRoots = await chooseExternalStorageRoots(
     detectedExternalStorage,
-    '会话分析（只读）'
+    '会话分析（只读）',
+    {
+      guideTitle: '步骤 2/3 · 文件存储目录范围',
+      guideRows: [
+        { label: '默认', value: '默认/手动目录已预选' },
+        { label: '自动', value: '自动探测目录建议按需纳入' },
+        { label: '提示', value: '分析仅统计体积，不做移动或删除' },
+      ],
+    }
   );
 
+  printSection('分析范围设置');
+  printGuideBlock('步骤 3/3 · 缓存类型范围', [
+    { label: '建议', value: '可先全选做全景盘点，再聚焦热点类型' },
+    { label: '安全', value: '当前流程只读，不写入数据目录' },
+    { label: '确认', value: '空格勾选，Enter 确认' },
+  ]);
   const selectedCategories = await askCheckbox({
     message: '选择分析范围（缓存类型）',
     required: true,
@@ -1200,14 +1661,40 @@ async function runSpaceGovernanceMode(context) {
   let selectedAccountIds = [];
 
   if (accounts.length > 0) {
-    selectedAccountIds = await chooseAccounts(accounts, '全量空间治理（账号相关目录）');
+    selectedAccountIds = await chooseAccounts(accounts, '全量空间治理（账号相关目录）', {
+      guideTitle: '治理步骤 1/5 · 账号范围',
+      guideRows: [
+        { label: '目标', value: '限定账号相关目录，避免无关扫描' },
+        { label: '建议', value: '优先处理当前登录账号与高占用账号' },
+        { label: '操作', value: '空格勾选，Enter 确认' },
+      ],
+    });
+  } else {
+    printSection('账号范围（全量治理）');
+    printGuideBlock('治理步骤 1/5 · 账号范围', [
+      { label: '状态', value: '未识别账号目录，将仅处理容器级治理目标' },
+      { label: '影响', value: '不会阻塞治理，可继续执行' },
+    ]);
   }
   const selectedExternalStorageRoots = await chooseExternalStorageRoots(
     detectedExternalStorage,
-    '全量空间治理'
+    '全量空间治理',
+    {
+      guideTitle: '治理步骤 2/5 · 文件存储目录范围',
+      guideRows: [
+        { label: '策略', value: '默认/手动目录预选，自动探测目录需确认' },
+        { label: '风险', value: '目录越多，命中范围越大，请结合预览确认' },
+        { label: '目标', value: '仅纳入确认为企业微信缓存的路径' },
+      ],
+    }
   );
 
   printSection('扫描治理目录并计算大小');
+  printGuideBlock('治理步骤 3/5 · 扫描与建议', [
+    { label: '分级', value: '按安全层/谨慎层/受保护层分类' },
+    { label: '建议', value: '默认建议阈值：体积 + 静置天数' },
+    { label: '保障', value: '仅生成候选列表，不会立即删除' },
+  ]);
   const scan = await scanSpaceGovernanceTargets({
     accounts,
     selectedAccountIds,
@@ -1259,6 +1746,12 @@ async function runSpaceGovernanceMode(context) {
     return;
   }
 
+  printSection('治理目标选择');
+  printGuideBlock('治理步骤 4/5 · 选择目录', [
+    { label: '预选', value: '建议项默认预选，可手动调整' },
+    { label: '层级', value: '谨慎层会触发二次确认' },
+    { label: '确认', value: '空格勾选，Enter 确认' },
+  ]);
   const lastSelected = new Set(config.spaceGovernance?.lastSelectedTargets || []);
   const selectedIds = await askCheckbox({
     message: '选择要治理的目录（建议项会预选）',
@@ -1305,6 +1798,12 @@ async function runSpaceGovernanceMode(context) {
   config.spaceGovernance.lastSelectedTargets = selectedIds;
   await saveConfig(config);
 
+  printSection('执行确认');
+  printGuideBlock('治理步骤 5/5 · 执行策略', [
+    { label: '目标', value: `已选 ${selectedTargets.length} 项（谨慎层 ${cautionTargets.length} 项）` },
+    { label: '模式', value: '可先 dry-run，再决定是否真实治理' },
+    { label: '保护', value: '真实治理包含冷静期 + CLEAN 确认词' },
+  ]);
   const dryRun = await askConfirm({
     message: '先 dry-run 预览（不执行删除）？',
     default: Boolean(config.dryRunDefault),
@@ -1357,17 +1856,33 @@ async function runSpaceGovernanceMode(context) {
   });
 
   printSection('治理结果');
+  printGuideBlock('结果摘要', [
+    { label: '批次', value: result.batchId },
+    { label: '模式', value: dryRun ? 'dry-run（预览）' : '真实治理（回收区）' },
+    { label: '成功', value: `${result.successCount} 项` },
+    { label: '跳过', value: `${result.skippedCount} 项` },
+    { label: '失败', value: `${result.failedCount} 项` },
+    { label: '释放', value: formatBytes(result.reclaimedBytes) },
+  ]);
+  if (result.failedCount > 0 || result.skippedCount > 0) {
+    printGuideBlock('结果建议', [
+      {
+        label: '建议',
+        value: '建议复核“跳过/失败”明细，确认是否需要放宽活跃目录策略后重试。',
+      },
+    ]);
+  }
   console.log(`批次ID   : ${result.batchId}`);
   console.log(`成功数量 : ${result.successCount}`);
   console.log(`跳过数量 : ${result.skippedCount}`);
   console.log(`失败数量 : ${result.failedCount}`);
   console.log(`释放体积 : ${formatBytes(result.reclaimedBytes)}`);
 
-  if (result.errors.length > 0) {
-    console.log('\n失败明细（最多 8 条）：');
-    const rows = result.errors.slice(0, 8).map((e) => [trimToWidth(e.path, 50), trimToWidth(e.message, 40)]);
-    console.log(renderTable(['路径', '错误'], rows));
-  }
+  await printErrorDiagnostics(result.errors, {
+    defaultLimit: 5,
+    headers: ['路径', '错误'],
+    mapRow: (item) => [item.path || '-', item.message || '-'],
+  });
 }
 
 function batchTableRows(batches) {
@@ -1381,7 +1896,20 @@ function batchTableRows(batches) {
 }
 
 async function askConflictResolution(conflict) {
-  console.log(`\n检测到目标路径已存在：${conflict.originalPath}`);
+  const scope = String(conflict?.entry?.scope || MODES.CLEANUP_MONTHLY);
+  const scopeText = scope === MODES.SPACE_GOVERNANCE ? '全量治理批次' : '年月清理批次';
+  const targetPathText = trimToWidth(String(conflict?.originalPath || '-'), 66);
+  const recyclePathText = trimToWidth(String(conflict?.recyclePath || '-'), 66);
+  const sizeText = formatBytes(Number(conflict?.entry?.sizeBytes || 0));
+
+  printSection('恢复冲突处理');
+  printGuideBlock('冲突说明', [
+    { label: '目标', value: targetPathText },
+    { label: '来源', value: recyclePathText },
+    { label: '范围', value: scopeText },
+    { label: '大小', value: sizeText },
+    { label: '建议', value: '默认建议先“跳过该项”，确认后再决定覆盖或重命名' },
+  ]);
 
   const action = await askSelect({
     message: '请选择冲突处理策略',
@@ -1419,6 +1947,11 @@ async function runRestoreMode(context) {
   }
 
   printSection('可恢复批次');
+  printGuideBlock('恢复步骤 1/3 · 批次选择', [
+    { label: '来源', value: '仅展示回收区中可恢复且索引有效的批次' },
+    { label: '建议', value: '优先恢复最近批次，便于问题回滚' },
+    { label: '确认', value: 'Enter 选中后进入恢复确认' },
+  ]);
   console.log(renderTable(['序号', '批次ID', '时间', '目录数', '大小'], batchTableRows(batches)));
 
   const batchId = await askSelect({
@@ -1445,39 +1978,183 @@ async function runRestoreMode(context) {
     return;
   }
 
-  printSection('恢复中');
-  if (governanceRoot) {
-    console.log(`治理恢复白名单: Data 根目录 + 文件存储目录(${externalStorageRoots.length}项)`);
-  } else {
-    console.log(
-      `治理恢复白名单: 未识别Data根，已回退到 Profile 根目录 + 文件存储目录(${externalStorageRoots.length}项)`
-    );
-  }
-  const result = await restoreBatch({
-    batch,
-    indexPath: config.indexPath,
-    onProgress: (current, total) => printProgress('恢复目录', current, total),
-    onConflict: askConflictResolution,
-    profileRoot: config.rootDir,
-    extraProfileRoots: externalStorageRoots,
-    recycleRoot: config.recycleRoot,
-    governanceRoot,
-    extraGovernanceRoots: governanceAllowRoots,
+  printSection('恢复配置确认');
+  printGuideBlock('恢复步骤 2/3 · 白名单与冲突策略', [
+    { label: '批次', value: `${batch.batchId}（${batch.entries.length} 项）` },
+    {
+      label: '范围',
+      value: governanceRoot
+        ? `Data 根目录 + 文件存储目录(${externalStorageRoots.length}项)`
+        : `Profile 根目录 + 文件存储目录(${externalStorageRoots.length}项)`,
+    },
+    { label: '冲突', value: '若目标已存在，将询问 跳过/覆盖/重命名' },
+    { label: '安全', value: '路径越界会自动拦截并记审计状态' },
+  ]);
+  printSection('恢复执行策略');
+  const previewFirst = await askConfirm({
+    message: '先 dry-run 预演恢复？',
+    default: true,
   });
 
-  printSection('恢复结果');
-  console.log(`批次ID   : ${result.batchId}`);
-  console.log(`成功数量 : ${result.successCount}`);
-  console.log(`跳过数量 : ${result.skipCount}`);
-  console.log(`失败数量 : ${result.failCount}`);
-  console.log(`恢复体积 : ${formatBytes(result.restoredBytes)}`);
+  const runRestoreOnce = async (dryRun) => {
+    printSection(dryRun ? '恢复预演中（dry-run）' : '恢复中');
+    printGuideBlock('恢复步骤 3/3 · 执行中', [
+      { label: '动作', value: '按批次回放恢复，逐项校验路径边界' },
+      { label: '审计', value: '成功/跳过/失败都会写入索引' },
+      { label: '模式', value: dryRun ? 'dry-run 预演（不落盘）' : '真实恢复（落盘）' },
+    ]);
+    if (governanceRoot) {
+      console.log(`治理恢复白名单: Data 根目录 + 文件存储目录(${externalStorageRoots.length}项)`);
+    } else {
+      console.log(
+        `治理恢复白名单: 未识别Data根，已回退到 Profile 根目录 + 文件存储目录(${externalStorageRoots.length}项)`
+      );
+    }
 
-  if (result.errors.length > 0) {
-    console.log('\n失败明细（最多 8 条）：');
-    const rows = result.errors
-      .slice(0, 8)
-      .map((e) => [trimToWidth(e.sourcePath, 50), trimToWidth(e.message, 40)]);
-    console.log(renderTable(['路径', '错误'], rows));
+    const result = await restoreBatch({
+      batch,
+      indexPath: config.indexPath,
+      onProgress: (current, total) => printProgress('恢复目录', current, total),
+      onConflict: askConflictResolution,
+      dryRun,
+      profileRoot: config.rootDir,
+      extraProfileRoots: externalStorageRoots,
+      recycleRoot: config.recycleRoot,
+      governanceRoot,
+      extraGovernanceRoots: governanceAllowRoots,
+    });
+
+    printSection(dryRun ? '恢复预演结果（dry-run）' : '恢复结果');
+    printGuideBlock('结果摘要', [
+      { label: '批次', value: result.batchId },
+      { label: '模式', value: dryRun ? 'dry-run 预演' : '真实恢复' },
+      { label: '成功', value: `${result.successCount} 项` },
+      { label: '跳过', value: `${result.skipCount} 项` },
+      { label: '失败', value: `${result.failCount} 项` },
+      { label: '恢复', value: formatBytes(result.restoredBytes) },
+    ]);
+    if (result.failCount > 0 || result.skipCount > 0) {
+      printGuideBlock('结果建议', [
+        {
+          label: '建议',
+          value: '若有冲突或越界拦截，请按提示修正后重新恢复剩余项。',
+        },
+      ]);
+    }
+    console.log(`批次ID   : ${result.batchId}`);
+    console.log(`成功数量 : ${result.successCount}`);
+    console.log(`跳过数量 : ${result.skipCount}`);
+    console.log(`失败数量 : ${result.failCount}`);
+    console.log(`恢复体积 : ${formatBytes(result.restoredBytes)}`);
+
+    await printErrorDiagnostics(result.errors, {
+      defaultLimit: 5,
+      headers: ['路径', '错误'],
+      mapRow: (item) => [item.sourcePath || '-', item.message || '-'],
+    });
+    return result;
+  };
+
+  if (previewFirst) {
+    await runRestoreOnce(true);
+    const continueReal = await askConfirm({
+      message: 'dry-run 预演已完成，是否继续执行真实恢复？',
+      default: false,
+    });
+    if (!continueReal) {
+      console.log('已结束：dry-run 预演已完成，未执行真实恢复。');
+      return;
+    }
+  }
+
+  await runRestoreOnce(false);
+}
+
+async function runDoctorMode(context, options = {}) {
+  const { config, aliases, appMeta } = context;
+  const report = await runDoctor({
+    config,
+    aliases,
+    projectRoot: context.projectRoot,
+    appVersion: appMeta?.version || null,
+  });
+  await printDoctorReport(report, Boolean(options.jsonOutput));
+}
+
+async function runRecycleMaintainMode(context, options = {}) {
+  const { config } = context;
+  const policy = normalizeRecycleRetention(config.recycleRetention);
+  const stats = await collectRecycleStats({
+    indexPath: config.indexPath,
+    recycleRoot: config.recycleRoot,
+  });
+  const thresholdBytes = recycleThresholdBytes(config);
+  const overThreshold = stats.totalBytes > thresholdBytes;
+
+  printSection('回收区治理预览');
+  printGuideBlock('治理策略', [
+    { label: '启用', value: policy.enabled ? '是' : '否' },
+    { label: '保留', value: `最近 ${policy.minKeepBatches} 批 + ${policy.maxAgeDays} 天内` },
+    { label: '容量', value: `${formatBytes(thresholdBytes)}（当前 ${formatBytes(stats.totalBytes)}）` },
+    { label: '批次', value: `${stats.totalBatches} 批` },
+    { label: '状态', value: overThreshold ? '已超过阈值' : '未超过阈值' },
+  ]);
+
+  if (!policy.enabled) {
+    console.log('回收区治理策略已关闭，请在“交互配置”中开启。');
+    return;
+  }
+
+  const force = Boolean(options.force);
+  let dryRun = true;
+  if (force) {
+    dryRun = false;
+  } else {
+    dryRun = await askConfirm({
+      message: '先 dry-run 预览回收区治理计划？',
+      default: true,
+    });
+  }
+
+  if (!dryRun && !force) {
+    const sure = await askConfirm({
+      message: '将按策略清理回收区历史批次，是否继续？',
+      default: false,
+    });
+    if (!sure) {
+      console.log('已取消回收区治理。');
+      return;
+    }
+  }
+
+  printSection('回收区治理中');
+  const result = await maintainRecycleBin({
+    indexPath: config.indexPath,
+    recycleRoot: config.recycleRoot,
+    policy,
+    dryRun,
+    onProgress: (current, total) => printProgress('清理批次', current, total),
+  });
+
+  if (!dryRun) {
+    config.recycleRetention = {
+      ...policy,
+      lastRunAt: Date.now(),
+    };
+    await saveConfig(config);
+  }
+
+  printSection('回收区治理结果');
+  printGuideBlock('结果摘要', [
+    { label: '状态', value: result.status },
+    { label: '模式', value: dryRun ? 'dry-run 预览' : '真实清理' },
+    { label: '候选', value: `${result.candidateCount} 批` },
+    { label: '已清理', value: `${result.deletedBatches} 批` },
+    { label: '释放', value: formatBytes(result.deletedBytes) },
+    { label: '剩余', value: `${result.after.totalBatches} 批 / ${formatBytes(result.after.totalBytes)}` },
+  ]);
+  if (result.failBatches > 0) {
+    printGuideBlock('结果建议', [{ label: '建议', value: '部分批次清理失败，请检查目录权限后重试。' }]);
   }
 }
 
@@ -1561,6 +2238,10 @@ async function runSettingsMode(context) {
         { name: `全量治理冷静期: ${config.spaceGovernance.cooldownSeconds}s`, value: 'spaceCooldown' },
         { name: `Logo 主题: ${themeLabel(config.theme)}`, value: 'theme' },
         { name: '账号别名管理（用户名 | 企业名 | 短ID）', value: 'alias' },
+        {
+          name: `回收区保留策略: ${config.recycleRetention.enabled ? '开' : '关'} | ${config.recycleRetention.maxAgeDays}天 | 最近${config.recycleRetention.minKeepBatches}批 | ${config.recycleRetention.sizeThresholdGB}GB`,
+          value: 'recycleRetention',
+        },
         { name: '返回主菜单', value: 'back' },
       ],
     });
@@ -1690,13 +2371,57 @@ async function runSettingsMode(context) {
 
     if (choice === 'alias') {
       await runAliasManager(context);
+      continue;
+    }
+
+    if (choice === 'recycleRetention') {
+      const enabled = await askConfirm({
+        message: '是否启用回收区保留策略？',
+        default: config.recycleRetention.enabled !== false,
+      });
+
+      const maxAgeDays = await askInput({
+        message: '输入保留天数阈值（超过该天数可清理）',
+        default: String(config.recycleRetention.maxAgeDays),
+        validate: (value) => {
+          const n = Number.parseInt(value, 10);
+          return Number.isFinite(n) && n >= 1 ? true : '请输入 >= 1 的整数';
+        },
+      });
+      const minKeepBatches = await askInput({
+        message: '输入至少保留最近批次数',
+        default: String(config.recycleRetention.minKeepBatches),
+        validate: (value) => {
+          const n = Number.parseInt(value, 10);
+          return Number.isFinite(n) && n >= 1 ? true : '请输入 >= 1 的整数';
+        },
+      });
+      const sizeThresholdGB = await askInput({
+        message: '输入容量阈值（GB，超过后会提示治理）',
+        default: String(config.recycleRetention.sizeThresholdGB),
+        validate: (value) => {
+          const n = Number.parseInt(value, 10);
+          return Number.isFinite(n) && n >= 1 ? true : '请输入 >= 1 的整数';
+        },
+      });
+
+      config.recycleRetention = normalizeRecycleRetention({
+        ...config.recycleRetention,
+        enabled,
+        maxAgeDays: Number.parseInt(maxAgeDays, 10),
+        minKeepBatches: Number.parseInt(minKeepBatches, 10),
+        sizeThresholdGB: Number.parseInt(sizeThresholdGB, 10),
+      });
+      await saveConfig(config);
+      console.log('已保存回收区保留策略。');
     }
   }
 }
 
-async function runMode(mode, context) {
+async function runMode(mode, context, options = {}) {
   if (mode === MODES.CLEANUP_MONTHLY) {
     await runCleanupMode(context);
+    await printRecyclePressureHint(context.config);
     return;
   }
   if (mode === MODES.ANALYSIS_ONLY) {
@@ -1705,10 +2430,19 @@ async function runMode(mode, context) {
   }
   if (mode === MODES.SPACE_GOVERNANCE) {
     await runSpaceGovernanceMode(context);
+    await printRecyclePressureHint(context.config);
     return;
   }
   if (mode === MODES.RESTORE) {
     await runRestoreMode(context);
+    return;
+  }
+  if (mode === MODES.DOCTOR) {
+    await runDoctorMode(context, options);
+    return;
+  }
+  if (mode === MODES.RECYCLE_MAINTAIN) {
+    await runRecycleMaintainMode(context, options);
     return;
   }
   if (mode === MODES.SETTINGS) {
@@ -1716,6 +2450,52 @@ async function runMode(mode, context) {
     return;
   }
   throw new Error(`不支持的运行模式: ${mode}`);
+}
+
+function formatLockOwner(lockInfo) {
+  if (!lockInfo || typeof lockInfo !== 'object') {
+    return '未知实例';
+  }
+  const pid = Number(lockInfo.pid || 0);
+  const mode = String(lockInfo.mode || 'unknown');
+  const host = String(lockInfo.hostname || 'unknown');
+  const startedAt = Number(lockInfo.startedAt || 0);
+  const startedText = Number.isFinite(startedAt) && startedAt > 0 ? formatLocalDate(startedAt) : 'unknown';
+  return `PID ${pid || '-'} | 模式 ${mode} | 主机 ${host} | 启动 ${startedText}`;
+}
+
+async function acquireExecutionLock(stateRoot, mode, options = {}) {
+  try {
+    return await acquireLock(stateRoot, mode);
+  } catch (error) {
+    if (!(error instanceof LockHeldError)) {
+      throw error;
+    }
+
+    const ownerText = formatLockOwner(error.lockInfo);
+    if (!error.isStale) {
+      throw new Error(`已有实例正在运行：${ownerText}`);
+    }
+
+    if (options.force) {
+      await breakLock(error.lockPath);
+      return acquireLock(stateRoot, mode);
+    }
+
+    if (!process.stdout.isTTY) {
+      throw new Error(`检测到疑似陈旧锁：${ownerText}。可追加 --force 自动清理后重试。`);
+    }
+
+    const clearStaleLock = await askConfirm({
+      message: `检测到陈旧锁（${ownerText}），是否清理后继续？`,
+      default: false,
+    });
+    if (!clearStaleLock) {
+      throw new Error('已取消：未清理陈旧锁。');
+    }
+    await breakLock(error.lockPath);
+    return acquireLock(stateRoot, mode);
+  }
 }
 
 async function main() {
@@ -1735,65 +2515,86 @@ async function main() {
     nativeCorePath: nativeProbe.nativeCorePath || null,
     nativeRepairNote: nativeProbe.repairNote || null,
     appMeta,
+    projectRoot,
   };
 
-  if (cliArgs.mode) {
-    await runMode(cliArgs.mode, context);
-    return;
+  const runModeValue = cliArgs.mode || MODES.START;
+  let lockHandle = null;
+  if (runModeValue !== MODES.DOCTOR) {
+    lockHandle = await acquireExecutionLock(config.stateRoot, runModeValue, { force: cliArgs.force });
   }
 
-  while (true) {
-    const accounts = await discoverAccounts(config.rootDir, context.aliases);
-    const detectedExternalStorage = await detectExternalStorageRoots({
-      configuredRoots: config.externalStorageRoots,
-      profilesRoot: config.rootDir,
-      autoDetect: config.externalStorageAutoDetect !== false,
-      returnMeta: true,
-    });
-    const detectedExternalStorageRoots = detectedExternalStorage.roots;
-    const profileRootHealth = await evaluateProfileRootHealth(config.rootDir, accounts);
-    printHeader({
-      config,
-      accountCount: accounts.length,
-      nativeCorePath: context.nativeCorePath,
-      lastRunEngineUsed: context.lastRunEngineUsed || null,
-      appMeta: context.appMeta,
-      nativeRepairNote: context.nativeRepairNote,
-      externalStorageRoots: detectedExternalStorageRoots,
-      externalStorageMeta: detectedExternalStorage.meta,
-      profileRootHealth,
-    });
-
-    const mode = await askSelect({
-      message: '开始菜单：请选择功能',
-      default: MODES.CLEANUP_MONTHLY,
-      choices: [
-        { name: '年月清理（默认，可执行删除）', value: MODES.CLEANUP_MONTHLY },
-        { name: '会话分析（只读，不处理）', value: MODES.ANALYSIS_ONLY },
-        { name: '全量空间治理（分级，安全优先）', value: MODES.SPACE_GOVERNANCE },
-        { name: '恢复已删除批次', value: MODES.RESTORE },
-        { name: '交互配置', value: MODES.SETTINGS },
-        { name: '退出', value: 'exit' },
-      ],
-    });
-
-    if (mode === 'exit') {
-      break;
+  try {
+    if (cliArgs.mode) {
+      await runMode(cliArgs.mode, context, {
+        jsonOutput: cliArgs.jsonOutput,
+        force: cliArgs.force,
+      });
+      return;
     }
 
-    await runMode(mode, context);
+    while (true) {
+      const accounts = await discoverAccounts(config.rootDir, context.aliases);
+      const detectedExternalStorage = await detectExternalStorageRoots({
+        configuredRoots: config.externalStorageRoots,
+        profilesRoot: config.rootDir,
+        autoDetect: config.externalStorageAutoDetect !== false,
+        returnMeta: true,
+      });
+      const detectedExternalStorageRoots = detectedExternalStorage.roots;
+      const profileRootHealth = await evaluateProfileRootHealth(config.rootDir, accounts);
+      printHeader({
+        config,
+        accountCount: accounts.length,
+        nativeCorePath: context.nativeCorePath,
+        lastRunEngineUsed: context.lastRunEngineUsed || null,
+        appMeta: context.appMeta,
+        nativeRepairNote: context.nativeRepairNote,
+        externalStorageRoots: detectedExternalStorageRoots,
+        externalStorageMeta: detectedExternalStorage.meta,
+        profileRootHealth,
+      });
 
-    const back = await askConfirm({
-      message: '返回主菜单？',
-      default: true,
-    });
+      const mode = await askSelect({
+        message: '开始菜单：请选择功能',
+        default: MODES.CLEANUP_MONTHLY,
+        choices: [
+          { name: '年月清理（默认，可执行删除）', value: MODES.CLEANUP_MONTHLY },
+          { name: '会话分析（只读，不处理）', value: MODES.ANALYSIS_ONLY },
+          { name: '全量空间治理（分级，安全优先）', value: MODES.SPACE_GOVERNANCE },
+          { name: '恢复已删除批次', value: MODES.RESTORE },
+          { name: '回收区治理（保留策略）', value: MODES.RECYCLE_MAINTAIN },
+          { name: '系统自检（doctor）', value: MODES.DOCTOR },
+          { name: '交互配置', value: MODES.SETTINGS },
+          { name: '退出', value: 'exit' },
+        ],
+      });
 
-    if (!back) {
-      break;
+      if (mode === 'exit') {
+        break;
+      }
+
+      await runMode(mode, context, {
+        jsonOutput: false,
+        force: false,
+      });
+
+      const back = await askConfirm({
+        message: '返回主菜单？',
+        default: true,
+      });
+
+      if (!back) {
+        break;
+      }
+    }
+
+    console.log('已退出。');
+  } finally {
+    if (lockHandle && typeof lockHandle.release === 'function') {
+      await lockHandle.release();
     }
   }
-
-  console.log('已退出。');
 }
 
 main().catch((error) => {

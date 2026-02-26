@@ -28,6 +28,8 @@ test('parseCliArgs 可正确解析常用参数', () => {
     'analysis_only',
     '--theme',
     'dark',
+    '--json',
+    '--force',
   ]);
 
   assert.equal(parsed.rootDir, '/tmp/profiles');
@@ -37,6 +39,8 @@ test('parseCliArgs 可正确解析常用参数', () => {
   assert.equal(parsed.dryRunDefault, true);
   assert.equal(parsed.mode, 'analysis_only');
   assert.equal(parsed.theme, 'dark');
+  assert.equal(parsed.jsonOutput, true);
+  assert.equal(parsed.force, true);
 });
 
 test('parseCliArgs 对非法参数会抛出 CliArgError', () => {
@@ -70,11 +74,15 @@ test('loadConfig/saveConfig/aliases 读写链路正常', async (t) => {
 
   loaded.theme = 'dark';
   loaded.spaceGovernance.autoSuggest.sizeThresholdMB = 1024;
+  loaded.recycleRetention.maxAgeDays = 45;
+  loaded.recycleRetention.minKeepBatches = 12;
   await saveConfig(loaded);
 
   const reloaded = await loadConfig({ stateRoot });
   assert.equal(reloaded.theme, 'dark');
   assert.equal(reloaded.spaceGovernance.autoSuggest.sizeThresholdMB, 1024);
+  assert.equal(reloaded.recycleRetention.maxAgeDays, 45);
+  assert.equal(reloaded.recycleRetention.minKeepBatches, 12);
 
   const aliasPath = path.join(stateRoot, 'account-aliases.json');
   await saveAliases(aliasPath, {
@@ -91,4 +99,6 @@ test('defaultConfig 输出基础字段完整', () => {
   assert.equal(typeof cfg.stateRoot, 'string');
   assert.equal(typeof cfg.recycleRoot, 'string');
   assert.equal(cfg.theme, 'auto');
+  assert.equal(typeof cfg.recycleRetention, 'object');
+  assert.equal(cfg.recycleRetention.enabled, true);
 });

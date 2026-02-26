@@ -2,6 +2,7 @@ import { promises as fs, createReadStream } from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { appendJsonLine, ensureDir, pathExists } from './utils.js';
+import { classifyErrorType, ERROR_TYPES } from './error-taxonomy.js';
 
 async function movePath(src, dest) {
   await ensureDir(path.dirname(dest));
@@ -317,6 +318,7 @@ export async function restoreBatch({
   indexPath,
   onConflict,
   onProgress,
+  dryRun = false,
   profileRoot = null,
   extraProfileRoots = [],
   recycleRoot = null,
@@ -369,6 +371,7 @@ export async function restoreBatch({
         recyclePath,
         sourcePath: originalPath,
         status: 'skipped_invalid_path',
+        error_type: ERROR_TYPES.PATH_VALIDATION_FAILED,
         invalid_reason: invalidPathReason,
         profile_root: profileRoot,
         extra_profile_roots: extraProfileRoots,
@@ -389,6 +392,7 @@ export async function restoreBatch({
         recyclePath,
         sourcePath: originalPath,
         status: 'skipped_missing_recycle',
+        error_type: ERROR_TYPES.PATH_NOT_FOUND,
         profile_root: profileRoot,
         extra_profile_roots: extraProfileRoots,
         recycle_root: recycleRoot,
@@ -429,6 +433,7 @@ export async function restoreBatch({
           recyclePath,
           sourcePath: originalPath,
           status: 'skipped_conflict',
+          error_type: ERROR_TYPES.CONFLICT,
           profile_root: profileRoot,
           extra_profile_roots: extraProfileRoots,
           recycle_root: recycleRoot,
@@ -447,6 +452,29 @@ export async function restoreBatch({
       }
     }
 
+    if (dryRun) {
+      summary.successCount += 1;
+      summary.restoredBytes += Number(entry.sizeBytes || 0);
+
+      await appendJsonLine(indexPath, {
+        action: 'restore',
+        time: Date.now(),
+        scope,
+        batchId: batch.batchId,
+        recyclePath,
+        sourcePath: originalPath,
+        restoredPath: targetPath,
+        status: 'dry_run',
+        dryRun: true,
+        profile_root: profileRoot,
+        extra_profile_roots: extraProfileRoots,
+        recycle_root: recycleRoot,
+        governance_root: governanceRoot,
+        extra_governance_roots: extraGovernanceRoots,
+      });
+      continue;
+    }
+
     try {
       await movePath(recyclePath, targetPath);
       summary.successCount += 1;
@@ -461,6 +489,7 @@ export async function restoreBatch({
         sourcePath: originalPath,
         restoredPath: targetPath,
         status: 'success',
+        dryRun: false,
         profile_root: profileRoot,
         extra_profile_roots: extraProfileRoots,
         recycle_root: recycleRoot,
@@ -483,6 +512,8 @@ export async function restoreBatch({
         recyclePath,
         sourcePath: originalPath,
         status: 'failed',
+        error_type: classifyErrorType(error instanceof Error ? error.message : String(error)),
+        dryRun: false,
         error: error instanceof Error ? error.message : String(error),
         profile_root: profileRoot,
         extra_profile_roots: extraProfileRoots,

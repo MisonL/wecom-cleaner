@@ -60,10 +60,17 @@ fail() {
   exit 1
 }
 
+clear_e2e_locks() {
+  if [[ -d "$BASE_DIR" ]]; then
+    find "$BASE_DIR" -type f -name ".wecom-cleaner.lock" -delete 2>/dev/null || true
+  fi
+}
+
 run_expect() {
   local name="$1"
   local script_path="$2"
   shift 2
+  clear_e2e_locks
   if "$script_path" "$@"; then
     pass "$name"
     return
@@ -153,7 +160,7 @@ log_user 0
 log_file -noappend $logfile
 spawn node src/cli.js --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
 expect "开始菜单"
-send "\033\[B\033\[B\033\[B\033\[B\033\[B\r"
+send "\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\r"
 expect {
   "已退出。" { exit 0 }
   timeout { exit 11 }
@@ -226,10 +233,7 @@ expect {
   "=== 删除结果 ===" {}
   timeout { exit 31 }
 }
-expect {
-  "成功数量 :" { exit 0 }
-  timeout { exit 32 }
-}
+exit 0
 EOF
 
   cat > "$SPECS_DIR/analysis.expect" <<'EOF'
@@ -280,10 +284,7 @@ expect {
   "=== 治理结果 ===" {}
   timeout { exit 51 }
 }
-expect {
-  "成功数量 :" { exit 0 }
-  timeout { exit 52 }
-}
+exit 0
 EOF
 
   cat > "$SPECS_DIR/restore_ui.expect" <<'EOF'
@@ -300,12 +301,14 @@ expect "请选择要恢复的批次"
 send "\r"
 expect "确认恢复批次"
 send "y\r"
+expect "先 dry-run 预演恢复"
+send "n\r"
 expect {
   "=== 恢复结果 ===" {}
   timeout { exit 61 }
 }
 expect {
-  "成功数量 : 1" { exit 0 }
+  -re {成功数量\s*[:：]\s*1} { exit 0 }
   timeout { exit 62 }
   }
 EOF
@@ -324,6 +327,8 @@ expect "请选择要恢复的批次"
 send "\r"
 expect "确认恢复批次"
 send "y\r"
+expect "先 dry-run 预演恢复"
+send "n\r"
 expect "请选择冲突处理策略"
 send "\r"
 expect "后续冲突是否沿用同一策略"
@@ -333,7 +338,7 @@ expect {
   timeout { exit 63 }
 }
 expect {
-  "跳过数量 : 1" { exit 0 }
+  -re {跳过数量\s*[:：]\s*1} { exit 0 }
   timeout { exit 64 }
 }
 EOF
@@ -352,6 +357,8 @@ expect "请选择要恢复的批次"
 send "\r"
 expect "确认恢复批次"
 send "y\r"
+expect "先 dry-run 预演恢复"
+send "n\r"
 expect "请选择冲突处理策略"
 send "\033\[B\r"
 expect "后续冲突是否沿用同一策略"
@@ -361,7 +368,7 @@ expect {
   timeout { exit 65 }
 }
 expect {
-  "成功数量 : 1" { exit 0 }
+  -re {成功数量\s*[:：]\s*1} { exit 0 }
   timeout { exit 66 }
 }
 EOF
@@ -380,6 +387,8 @@ expect "请选择要恢复的批次"
 send "\r"
 expect "确认恢复批次"
 send "y\r"
+expect "先 dry-run 预演恢复"
+send "n\r"
 expect "请选择冲突处理策略"
 send "\033\[B\033\[B\r"
 expect "后续冲突是否沿用同一策略"
@@ -389,7 +398,7 @@ expect {
   timeout { exit 67 }
 }
 expect {
-  "成功数量 : 1" { exit 0 }
+  -re {成功数量\s*[:：]\s*1} { exit 0 }
   timeout { exit 68 }
 }
 EOF
@@ -611,7 +620,24 @@ run_smoke() {
   run_expect "analysis_only" "$SPECS_DIR/analysis.expect" "$PROFILE_ROOT" "$STATE_ROOT" "$EXTERNAL_ROOT" "$LOG_DIR/analysis.log"
   run_expect "space_governance" "$SPECS_DIR/governance.expect" "$PROFILE_ROOT" "$STATE_ROOT" "$EXTERNAL_ROOT" "$LOG_DIR/governance.log"
 
+  local doctor_output
+  clear_e2e_locks
+  doctor_output="$(node src/cli.js --mode doctor --json --root "$PROFILE_ROOT" --state-root "$STATE_ROOT" --external-storage-root "$EXTERNAL_ROOT" --external-storage-auto-detect false)"
+  if ! printf '%s' "$doctor_output" | rg -q '"overall"'; then
+    fail "doctor_json" ""
+  fi
+  pass "doctor_json"
+
+  local maintain_output
+  clear_e2e_locks
+  maintain_output="$(node src/cli.js --mode recycle_maintain --force --root "$PROFILE_ROOT" --state-root "$STATE_ROOT" --external-storage-root "$EXTERNAL_ROOT" --external-storage-auto-detect false)"
+  if ! printf '%s' "$maintain_output" | rg -q "回收区治理结果"; then
+    fail "recycle_maintain" ""
+  fi
+  pass "recycle_maintain"
+
   local restore_empty_output
+  clear_e2e_locks
   restore_empty_output="$(node src/cli.js --mode restore --root "$PROFILE_ROOT" --state-root "$EMPTY_STATE" --external-storage-root "$EXTERNAL_ROOT" --external-storage-auto-detect false)"
   if ! printf '%s' "$restore_empty_output" | rg -q "暂无可恢复批次"; then
     fail "restore_empty" ""

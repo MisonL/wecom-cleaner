@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { DEFAULT_PROFILE_ROOT, DEFAULT_STATE_ROOT } from './constants.js';
 import { ensureDir, expandHome, readJson, writeJson } from './utils.js';
+import { normalizeRecycleRetention } from './recycle-maintenance.js';
 
 const ALLOWED_THEMES = new Set(['auto', 'light', 'dark']);
 
@@ -24,6 +25,13 @@ function normalizeTheme(theme) {
 
 export function defaultConfig() {
   const stateRoot = DEFAULT_STATE_ROOT;
+  const recycleRetention = normalizeRecycleRetention({
+    enabled: true,
+    maxAgeDays: 30,
+    minKeepBatches: 20,
+    sizeThresholdGB: 20,
+    lastRunAt: 0,
+  });
   return {
     rootDir: DEFAULT_PROFILE_ROOT,
     externalStorageRoots: [],
@@ -42,6 +50,7 @@ export function defaultConfig() {
       cooldownSeconds: 5,
       lastSelectedTargets: [],
     },
+    recycleRetention,
     theme: 'auto',
   };
 }
@@ -82,6 +91,8 @@ export function parseCliArgs(argv) {
     dryRunDefault: null,
     mode: null,
     theme: null,
+    jsonOutput: false,
+    force: false,
   };
 
   const takeValue = (flag, index) => {
@@ -144,6 +155,14 @@ export function parseCliArgs(argv) {
       i += 1;
       continue;
     }
+    if (token === '--json') {
+      parsed.jsonOutput = true;
+      continue;
+    }
+    if (token === '--force') {
+      parsed.force = true;
+      continue;
+    }
     if (token.startsWith('-')) {
       throw new CliArgError(`不支持的参数: ${token}`);
     }
@@ -204,6 +223,7 @@ export async function loadConfig(cliArgs = {}) {
   };
 
   merged.spaceGovernance = normalizeSpaceGovernance(fileConfig.spaceGovernance, base.spaceGovernance);
+  merged.recycleRetention = normalizeRecycleRetention(fileConfig.recycleRetention, base.recycleRetention);
 
   merged.recycleRoot = expandHome(fileConfig.recycleRoot || path.join(stateRoot, 'recycle-bin'));
   merged.indexPath = expandHome(fileConfig.indexPath || path.join(stateRoot, 'index.jsonl'));
@@ -229,6 +249,7 @@ export async function saveConfig(config) {
     dryRunDefault: Boolean(config.dryRunDefault),
     defaultCategories: Array.isArray(config.defaultCategories) ? config.defaultCategories : [],
     spaceGovernance: normalizeSpaceGovernance(config.spaceGovernance, defaultConfig().spaceGovernance),
+    recycleRetention: normalizeRecycleRetention(config.recycleRetention, defaultConfig().recycleRetention),
     theme: normalizeTheme(config.theme) || 'auto',
   };
   await writeJson(config.configPath, payload);

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import { executeCleanup } from '../src/cleanup.js';
 import { pathExists, readJsonLines } from '../src/utils.js';
+import { ERROR_TYPES } from '../src/error-taxonomy.js';
 import { ensureFile, makeTempDir, removeDir } from './helpers/temp.js';
 
 test('executeCleanup dry-run 不移动文件但记录审计', async (t) => {
@@ -42,6 +43,7 @@ test('executeCleanup dry-run 不移动文件但记录审计', async (t) => {
   assert.equal(rows.length, 1);
   assert.equal(rows[0].status, 'dry_run');
   assert.equal(rows[0].recyclePath, null);
+  assert.equal(rows[0].error_type, undefined);
 });
 
 test('executeCleanup 真删模式支持策略跳过、缺失跳过和移动回收', async (t) => {
@@ -114,7 +116,19 @@ test('executeCleanup 真删模式支持策略跳过、缺失跳过和移动回�
     true
   );
   assert.equal(
+    rows.some(
+      (row) => row.status === 'skipped_policy_protected' && row.error_type === ERROR_TYPES.POLICY_SKIPPED
+    ),
+    true
+  );
+  assert.equal(
     rows.some((row) => row.status === 'skipped_missing_source'),
+    true
+  );
+  assert.equal(
+    rows.some(
+      (row) => row.status === 'skipped_missing_source' && row.error_type === ERROR_TYPES.PATH_NOT_FOUND
+    ),
     true
   );
 
@@ -125,4 +139,42 @@ test('executeCleanup 真删模式支持策略跳过、缺失跳过和移动回�
 
   const movedContent = await fs.readFile(path.join(moved.recyclePath, 'payload.txt'), 'utf-8');
   assert.equal(movedContent, 'move');
+});
+
+test('executeCleanup 在移动失败时写入 failed 与 error_type', async (t) => {
+  const root = await makeTempDir('wecom-cleanup-failed-');
+  t.after(async () => removeDir(root));
+
+  const source = path.join(root, 'source-parent');
+  const recycleRoot = path.join(source, 'recycle-under-source');
+  const indexPath = path.join(root, 'index.jsonl');
+  await ensureFile(path.join(source, 'payload.txt'), 'boom');
+
+  const result = await executeCleanup({
+    targets: [
+      {
+        path: source,
+        accountId: 'acc001',
+        accountShortId: 'acc001',
+        userName: '用户A',
+        corpName: '企业A',
+        categoryKey: 'files',
+        categoryLabel: '聊天文件',
+        monthKey: '2024-01',
+        sizeBytes: 4,
+      },
+    ],
+    recycleRoot,
+    indexPath,
+    dryRun: false,
+  });
+
+  assert.equal(result.failedCount, 1);
+  assert.equal(result.errors.length, 1);
+
+  const rows = await readJsonLines(indexPath);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].status, 'failed');
+  assert.equal(typeof rows[0].error_type, 'string');
+  assert.equal(typeof rows[0].error, 'string');
 });

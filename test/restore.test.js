@@ -4,6 +4,7 @@ import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import { listRestorableBatches, restoreBatch } from '../src/restore.js';
 import { appendJsonLine, ensureDir, pathExists, readJsonLines } from '../src/utils.js';
+import { ERROR_TYPES } from '../src/error-taxonomy.js';
 import { ensureFile, makeTempDir, removeDir } from './helpers/temp.js';
 
 async function buildBatchFixture(root, strategy) {
@@ -121,6 +122,11 @@ test('restoreBatch 冲突策略: skip/overwrite/rename', async (t) => {
       assert.equal(await pathExists(fixture.recyclePath), true);
       const sourceText = await fs.readFile(path.join(fixture.sourcePath, 'payload.txt'), 'utf-8');
       assert.equal(sourceText, 'sentinel-skip');
+
+      const rows = await readJsonLines(fixture.indexPath);
+      const skipped = rows.find((row) => row.action === 'restore' && row.status === 'skipped_conflict');
+      assert.ok(skipped);
+      assert.equal(skipped.error_type, ERROR_TYPES.CONFLICT);
     }
 
     if (strategy === 'overwrite') {
@@ -188,4 +194,74 @@ test('restoreBatch 会拦截越界恢复并写入审计', async (t) => {
   const record = rows.find((row) => row.action === 'restore' && row.status === 'skipped_invalid_path');
   assert.ok(record);
   assert.equal(record.invalid_reason, 'source_outside_profile_root');
+  assert.equal(record.error_type, ERROR_TYPES.PATH_VALIDATION_FAILED);
+});
+
+test('restoreBatch 支持 dry-run 并写入审计', async (t) => {
+  const root = await makeTempDir('wecom-restore-dryrun-');
+  t.after(async () => removeDir(root));
+
+  const fixture = await buildBatchFixture(root, 'dryrun');
+  const summary = await restoreBatch({
+    batch: fixture.batch,
+    indexPath: fixture.indexPath,
+    profileRoot: fixture.profileRoot,
+    recycleRoot: fixture.recycleRoot,
+    governanceRoot: null,
+    dryRun: true,
+    onConflict: async () => ({ action: 'overwrite', applyToAll: false }),
+  });
+
+  assert.equal(summary.successCount, 1);
+  assert.equal(await pathExists(fixture.recyclePath), true);
+
+  const rows = await readJsonLines(fixture.indexPath);
+  const dryRunRow = rows.find((row) => row.action === 'restore' && row.status === 'dry_run');
+  assert.ok(dryRunRow);
+  assert.equal(dryRunRow.dryRun, true);
+});
+
+test('restoreBatch 在移动失败时写入 failed 与 error_type', async (t) => {
+  const root = await makeTempDir('wecom-restore-failed-');
+  t.after(async () => removeDir(root));
+
+  const profileRoot = path.join(root, 'Profiles');
+  const recycleRoot = path.join(root, 'state', 'recycle-bin');
+  const indexPath = path.join(root, 'state', 'index.jsonl');
+  const recyclePath = path.join(recycleRoot, 'batch-failed', '0001_case');
+  await ensureFile(path.join(recyclePath, 'payload.txt'), 'restore-content');
+
+  const targetPath = path.join(recyclePath, 'inside-target');
+  const batch = {
+    batchId: 'batch-failed',
+    firstTime: Date.now(),
+    totalBytes: 8,
+    entries: [
+      {
+        batchId: 'batch-failed',
+        scope: 'cleanup_monthly',
+        sourcePath: targetPath,
+        recyclePath,
+        sizeBytes: 8,
+      },
+    ],
+  };
+
+  const summary = await restoreBatch({
+    batch,
+    indexPath,
+    profileRoot,
+    recycleRoot,
+    governanceRoot: null,
+    extraProfileRoots: [root],
+  });
+
+  assert.equal(summary.failCount, 1);
+  assert.equal(summary.errors.length, 1);
+
+  const rows = await readJsonLines(indexPath);
+  const failed = rows.find((row) => row.action === 'restore' && row.status === 'failed');
+  assert.ok(failed);
+  assert.equal(typeof failed.error_type, 'string');
+  assert.equal(typeof failed.error, 'string');
 });
