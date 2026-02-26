@@ -6,7 +6,23 @@
 
 ## [Unreleased]
 
-暂无。
+### Added
+
+- 新增极端场景测试矩阵文档：`docs/TEST_MATRIX.md`。
+- 新增无交互契约测试：锁定关键动作的公共 JSON 字段与类型稳定性。
+- 新增 text/json 一致性测试：无目标场景下结论语义保持一致。
+- 新增符号链接逃逸防护测试：
+  - `executeCleanup` 的 `source_symlink_escape`
+  - `restoreBatch` 的 `source_symlink_escape`
+
+### Changed
+
+- `README.md` 增加“测试矩阵”入口，明确新增动作与字段的补测要求。
+- `scripts/e2e-smoke.sh` 增强失败定位信息：输出上下文、落盘关键命令日志。
+
+### Fixed
+
+- 修复 E2E 在 `doctor_json` / `recycle_maintain` 失败时日志不充分的问题，降低排障成本。
 
 ## [1.2.0] - 2026-02-26
 
