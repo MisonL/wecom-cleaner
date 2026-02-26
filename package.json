@@ -14,7 +14,7 @@
   "homepage": "https://github.com/MisonL/wecom-cleaner",
   "type": "module",
   "bin": {
-    "wecom-cleaner": "./src/cli.js"
+    "wecom-cleaner": "src/cli.js"
   },
   "main": "./src/cli.js",
   "files": [
