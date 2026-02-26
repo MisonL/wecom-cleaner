@@ -4,3 +4,9 @@ node_modules/
 *.tgz
 coverage/
 .wecom-cleaner-state/
+
+# Native build outputs
+native/bin/
+
+# Release staging outputs
+dist/
