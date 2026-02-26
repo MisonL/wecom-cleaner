@@ -172,7 +172,7 @@ set ext [lindex $argv 2]
 set logfile [lindex $argv 3]
 log_user 0
 log_file -noappend $logfile
-spawn node src/cli.js --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
+spawn node src/cli.js --interactive --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
 expect "开始菜单"
 send "\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\r"
 expect {
@@ -190,7 +190,7 @@ set ext [lindex $argv 2]
 set logfile [lindex $argv 3]
 log_user 0
 log_file -noappend $logfile
-spawn node src/cli.js --mode cleanup_monthly --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
+spawn node src/cli.js --interactive --mode cleanup_monthly --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
 expect "请选择要处理的账号"
 send "\r"
 expect "检测到文件存储目录"
@@ -224,7 +224,7 @@ set ext [lindex $argv 2]
 set logfile [lindex $argv 3]
 log_user 0
 log_file -noappend $logfile
-spawn node src/cli.js --mode cleanup_monthly --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
+spawn node src/cli.js --interactive --mode cleanup_monthly --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
 expect "请选择要处理的账号"
 send "\r"
 expect "检测到文件存储目录"
@@ -259,7 +259,7 @@ set ext [lindex $argv 2]
 set logfile [lindex $argv 3]
 log_user 0
 log_file -noappend $logfile
-spawn node src/cli.js --mode analysis_only --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
+spawn node src/cli.js --interactive --mode analysis_only --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
 expect "请选择要处理的账号"
 send "\r"
 expect "检测到文件存储目录"
@@ -281,7 +281,7 @@ set ext [lindex $argv 2]
 set logfile [lindex $argv 3]
 log_user 0
 log_file -noappend $logfile
-spawn node src/cli.js --mode space_governance --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
+spawn node src/cli.js --interactive --mode space_governance --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
 expect "请选择要处理的账号"
 send "\r"
 expect "检测到文件存储目录"
@@ -310,7 +310,7 @@ set ext [lindex $argv 2]
 set logfile [lindex $argv 3]
 log_user 0
 log_file -noappend $logfile
-spawn node src/cli.js --mode restore --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
+spawn node src/cli.js --interactive --mode restore --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
 expect "请选择要恢复的批次"
 send "\r"
 expect "确认恢复批次"
@@ -336,7 +336,7 @@ set ext [lindex $argv 2]
 set logfile [lindex $argv 3]
 log_user 0
 log_file -noappend $logfile
-spawn node src/cli.js --mode restore --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
+spawn node src/cli.js --interactive --mode restore --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
 expect "请选择要恢复的批次"
 send "\r"
 expect "确认恢复批次"
@@ -366,7 +366,7 @@ set ext [lindex $argv 2]
 set logfile [lindex $argv 3]
 log_user 0
 log_file -noappend $logfile
-spawn node src/cli.js --mode restore --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
+spawn node src/cli.js --interactive --mode restore --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
 expect "请选择要恢复的批次"
 send "\r"
 expect "确认恢复批次"
@@ -396,7 +396,7 @@ set ext [lindex $argv 2]
 set logfile [lindex $argv 3]
 log_user 0
 log_file -noappend $logfile
-spawn node src/cli.js --mode restore --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
+spawn node src/cli.js --interactive --mode restore --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
 expect "请选择要恢复的批次"
 send "\r"
 expect "确认恢复批次"
@@ -426,7 +426,7 @@ set ext [lindex $argv 2]
 set logfile [lindex $argv 3]
 log_user 0
 log_file -noappend $logfile
-spawn node src/cli.js --mode settings --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
+spawn node src/cli.js --interactive --mode settings --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
 expect "选择要调整的配置项"
 send "\r"
 expect "输入新的 Profile 根目录"
@@ -449,7 +449,7 @@ set docs [lindex $argv 3]
 set logfile [lindex $argv 4]
 log_user 0
 log_file -noappend $logfile
-spawn node src/cli.js --mode settings --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
+spawn node src/cli.js --interactive --mode settings --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
 expect "选择要调整的配置项"
 send "\033\[B\r"
 expect "输入手动追加的文件存储根目录"
@@ -472,7 +472,7 @@ set recycle [lindex $argv 3]
 set logfile [lindex $argv 4]
 log_user 0
 log_file -noappend $logfile
-spawn node src/cli.js --mode settings --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
+spawn node src/cli.js --interactive --mode settings --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
 expect "选择要调整的配置项"
 send "\033\[B\033\[B\033\[B\r"
 expect "输入新的回收区目录"
@@ -494,7 +494,7 @@ set ext [lindex $argv 2]
 set logfile [lindex $argv 3]
 log_user 0
 log_file -noappend $logfile
-spawn node src/cli.js --mode settings --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
+spawn node src/cli.js --interactive --mode settings --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
 expect "选择要调整的配置项"
 send "\033\[B\033\[B\033\[B\033\[B\033\[B\r"
 expect "输入建议体积阈值"
@@ -518,7 +518,7 @@ set ext [lindex $argv 2]
 set logfile [lindex $argv 3]
 log_user 0
 log_file -noappend $logfile
-spawn node src/cli.js --mode settings --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
+spawn node src/cli.js --interactive --mode settings --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
 expect "选择要调整的配置项"
 send "\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\r"
 expect "输入冷静期秒数"
@@ -540,7 +540,7 @@ set ext [lindex $argv 2]
 set logfile [lindex $argv 3]
 log_user 0
 log_file -noappend $logfile
-spawn node src/cli.js --mode settings --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
+spawn node src/cli.js --interactive --mode settings --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
 expect "选择要调整的配置项"
 send "\033\[B\033\[B\r"
 expect "是否启用外部存储自动探测"
@@ -562,7 +562,7 @@ set ext [lindex $argv 2]
 set logfile [lindex $argv 3]
 log_user 0
 log_file -noappend $logfile
-spawn node src/cli.js --mode settings --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
+spawn node src/cli.js --interactive --mode settings --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
 expect "选择要调整的配置项"
 send "\033\[B\033\[B\033\[B\033\[B\r"
 expect "默认是否启用 dry-run"
@@ -584,7 +584,7 @@ set ext [lindex $argv 2]
 set logfile [lindex $argv 3]
 log_user 0
 log_file -noappend $logfile
-spawn node src/cli.js --mode settings --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
+spawn node src/cli.js --interactive --mode settings --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
 expect "选择要调整的配置项"
 send "\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\r"
 expect "选择 Logo 主题"
@@ -606,7 +606,7 @@ set ext [lindex $argv 2]
 set logfile [lindex $argv 3]
 log_user 0
 log_file -noappend $logfile
-spawn node src/cli.js --mode settings --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
+spawn node src/cli.js --interactive --mode settings --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
 expect "选择要调整的配置项"
 send "\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\r"
 expect "选择要修改别名的账号"
@@ -644,15 +644,15 @@ run_smoke() {
 
   local maintain_output
   clear_e2e_locks
-  maintain_output="$(node src/cli.js --mode recycle_maintain --force --root "$PROFILE_ROOT" --state-root "$STATE_ROOT" --external-storage-root "$EXTERNAL_ROOT" --external-storage-auto-detect false)"
-  if ! printf '%s' "$maintain_output" | rg -q "回收区治理结果"; then
+  maintain_output="$(node src/cli.js --mode recycle_maintain --output text --force --root "$PROFILE_ROOT" --state-root "$STATE_ROOT" --external-storage-root "$EXTERNAL_ROOT" --external-storage-auto-detect false)"
+  if ! printf '%s' "$maintain_output" | rg -q "\[SUCCESS\] recycle_maintain"; then
     fail "recycle_maintain" ""
   fi
   pass "recycle_maintain"
 
   local restore_empty_output
   clear_e2e_locks
-  restore_empty_output="$(node src/cli.js --mode restore --root "$PROFILE_ROOT" --state-root "$EMPTY_STATE" --external-storage-root "$EXTERNAL_ROOT" --external-storage-auto-detect false)"
+  restore_empty_output="$(node src/cli.js --interactive --mode restore --root "$PROFILE_ROOT" --state-root "$EMPTY_STATE" --external-storage-root "$EXTERNAL_ROOT" --external-storage-auto-detect false)"
   if ! printf '%s' "$restore_empty_output" | rg -q "暂无可恢复批次"; then
     fail "restore_empty" ""
   fi
