@@ -145,7 +145,7 @@ run_cmd_to_file() {
   fi
   if ! wecom-cleaner "${cmd_parts[@]}" >"$output_file" 2>"$err_file"; then
     err_head="$(head -n 3 "$err_file" 2>/dev/null || true)"
-    echo "执行失败（dry-run=$dry_run）：${err_head:-未知错误}" >&2
+    echo "执行失败（dry-run=${dry_run}）：${err_head:-未知错误}" >&2
     return 1
   fi
 }
