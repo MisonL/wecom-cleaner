@@ -241,6 +241,7 @@ warnings_total=$((warnings_preview + warnings_exec + warnings_verify))
 errors_total=$((errors_preview + errors_exec + errors_verify))
 
 printf '\n=== 全量空间治理结果（给用户）===\n'
+printf -- '- 执行结论：%s（%s）\n' "$conclusion" "$reason"
 if [[ "$executed" == "true" ]]; then
   printf -- '- 已完成：已治理 %s 项空间目标，释放 %s。\n' "$execute_success" "$(human_bytes "$execute_reclaimed")"
 elif [[ "$matched_targets" -eq 0 ]]; then
@@ -263,6 +264,7 @@ printf -- '- 命中体积：%s\n' "$(human_bytes "$matched_bytes")"
 printf -- '- 预计释放：%s\n' "$(human_bytes "$preview_reclaimed")"
 if [[ "$executed" == "true" ]]; then
   printf -- '- 实际释放：%s\n' "$(human_bytes "$execute_reclaimed")"
+  printf -- '- 执行明细：成功 %s / 跳过 %s / 失败 %s\n' "$execute_success" "$execute_skipped" "$execute_failed"
   printf -- '- 清理批次：%s（可用于恢复）\n' "$execute_batch"
   printf -- '- 复核结果：剩余可治理 %s 项\n' "$verify_matched"
 else

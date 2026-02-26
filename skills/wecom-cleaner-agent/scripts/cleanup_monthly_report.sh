@@ -275,6 +275,7 @@ if [[ -z "$selected_categories_human" ]]; then
 fi
 
 printf '\n=== 清理结果（给用户）===\n'
+printf -- '- 执行结论：%s（%s）\n' "$conclusion" "$reason"
 if [[ "$executed" == "true" ]]; then
   printf -- '- 已完成：已清理 %s 项聊天缓存，释放 %s。\n' "$execute_success" "$(human_bytes "$execute_reclaimed")"
 elif [[ "$preview_matched" -eq 0 ]]; then
@@ -287,6 +288,7 @@ printf -- '- 你的目标：清理 %s 及之前的企业微信聊天缓存。\n'
 printf '\n你关心的范围\n'
 printf -- '- 账号：%s（识别到 %s 个账号）\n' "$account_scope_label" "$scope_accounts"
 printf -- '- 数据类型：%s\n' "$selected_categories_human"
+printf -- '- 筛选月份桶：%s，筛选类别数：%s\n' "$scope_months" "$scope_categories"
 if [[ -n "$matched_month_start" && -n "$matched_month_end" ]]; then
   printf -- '- 实际命中月份：%s ~ %s\n' "$matched_month_start" "$matched_month_end"
 else
@@ -300,6 +302,7 @@ printf -- '- 命中字节：%s（命中目录当前大小）\n' "$(human_bytes "
 printf -- '- 预计释放：%s（预演估算）\n' "$(human_bytes "$preview_reclaimed")"
 if [[ "$executed" == "true" ]]; then
   printf -- '- 实际释放：%s（真实执行结果）\n' "$(human_bytes "$execute_reclaimed")"
+  printf -- '- 执行明细：成功 %s / 跳过 %s / 失败 %s\n' "$execute_success" "$execute_skipped" "$execute_failed"
   printf -- '- 清理批次：%s（可用于恢复）\n' "$execute_batch"
   printf -- '- 复核结果：剩余可清理 %s 项\n' "$verify_matched"
 else
@@ -430,6 +433,13 @@ if [[ "$executed" == "true" ]]; then
     printf -- '- 当前未返回按月份执行明细。\n'
   fi
 fi
+
+printf '\n运行状态\n'
+printf -- '- 扫描引擎：%s\n' "$engine"
+printf -- '- 总耗时：%s ms\n' "$duration_total"
+printf -- '- 告警：%s\n' "$warnings_total"
+printf -- '- 错误：%s\n' "$errors_total"
+printf -- '- 预演失败项：%s\n' "$preview_failed"
 
 if [[ "$warnings_total" -gt 0 || "$errors_total" -gt 0 ]]; then
   printf '\n异常与提示\n'
