@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
-  "version": "1.0.0",
-  "baseUrl": "https://raw.githubusercontent.com/MisonL/wecom-cleaner/v1.0.0/native/bin",
+  "version": "1.1.0",
+  "baseUrl": "https://raw.githubusercontent.com/MisonL/wecom-cleaner/v1.1.0/native/bin",
   "targets": {
     "darwin-x64": {
       "binaryName": "wecom-cleaner-core",
-      "sha256": "14cfa26895101e7b71824e6bb9282f08a38f9dad72d4df2934094eb2ceefbad0"
+      "sha256": "d6bc4b2a7b96010889fc11502fe6d76d6f8d395e6df12c44dfc79aa58b17d53c"
     },
     "darwin-arm64": {
       "binaryName": "wecom-cleaner-core",
-      "sha256": "fc33ce3fb44309170da8c2867d11eae552e2e9d3c95b8f0e5a8e8392bb630744"
+      "sha256": "f3babdfe69e83c2d0b99fe1ad525ea836e4f413c01ae2f31b569e35f2ba955f8"
     }
   }
 }

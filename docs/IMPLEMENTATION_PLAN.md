@@ -122,7 +122,7 @@
 - 使用 `c8` 输出覆盖率报告。
 - 门禁阈值：`lines/statements >= 75%`，`functions >= 80%`，`branches >= 60%`。
 - 命令：`npm run test:coverage` / `npm run test:coverage:check`。
-- `v1.0.0` 基线：`statements 85.65%`，`branches 70.99%`，`functions 91.39%`，`lines 85.65%`。
+- `v1.1.0` 基线：`statements 86.57%`，`branches 73.96%`，`functions 93.25%`，`lines 86.57%`。
 
 4. 端到端回归
 
@@ -138,21 +138,21 @@ npm run e2e:smoke -- --keep
 npm run pack:tgz:dry-run
 ```
 
-## 7. 发布执行（首个正式版）
+## 7. 发布执行（当前版本）
 
 1. 版本与产物
 
-- `package.json` / `package-lock.json`：`1.0.0`
-- `native/manifest.json`：版本与 `baseUrl` 对齐 `v1.0.0`
+- `package.json` / `package-lock.json`：`1.1.0`
+- `native/manifest.json`：版本与 `baseUrl` 对齐 `v1.1.0`
 - 默认打包双架构核心：`darwin-x64` + `darwin-arm64`
 
 2. GitHub Release
 
 ```bash
 git push origin main
-git tag v1.0.0
-git push origin v1.0.0
-gh release create v1.0.0 --title "v1.0.0" --notes-file docs/releases/v1.0.0.md wecom-cleaner-1.0.0.tgz
+git tag v1.1.0
+git push origin v1.1.0
+gh release create v1.1.0 --title "v1.1.0" --notes-file docs/releases/v1.1.0.md wecom-cleaner-1.1.0.tgz
 ```
 
 3. npm 发布

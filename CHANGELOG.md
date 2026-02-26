@@ -6,32 +6,38 @@
 
 ## [Unreleased]
 
+暂无。
+
+## [1.1.0] - 2026-02-26
+
 ### Added
 
-- 新增无交互动作参数协议：`--cleanup-monthly`、`--analysis-only`、`--space-governance`、`--restore-batch`、`--recycle-maintain`、`--doctor`。
-- 新增 AI Agent 无交互规范文档：`docs/NON_INTERACTIVE_SPEC.md`。
-- 新增无交互 CLI 集成测试：覆盖默认 JSON 输出、缺少动作报错、`--yes` 真实执行门槛与 doctor 输出。
-- 新增 `--interactive` 强制交互开关：允许携带参数时进入交互模式，并支持配合 `--mode` 直达功能菜单。
+- 新增内置 Agent 技能包：`skills/wecom-cleaner-agent`（含 `SKILL.md`、命令参考与 `agents/openai.yaml`）。
+- 新增技能安装命令：`wecom-cleaner-skill install`（支持 `--target`、`--force`、`--dry-run`）。
+- 新增 GitHub 一键安装脚本：`scripts/install-skill.sh`。
+- 新增 `skill-cli` 单元测试，覆盖 `help/path/install/force/dry-run` 与异常参数分支。
 
 ### Changed
 
-- 规范 `package.json` 的 `bin` 路径写法（`src/cli.js`），避免 `npm publish` 时出现自动清洗提示。
-- `wecom-cleaner` 启动行为调整为：不带参数进入交互模式，带参数进入无交互模式。
-- 无交互默认输出改为 JSON，支持 `--output json|text`；`--json` 作为兼容别名保留。
-- `doctor` 回收区建议命令从旧 `--mode recycle_maintain` 更新为 `--recycle-maintain`。
-- 外部文件存储自动探测由“仅结构命中”升级为“结构 + 缓存特征”联合判定，并收窄默认扫描基底，降低误判。
-- Zig 核心默认下载地址改为跟随 `native/manifest.json` 的版本标签，避免固定版本地址导致的升级漂移。
-- 锁机制支持自动回收陈旧锁（保留 `--force` 作为异常场景兜底）。
-- 交互 smoke 脚本切换到 `--interactive` 调用方式，兼容“带参数默认无交互”的新契约。
+- 无交互动作协议正式化：`--cleanup-monthly`、`--analysis-only`、`--space-governance`、`--restore-batch`、`--recycle-maintain`、`--doctor`。
+- 新增 AI Agent 无交互规范文档：`docs/NON_INTERACTIVE_SPEC.md`。
+- `wecom-cleaner` 启动行为统一为：不带参数进入交互模式，带参数进入无交互模式。
+- 无交互默认输出调整为 JSON，支持 `--output json|text`，并保留 `--json` 兼容别名。
+- 兼容参数 `--mode` 仍可用，但输出迁移提示，建议改用动作参数。
+- Zig 核心自动修复下载地址跟随 `native/manifest.json` 版本标签。
+- 锁机制支持自动回收陈旧锁，保留 `--force` 作为兜底。
+- 版本号统一升级为 `1.1.0`（`package.json`、`package-lock.json`、`native/manifest.json`、Zig `--ping`）。
 
 ### Fixed
 
 - 回收区治理在 `dry-run` 下不再创建缺失回收目录，保持纯只读。
-- 恢复审计补齐账号/分类/月份/分级等上下文字段，便于回放与追踪。
+- 恢复流程在 `dry-run + overwrite` 场景不再触发实际删除。
+- 回收区治理对异常批次路径增加边界校验，避免越界删除风险。
+- `scripts/install-skill.sh` 兼容 `--target` 指向不存在父目录的场景。
 
 ### Security
 
-- 清理执行新增目标路径白名单边界校验（含 `realpath` 防符号链接逃逸），拦截越界目标并写审计。
+- 清理/恢复/回收区治理链路补齐路径白名单与 `realpath` 边界防护，并写入审计字段。
 
 ## [1.0.0] - 2026-02-26
 

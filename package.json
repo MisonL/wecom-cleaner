@@ -1,6 +1,6 @@
 {
   "name": "@mison/wecom-cleaner",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "企业微信本地聊天缓存清理工具（交互式 CLI/TUI）",
   "author": "MisonL",
   "license": "MIT",
@@ -14,11 +14,13 @@
   "homepage": "https://github.com/MisonL/wecom-cleaner",
   "type": "module",
   "bin": {
-    "wecom-cleaner": "src/cli.js"
+    "wecom-cleaner": "src/cli.js",
+    "wecom-cleaner-skill": "src/skill-cli.js"
   },
   "main": "./src/cli.js",
   "files": [
     "src",
+    "skills",
     "native",
     "README.md",
     "LICENSE",
@@ -43,7 +45,9 @@
     "e2e:smoke": "bash scripts/e2e-smoke.sh",
     "prepack": "npm run build:native:release && npm run check",
     "pack:tgz": "node scripts/pack-tgz.js",
-    "pack:tgz:dry-run": "node scripts/pack-tgz.js --dry-run"
+    "pack:tgz:dry-run": "node scripts/pack-tgz.js --dry-run",
+    "skill:install": "node src/skill-cli.js install",
+    "skill:path": "node src/skill-cli.js path"
   },
   "keywords": [
     "wecom",

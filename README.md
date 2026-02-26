@@ -23,6 +23,7 @@
 - [功能总览](#功能总览)
 - [能力边界](#能力边界)
 - [安装与运行](#安装与运行)
+- [Agent Skills 安装](#agent-skills-安装)
 - [常用参数](#常用参数)
 - [数据与审计文件](#数据与审计文件)
 - [开发与质量门禁](#开发与质量门禁)
@@ -127,6 +128,41 @@ npm run e2e:smoke
 - 脚本会在 `/tmp/wecom-e2e-*` 构造隔离夹具，不触碰真实企业微信目录。
 - 覆盖开始菜单与关键分支：年月清理、会话分析、全量治理、回收区治理、恢复、系统自检、设置。
 - 可用 `npm run e2e:smoke -- --keep` 保留日志与测试目录。
+
+## Agent Skills 安装
+
+内置技能：`wecom-cleaner-agent`（用于 Codex/Agent 无交互调用）。
+
+推荐方式（npmjs，最稳定）：
+
+```bash
+npx --yes --package=@mison/wecom-cleaner wecom-cleaner-skill install
+```
+
+常用参数：
+
+- `--target <dir>`：自定义安装目录（默认 `$CODEX_HOME/skills` 或 `~/.codex/skills`）
+- `--force`：覆盖已存在技能目录
+- `--dry-run`：仅预演，不落盘
+
+示例：
+
+```bash
+npx --yes --package=@mison/wecom-cleaner wecom-cleaner-skill install --force
+npx --yes --package=@mison/wecom-cleaner wecom-cleaner-skill install --target ~/.codex/skills
+```
+
+GitHub 备选方式（无 npm 包依赖）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MisonL/wecom-cleaner/main/scripts/install-skill.sh | bash
+```
+
+若需安装指定版本标签（例如 `v1.1.0`）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MisonL/wecom-cleaner/main/scripts/install-skill.sh | bash -s -- --ref v1.1.0
+```
 
 ## 常用参数
 
@@ -283,10 +319,10 @@ npm run e2e:smoke -- --keep
 npm run pack:tgz:dry-run
 ```
 
-当前基线（`v1.0.0`）：
+当前基线（`v1.1.0`）：
 
-- 单元测试：`53/53` 通过。
-- 覆盖率：`statements 85.65%`，`branches 70.99%`，`functions 91.39%`，`lines 85.65%`。
+- 单元测试：`68/68` 通过。
+- 覆盖率：`statements 86.57%`，`branches 73.96%`，`functions 93.25%`，`lines 86.57%`。
 - 全菜单 smoke：通过（含恢复冲突分支与 doctor JSON 分支）。
 
 ## 发布与打包
@@ -321,14 +357,14 @@ npm run pack:tgz
 
 # 2) 推送主分支与标签
 git push origin main
-git tag v1.0.0
-git push origin v1.0.0
+git tag v1.1.0
+git push origin v1.1.0
 
 # 3) 发布 GitHub Release（附 tgz 包）
-gh release create v1.0.0 \
-  --title "v1.0.0" \
-  --notes-file docs/releases/v1.0.0.md \
-  wecom-cleaner-1.0.0.tgz
+gh release create v1.1.0 \
+  --title "v1.1.0" \
+  --notes-file docs/releases/v1.1.0.md \
+  wecom-cleaner-1.1.0.tgz
 
 # 4) 发布 npm
 npm publish --access public
