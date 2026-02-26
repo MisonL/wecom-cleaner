@@ -63,6 +63,16 @@ const SCRIPT_CASES = [
     args: [],
     stderrPattern: /执行失败/,
   },
+  {
+    script: 'check_update_report.sh',
+    args: [],
+    stderrPattern: /执行失败/,
+  },
+  {
+    script: 'upgrade_report.sh',
+    args: [],
+    stderrPattern: /执行失败/,
+  },
 ];
 
 for (const item of SCRIPT_CASES) {

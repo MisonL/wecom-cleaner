@@ -44,6 +44,23 @@ bash scripts/recycle_maintain_report.sh --execute true
 bash scripts/doctor_report.sh
 ```
 
+### 1.7 检查更新（只读）
+
+```bash
+bash scripts/check_update_report.sh --channel stable
+```
+
+### 1.8 程序升级
+
+```bash
+# 默认仅预演（不执行真实升级）
+bash scripts/upgrade_report.sh --method npm --execute false
+
+# 明确授权后执行真实升级
+bash scripts/upgrade_report.sh --method npm --execute true
+bash scripts/upgrade_report.sh --method github-script --version 1.3.0 --execute true
+```
+
 ## 2. 常用全局参数
 
 以上脚本都支持透传关键参数（按动作有所不同）：
@@ -80,6 +97,13 @@ wecom-cleaner --recycle-maintain --output json
 
 # 系统自检
 wecom-cleaner --doctor --output json
+
+# 检查更新
+wecom-cleaner --check-update --output json
+
+# 程序升级（必须带 --upgrade-yes）
+wecom-cleaner --upgrade npm --upgrade-yes --output json
+wecom-cleaner --upgrade github-script --upgrade-version 1.3.0 --upgrade-yes --output json
 ```
 
 ## 4. 退出码约定

@@ -1,6 +1,6 @@
 ---
 name: wecom-cleaner-agent
-description: 用于执行和编排 wecom-cleaner 的无交互 Agent 技能。当任务涉及企业微信缓存盘点、年月清理、全量空间治理、批次恢复、回收区治理或系统自检，并要求高效执行与结构化反馈时触发。
+description: 用于执行和编排 wecom-cleaner 的无交互 Agent 技能。当任务涉及企业微信缓存盘点、年月清理、全量空间治理、批次恢复、回收区治理、系统自检、检查更新或程序升级，并要求高效执行与结构化反馈时触发。
 ---
 
 # wecom-cleaner-agent
@@ -16,9 +16,10 @@ description: 用于执行和编排 wecom-cleaner 的无交互 Agent 技能。当
 1. 全程只用无交互命令（禁止直接运行 `wecom-cleaner` 进入 TUI）。
 2. 优先脚本入口，禁止手写三步命令流（除非脚本失败或缺失）。
 3. 破坏性动作（清理/治理/恢复/回收区治理）默认预演；真实执行必须有明确授权。
-4. 若预演命中为 `0`，必须结束并说明“无需执行”，不得继续真实执行。
-5. 最终汇报必须是中文用户视角，先结论再细节，并解释关键指标含义。
-6. 禁止在终端回显完整 JSON；只输出人类可读摘要。
+4. 升级动作默认只做检查或预演（`--execute false`）；真实升级必须有明确授权。
+5. 若预演命中为 `0`，必须结束并说明“无需执行”，不得继续真实执行。
+6. 最终汇报必须是中文用户视角，先结论再细节，并解释关键指标含义。
+7. 禁止在终端回显完整 JSON；只输出人类可读摘要。
 
 ## 动作到脚本映射（必须）
 
@@ -28,6 +29,8 @@ description: 用于执行和编排 wecom-cleaner 的无交互 Agent 技能。当
 - 恢复已删除批次：`scripts/restore_batch_report.sh`
 - 回收区治理：`scripts/recycle_maintain_report.sh`
 - 系统自检：`scripts/doctor_report.sh`
+- 检查更新：`scripts/check_update_report.sh`
+- 程序升级：`scripts/upgrade_report.sh`
 
 调用顺序：
 
@@ -37,9 +40,10 @@ description: 用于执行和编排 wecom-cleaner 的无交互 Agent 技能。当
 
 ## 脚本调用约定
 
-- 默认 `--execute false`（仅预演）。
+- 默认 `--execute false`（仅预演 / 不落地）。
 - 用户明确“现在执行/开始清理/确认执行”时才传 `--execute true`。
 - 破坏性动作脚本内部会做：预演 ->（可选）真实执行 ->（可选）复核。
+- 升级脚本默认“检查 + 预演”；只有明确授权才执行真实升级。
 
 推荐参数：
 
