@@ -1,160 +1,100 @@
 # wecom-cleaner 命令参考（Agent）
 
-## 0. 极简执行模板（推荐）
+## 1. 首选入口：任务卡片脚本（统一体验）
 
-目标：清理 `YYYY-MM` 及之前。
+所有动作优先使用 `skills/wecom-cleaner-agent/scripts/` 下脚本，直接输出用户可读报告。
 
-```bash
-# 1) 预演
-wecom-cleaner --cleanup-monthly --accounts all --cutoff-month YYYY-MM --output json
-
-# 2) 真实执行（仅用户明确授权后）
-wecom-cleaner --cleanup-monthly --accounts all --cutoff-month YYYY-MM --dry-run false --yes --output json
-
-# 3) 复核（同条件）
-wecom-cleaner --cleanup-monthly --accounts all --cutoff-month YYYY-MM --output json
-```
-
-说明：
-
-- 默认不传 `--categories`，避免漏清某类缓存。
-- 默认不跑 `analysis-only`，除非出现异常结果再补做。
-
-## 1. 路径变量
-
-建议先在执行环境准备变量：
+### 1.1 年月清理
 
 ```bash
-ROOT="/Users/<name>/Library/Containers/com.tencent.WeWorkMac/Data/Documents/Profiles"
-STATE="$HOME/.wecom-cleaner-state"
+bash scripts/cleanup_monthly_report.sh --cutoff-month 2024-07 --accounts all --execute false
+bash scripts/cleanup_monthly_report.sh --cutoff-month 2024-07 --accounts all --execute true
 ```
 
-如需显式指定外部文件存储目录：
+### 1.2 会话分析（只读）
 
 ```bash
-EXT="/Volumes/Data/WXWork_Data"
+bash scripts/analysis_report.sh --accounts all
 ```
 
-## 2. 只读动作
-
-系统体检：
+### 1.3 全量空间治理
 
 ```bash
-wecom-cleaner --doctor --output json --root "$ROOT" --state-root "$STATE"
+bash scripts/space_governance_report.sh --accounts all --tiers safe,caution --execute false
+bash scripts/space_governance_report.sh --accounts all --tiers safe,caution --execute true
 ```
 
-缓存盘点（按账号/类型）：
+### 1.4 恢复已删除批次
 
 ```bash
-wecom-cleaner --analysis-only \
-  --accounts current \
-  --categories files,images,videos \
-  --output json \
-  --root "$ROOT" --state-root "$STATE"
+bash scripts/restore_batch_report.sh --batch-id 20260226-154831-c418d9 --conflict rename --execute false
+bash scripts/restore_batch_report.sh --batch-id 20260226-154831-c418d9 --conflict rename --execute true
 ```
 
-## 3. 年月清理（先 dry-run）
+### 1.5 回收区治理
 
 ```bash
-wecom-cleaner --cleanup-monthly \
-  --accounts all \
-  --cutoff-month 2024-02 \
-  --categories files,images \
-  --include-non-month-dirs false \
-  --output json \
-  --root "$ROOT" --state-root "$STATE"
+bash scripts/recycle_maintain_report.sh --execute false
+bash scripts/recycle_maintain_report.sh --execute true
 ```
 
-真实执行（仅用户明确授权后）：
+### 1.6 系统自检（只读）
 
 ```bash
-wecom-cleaner --cleanup-monthly \
-  --accounts all \
-  --months 2023-01,2023-02 \
-  --categories files \
-  --dry-run false \
-  --yes \
-  --output json \
-  --root "$ROOT" --state-root "$STATE"
+bash scripts/doctor_report.sh
 ```
 
-## 4. 全量空间治理（先 dry-run）
+## 2. 常用全局参数
+
+以上脚本都支持透传关键参数（按动作有所不同）：
+
+- `--root <path>`
+- `--state-root <path>`
+- `--accounts all|current|id1,id2`
+- `--categories <csv>`
+- `--external-roots <path1,path2>`（恢复脚本）
+- `--external-roots-source preset|configured|auto|all`（报告脚本默认 `all`）
+
+## 3. 回退方案：直接调用 wecom-cleaner
+
+仅在脚本不可用时使用直接命令，且保持 `--output json`。
 
 ```bash
-wecom-cleaner --space-governance \
-  --suggested-only true \
-  --tiers safe,caution \
-  --allow-recent-active false \
-  --output json \
-  --root "$ROOT" --state-root "$STATE"
+# 年月清理（预演）
+wecom-cleaner --cleanup-monthly --accounts all --cutoff-month 2024-07 --output json
+
+# 年月清理（真实执行）
+wecom-cleaner --cleanup-monthly --accounts all --cutoff-month 2024-07 --dry-run false --yes --output json
+
+# 会话分析
+wecom-cleaner --analysis-only --accounts all --output json
+
+# 全量空间治理
+wecom-cleaner --space-governance --accounts all --tiers safe,caution --output json
+
+# 批次恢复
+wecom-cleaner --restore-batch 20260226-154831-c418d9 --conflict rename --output json
+
+# 回收区治理
+wecom-cleaner --recycle-maintain --output json
+
+# 系统自检
+wecom-cleaner --doctor --output json
 ```
 
-真实执行：
+## 4. 退出码约定
 
-```bash
-wecom-cleaner --space-governance \
-  --targets <target1,target2> \
-  --dry-run false \
-  --yes \
-  --output json \
-  --root "$ROOT" --state-root "$STATE"
-```
+- `0`：成功（含预演成功）
+- `1`：业务失败或运行失败
+- `2`：参数错误或动作冲突
+- `3`：请求真实执行但缺少确认（`--yes`）
 
-## 5. 批次恢复
+## 5. Agent 输出要求
 
-先查可恢复批次（通过审计或先执行 `--doctor`/`--analysis-only` 获取上下文），再恢复：
+最终汇报必须包含：
 
-```bash
-wecom-cleaner --restore-batch <batchId> \
-  --conflict rename \
-  --output json \
-  --root "$ROOT" --state-root "$STATE"
-```
-
-真实恢复：
-
-```bash
-wecom-cleaner --restore-batch <batchId> \
-  --conflict overwrite \
-  --dry-run false \
-  --yes \
-  --output json \
-  --root "$ROOT" --state-root "$STATE"
-```
-
-## 6. 回收区治理
-
-```bash
-wecom-cleaner --recycle-maintain \
-  --retention-enabled true \
-  --retention-max-age-days 30 \
-  --retention-min-keep-batches 20 \
-  --retention-size-threshold-gb 20 \
-  --output json \
-  --root "$ROOT" --state-root "$STATE"
-```
-
-真实治理：
-
-```bash
-wecom-cleaner --recycle-maintain \
-  --retention-enabled true \
-  --dry-run false \
-  --yes \
-  --output json \
-  --root "$ROOT" --state-root "$STATE"
-```
-
-## 7. 输出解析要点
-
-- 成功判定：`ok == true`
-- 失败详情：`errors[]`
-- 核心统计：`summary`（如 `successCount/skippedCount/failedCount/reclaimedBytes`）
-- 执行引擎：`meta.engine`
-
-## 8. 常见失败与处理
-
-- 退出码 `2`：动作参数冲突或缺失，检查是否只给了一个动作参数。
-- 退出码 `3`：缺少真实执行确认，补 `--yes` 或回退到 dry-run。
-- `errors.code=path_validation_failed`：路径越界/白名单不匹配，核对 `--root` 与目录范围。
-- `errors.code=permission_denied`：权限不足，调整目录权限后重试。
+1. 结论（完成/仅预演/无需执行/失败）
+2. 范围（账号、月份/类别/批次/策略）
+3. 核心统计（命中、预计/实际释放、成功/跳过/失败、批次号）
+4. 分布明细（按类别/月份/路径）
+5. 安全状态（耗时、引擎、告警、错误）

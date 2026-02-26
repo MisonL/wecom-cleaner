@@ -1,5 +1,5 @@
 interface:
-  display_name: "WeCom Cleaner Agent"
-  short_description: "面向AI Agent的企业微信缓存清理与恢复无交互执行技能"
-  default_prompt: "请使用 $wecom-cleaner-agent 以最少命令执行清理任务：先dry-run，再执行，并用三段式简报反馈。"
-  brand_color: "#0EA5E9"
+  display_name: 'WeCom Cleaner Agent'
+  short_description: '面向AI Agent的企业微信缓存清理与恢复无交互执行技能'
+  default_prompt: '请使用 $wecom-cleaner-agent 执行任务：按用户意图自动选择 scripts/ 下对应报告脚本（cleanup/analysis/space/restore/recycle/doctor），优先输出中文用户任务卡片；仅在脚本不可用时回退 wecom-cleaner --output json。'
+  brand_color: '#0EA5E9'

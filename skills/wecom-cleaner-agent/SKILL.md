@@ -8,85 +8,65 @@ description: 用于执行和编排 wecom-cleaner 的无交互 Agent 技能。当
 ## 目标
 
 - 用最少命令完成目标动作。
-- 过程反馈简洁、可感知、可追踪。
-- 默认安全（先 dry-run，再按授权执行真实动作）。
+- 默认安全（先预演，再按授权执行真实动作）。
+- 输出“用户可读任务卡片”，避免技术键值堆砌。
 
-## 体验优先规则（必须遵守）
+## 强制规则
 
-1. 全程仅用无交互命令：禁止执行 `wecom-cleaner`（无参数）进入 TUI。
-2. 禁止无意义探索：不执行 `which`、不扫源码、不过度 grep，除非命令失败且必须定位原因。
-3. 单任务最多三次进度反馈：
-   - 开始执行（1句）
-   - dry-run 结果（1句）
-   - 最终结果（1句 + 关键数字）
-4. 非必要不追加动作：真实执行后仅允许做一次同条件 dry-run 复核；复核通过即结束。
-5. 仅在异常时扩展检查（如 `ok=false`、`errors` 非空、结果异常波动）。
+1. 全程只用无交互命令（禁止直接运行 `wecom-cleaner` 进入 TUI）。
+2. 优先脚本入口，禁止手写三步命令流（除非脚本失败或缺失）。
+3. 破坏性动作（清理/治理/恢复/回收区治理）默认预演；真实执行必须有明确授权。
+4. 若预演命中为 `0`，必须结束并说明“无需执行”，不得继续真实执行。
+5. 最终汇报必须是中文用户视角，先结论再细节，并解释关键指标含义。
+6. 禁止在终端回显完整 JSON；只输出人类可读摘要。
 
-## 动作契约
+## 动作到脚本映射（必须）
 
-无交互模式只能选一个动作：
+- 年月清理：`scripts/cleanup_monthly_report.sh`
+- 会话分析（只读）：`scripts/analysis_report.sh`
+- 全量空间治理：`scripts/space_governance_report.sh`
+- 恢复已删除批次：`scripts/restore_batch_report.sh`
+- 回收区治理：`scripts/recycle_maintain_report.sh`
+- 系统自检：`scripts/doctor_report.sh`
 
-- `--cleanup-monthly`
-- `--analysis-only`
-- `--space-governance`
-- `--restore-batch <batchId>`
-- `--recycle-maintain`
-- `--doctor`
+调用顺序：
 
-退出码约定：
+1. 先判断用户意图对应哪个动作。
+2. 直接调用对应脚本。
+3. 脚本失败时，才回退到 `wecom-cleaner --<action> --output json` 手工流程。
 
-- `0` 成功
-- `1` 业务失败或运行失败
-- `2` 参数错误或动作冲突
-- `3` 请求真实执行但缺少 `--yes`
+## 脚本调用约定
 
-## 安全与授权
+- 默认 `--execute false`（仅预演）。
+- 用户明确“现在执行/开始清理/确认执行”时才传 `--execute true`。
+- 破坏性动作脚本内部会做：预演 ->（可选）真实执行 ->（可选）复核。
 
-- 未获明确授权前，不执行真实删除或真实恢复。
-- `cleanup-monthly`、`space-governance`、`restore-batch`、`recycle-maintain` 默认保持 dry-run。
-- 真实执行必须同时满足：
-  - 用户明确同意
-  - 命令显式携带 `--dry-run false --yes`
-  - 已确认处理范围（账号、月份/目标、类别、目录来源）
+推荐参数：
 
-## 默认执行流程（高频任务）
+- `--root <path>`：显式指定 Profile 根目录（在多环境时强烈建议）。
+- `--state-root <path>`：显式指定状态目录（便于审计与回放）。
+- `--accounts all|current|id1,id2`：明确账号范围。
+- `--external-roots-source all`：优先纳入自动探测目录，避免漏扫用户自定义文件存储位置。
 
-当用户说“清理 X 月及之前”时，固定三步：
+## 最终汇报规范（对用户）
 
-1. `cleanup-monthly` dry-run（`--cutoff-month YYYY-MM --accounts all --output json`）
-2. 若用户已明确“执行清理”，直接真实执行同参数（加 `--dry-run false --yes`）
-3. 同参数再做一次 dry-run 复核并输出结论
+每次都要给“任务卡片”风格输出，至少包含：
 
-约束：
+1. 结果结论：是否完成、是否真实执行、是否无需执行。
+2. 用户范围：账号范围、数据范围（月份/类别/批次/策略）。
+3. 关键统计：命中数量、预计/实际释放（或恢复）空间、成功/跳过/失败、批次号。
+4. 分布明细：按类别、按月份、按路径（Top 路径样例）。
+5. 安全状态：引擎、耗时、告警数、错误数。
+6. 指标释义：解释“命中目标、预计释放、批次号、复核剩余”等含义。
 
-- 默认不加 `--categories`，避免漏类。
-- 默认不加 `--include-non-month-dirs true`，除非用户明确要求清理非月份目录。
-- 不自动补跑 `analysis-only`；仅在结果异常时再询问用户后执行。
+## 异常处理
 
-## 输出解析与回报模板
-
-- 必须使用 `--output json`。
-- 重点字段：
-  - `ok`：是否成功
-  - `action`：执行动作
-  - `dryRun`：是否预演
-  - `summary`：核心统计
-  - `warnings`：兼容或降级提示
-  - `errors`：错误详情（`code/message/path`）
-  - `meta`：版本、耗时、引擎
-
-回报模板：
-
-- dry-run：`预演完成：matchedTargets=<n>，reclaimedBytes=<n>，failed=<n>。`
-- 真实执行：`执行完成：success=<n>，failed=<n>，batchId=<id>。`
-- 复核：`复核完成：剩余可清理=<n>（同范围）。`
-- 异常：`执行失败：code=<code>，message=<msg>，建议=<next_step>。`
-
-## 交互模式原则
-
-- 默认不使用 `--interactive`。
-- 仅当用户明确要求“演示交互界面”时才进入交互模式。
+- 参数错误（退出码 `2`）：说明缺失参数并给出可执行示例。
+- 缺少确认（退出码 `3`）：提示需加 `--execute true`（脚本）或 `--dry-run false --yes`（CLI）。
+- 业务失败（退出码 `1`）：提取 `errors.code/message`，给出下一步排查建议。
+- 若发现 `warnings` 或 `errors` 非空，结论里必须明确标注。
 
 ## 参考资料
 
-- 常用命令模板：`references/commands.md`
+- 命令参考：`references/commands.md`
+- 脚本目录：`scripts/`
