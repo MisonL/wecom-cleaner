@@ -36,6 +36,178 @@ function escapePathForName(srcPath) {
   return base || 'unknown';
 }
 
+function resolveCleanupTargetRoot(target = {}) {
+  const accountPath = String(target.accountPath || '').trim();
+  const categoryPath = String(target.categoryPath || '').trim();
+  if (accountPath && categoryPath) {
+    return path.resolve(accountPath, categoryPath);
+  }
+  if (accountPath) {
+    return path.resolve(accountPath);
+  }
+  if (target.path) {
+    return path.dirname(path.resolve(target.path));
+  }
+  return null;
+}
+
+function createBreakdownRow(seed = {}) {
+  return {
+    ...seed,
+    totalCount: 0,
+    totalBytes: 0,
+    successCount: 0,
+    successBytes: 0,
+    skippedCount: 0,
+    skippedBytes: 0,
+    failedCount: 0,
+    failedBytes: 0,
+    dryRunCount: 0,
+    dryRunBytes: 0,
+  };
+}
+
+function applyBreakdownStatus(row, statusKey, sizeBytes) {
+  const bytes = Number(sizeBytes || 0);
+  row.totalCount += 1;
+  row.totalBytes += bytes;
+  if (statusKey === 'success') {
+    row.successCount += 1;
+    row.successBytes += bytes;
+    return;
+  }
+  if (statusKey === 'skipped') {
+    row.skippedCount += 1;
+    row.skippedBytes += bytes;
+    return;
+  }
+  if (statusKey === 'failed') {
+    row.failedCount += 1;
+    row.failedBytes += bytes;
+    return;
+  }
+  row.dryRunCount += 1;
+  row.dryRunBytes += bytes;
+}
+
+function pushTopPathSample(samples, sample, limit = 20) {
+  samples.push(sample);
+  samples.sort((a, b) => Number(b.sizeBytes || 0) - Number(a.sizeBytes || 0));
+  if (samples.length > limit) {
+    samples.length = limit;
+  }
+}
+
+function createCleanupBreakdownTracker(topPathLimit = 20) {
+  return {
+    byCategory: new Map(),
+    byMonth: new Map(),
+    byRoot: new Map(),
+    status: {
+      success: { count: 0, bytes: 0 },
+      skipped: { count: 0, bytes: 0 },
+      failed: { count: 0, bytes: 0 },
+      dryRun: { count: 0, bytes: 0 },
+    },
+    topPaths: [],
+    topPathLimit,
+  };
+}
+
+function updateCleanupBreakdown(tracker, target, statusKey, statusLabel) {
+  const bytes = Number(target?.sizeBytes || 0);
+
+  if (!tracker.status[statusKey]) {
+    tracker.status[statusKey] = { count: 0, bytes: 0 };
+  }
+  tracker.status[statusKey].count += 1;
+  tracker.status[statusKey].bytes += bytes;
+
+  const categoryKey = String(target?.categoryKey || 'unknown');
+  if (!tracker.byCategory.has(categoryKey)) {
+    tracker.byCategory.set(
+      categoryKey,
+      createBreakdownRow({
+        categoryKey,
+        categoryLabel: target?.categoryLabel || categoryKey,
+      })
+    );
+  }
+  applyBreakdownStatus(tracker.byCategory.get(categoryKey), statusKey, bytes);
+
+  const monthKey = String(target?.monthKey || '非月份目录');
+  if (!tracker.byMonth.has(monthKey)) {
+    tracker.byMonth.set(monthKey, createBreakdownRow({ monthKey }));
+  }
+  applyBreakdownStatus(tracker.byMonth.get(monthKey), statusKey, bytes);
+
+  const rootPath = resolveCleanupTargetRoot(target);
+  const rootKey = rootPath || '(unknown)';
+  if (!tracker.byRoot.has(rootKey)) {
+    tracker.byRoot.set(
+      rootKey,
+      createBreakdownRow({
+        rootPath: rootPath || null,
+        rootType: target?.isExternalStorage ? 'external' : 'profile',
+      })
+    );
+  }
+  applyBreakdownStatus(tracker.byRoot.get(rootKey), statusKey, bytes);
+
+  pushTopPathSample(
+    tracker.topPaths,
+    {
+      path: target?.path || null,
+      sizeBytes: bytes,
+      status: statusLabel,
+      categoryKey,
+      categoryLabel: target?.categoryLabel || categoryKey,
+      monthKey: target?.monthKey || null,
+      accountShortId: target?.accountShortId || null,
+      isExternalStorage: Boolean(target?.isExternalStorage),
+    },
+    tracker.topPathLimit
+  );
+}
+
+function sortBreakdownRowsByBytes(rows = []) {
+  return [...rows].sort((a, b) => {
+    const bytesDiff = Number(b.totalBytes || 0) - Number(a.totalBytes || 0);
+    if (bytesDiff !== 0) {
+      return bytesDiff;
+    }
+    return Number(b.totalCount || 0) - Number(a.totalCount || 0);
+  });
+}
+
+function sortMonthBreakdownRows(rows = []) {
+  const nonMonthKey = '非月份目录';
+  return [...rows].sort((a, b) => {
+    const aMonth = String(a.monthKey || nonMonthKey);
+    const bMonth = String(b.monthKey || nonMonthKey);
+    if (aMonth === nonMonthKey && bMonth !== nonMonthKey) {
+      return 1;
+    }
+    if (aMonth !== nonMonthKey && bMonth === nonMonthKey) {
+      return -1;
+    }
+    if (aMonth === bMonth) {
+      return Number(b.totalBytes || 0) - Number(a.totalBytes || 0);
+    }
+    return aMonth.localeCompare(bMonth);
+  });
+}
+
+function finalizeCleanupBreakdown(tracker) {
+  return {
+    byStatus: tracker.status,
+    byCategory: sortBreakdownRowsByBytes([...tracker.byCategory.values()]),
+    byMonth: sortMonthBreakdownRows([...tracker.byMonth.values()]),
+    byRoot: sortBreakdownRowsByBytes([...tracker.byRoot.values()]),
+    topPaths: [...tracker.topPaths],
+  };
+}
+
 function normalizeRootList(rootPaths) {
   return [
     ...new Set(
@@ -220,6 +392,7 @@ export async function executeCleanup({
     errors: [],
   };
   const validationState = await buildCleanupValidationState(allowedRoots);
+  const breakdownTracker = createCleanupBreakdownTracker();
 
   const total = targets.length;
 
@@ -235,6 +408,7 @@ export async function executeCleanup({
     }
     if (typeof skipByPolicy === 'string' && skipByPolicy) {
       summary.skippedCount += 1;
+      updateCleanupBreakdown(breakdownTracker, target, 'skipped', skipByPolicy);
       await appendJsonLine(indexPath, {
         action: 'cleanup',
         time: Date.now(),
@@ -262,6 +436,7 @@ export async function executeCleanup({
     const exists = await pathExists(target.path);
     if (!exists) {
       summary.skippedCount += 1;
+      updateCleanupBreakdown(breakdownTracker, target, 'skipped', 'skipped_missing_source');
       await appendJsonLine(indexPath, {
         action: 'cleanup',
         time: Date.now(),
@@ -289,6 +464,7 @@ export async function executeCleanup({
     const invalidPathReason = await validateCleanupTargetPath(target.path, validationState);
     if (invalidPathReason) {
       summary.skippedCount += 1;
+      updateCleanupBreakdown(breakdownTracker, target, 'skipped', 'skipped_invalid_path');
       await appendJsonLine(indexPath, {
         action: 'cleanup',
         time: Date.now(),
@@ -318,6 +494,7 @@ export async function executeCleanup({
     if (dryRun) {
       summary.successCount += 1;
       summary.reclaimedBytes += target.sizeBytes;
+      updateCleanupBreakdown(breakdownTracker, target, 'dryRun', 'dry_run');
       await appendJsonLine(indexPath, {
         action: 'cleanup',
         time: Date.now(),
@@ -348,6 +525,7 @@ export async function executeCleanup({
       await movePath(target.path, recyclePath);
       summary.successCount += 1;
       summary.reclaimedBytes += target.sizeBytes;
+      updateCleanupBreakdown(breakdownTracker, target, 'success', 'success');
 
       const now = Date.now();
       await appendJsonLine(indexPath, {
@@ -377,6 +555,7 @@ export async function executeCleanup({
         path: target.path,
         message,
       });
+      updateCleanupBreakdown(breakdownTracker, target, 'failed', 'failed');
       await appendJsonLine(indexPath, {
         action: 'cleanup',
         time: Date.now(),
@@ -402,5 +581,6 @@ export async function executeCleanup({
     }
   }
 
+  summary.breakdown = finalizeCleanupBreakdown(breakdownTracker);
   return summary;
 }

@@ -277,6 +277,172 @@ function buildRestoreAuditMeta(entry = {}) {
   };
 }
 
+function createRestoreBreakdownRow(seed = {}) {
+  return {
+    ...seed,
+    totalCount: 0,
+    totalBytes: 0,
+    successCount: 0,
+    successBytes: 0,
+    skippedCount: 0,
+    skippedBytes: 0,
+    failedCount: 0,
+    failedBytes: 0,
+    dryRunCount: 0,
+    dryRunBytes: 0,
+  };
+}
+
+function applyRestoreBreakdownStatus(row, statusKey, sizeBytes) {
+  const bytes = Number(sizeBytes || 0);
+  row.totalCount += 1;
+  row.totalBytes += bytes;
+  if (statusKey === 'success') {
+    row.successCount += 1;
+    row.successBytes += bytes;
+    return;
+  }
+  if (statusKey === 'skipped') {
+    row.skippedCount += 1;
+    row.skippedBytes += bytes;
+    return;
+  }
+  if (statusKey === 'failed') {
+    row.failedCount += 1;
+    row.failedBytes += bytes;
+    return;
+  }
+  row.dryRunCount += 1;
+  row.dryRunBytes += bytes;
+}
+
+function pushRestoreTopEntry(samples, sample, limit = 20) {
+  samples.push(sample);
+  samples.sort((a, b) => Number(b.sizeBytes || 0) - Number(a.sizeBytes || 0));
+  if (samples.length > limit) {
+    samples.length = limit;
+  }
+}
+
+function createRestoreBreakdownTracker(topEntryLimit = 20) {
+  return {
+    byScope: new Map(),
+    byCategory: new Map(),
+    byMonth: new Map(),
+    byRoot: new Map(),
+    status: {
+      success: { count: 0, bytes: 0 },
+      skipped: { count: 0, bytes: 0 },
+      failed: { count: 0, bytes: 0 },
+      dryRun: { count: 0, bytes: 0 },
+    },
+    topEntries: [],
+    topEntryLimit,
+  };
+}
+
+function updateRestoreBreakdown(tracker, entry, statusKey, statusLabel, restoredPath = null) {
+  const bytes = Number(entry?.sizeBytes || 0);
+  if (!tracker.status[statusKey]) {
+    tracker.status[statusKey] = { count: 0, bytes: 0 };
+  }
+  tracker.status[statusKey].count += 1;
+  tracker.status[statusKey].bytes += bytes;
+
+  const scopeKey = String(entry?.scope || 'cleanup_monthly');
+  if (!tracker.byScope.has(scopeKey)) {
+    tracker.byScope.set(scopeKey, createRestoreBreakdownRow({ scope: scopeKey }));
+  }
+  applyRestoreBreakdownStatus(tracker.byScope.get(scopeKey), statusKey, bytes);
+
+  const categoryKey = String(entry?.categoryKey || entry?.targetKey || 'unknown');
+  if (!tracker.byCategory.has(categoryKey)) {
+    tracker.byCategory.set(
+      categoryKey,
+      createRestoreBreakdownRow({
+        categoryKey,
+        categoryLabel: entry?.categoryLabel || categoryKey,
+      })
+    );
+  }
+  applyRestoreBreakdownStatus(tracker.byCategory.get(categoryKey), statusKey, bytes);
+
+  const monthKey = String(entry?.monthKey || '非月份目录');
+  if (!tracker.byMonth.has(monthKey)) {
+    tracker.byMonth.set(monthKey, createRestoreBreakdownRow({ monthKey }));
+  }
+  applyRestoreBreakdownStatus(tracker.byMonth.get(monthKey), statusKey, bytes);
+
+  const sourcePath = typeof entry?.sourcePath === 'string' ? entry.sourcePath : '';
+  const rootPath = sourcePath ? path.dirname(path.resolve(sourcePath)) : null;
+  const rootKey = rootPath || '(unknown)';
+  if (!tracker.byRoot.has(rootKey)) {
+    tracker.byRoot.set(
+      rootKey,
+      createRestoreBreakdownRow({
+        rootPath: rootPath || null,
+      })
+    );
+  }
+  applyRestoreBreakdownStatus(tracker.byRoot.get(rootKey), statusKey, bytes);
+
+  pushRestoreTopEntry(
+    tracker.topEntries,
+    {
+      sourcePath: entry?.sourcePath || null,
+      recyclePath: entry?.recyclePath || null,
+      restoredPath: restoredPath || null,
+      sizeBytes: bytes,
+      status: statusLabel,
+      scope: scopeKey,
+      categoryKey,
+      categoryLabel: entry?.categoryLabel || categoryKey,
+      monthKey: entry?.monthKey || null,
+      accountShortId: entry?.accountShortId || null,
+    },
+    tracker.topEntryLimit
+  );
+}
+
+function sortRestoreBreakdownRowsByBytes(rows = []) {
+  return [...rows].sort((a, b) => {
+    const bytesDiff = Number(b.totalBytes || 0) - Number(a.totalBytes || 0);
+    if (bytesDiff !== 0) {
+      return bytesDiff;
+    }
+    return Number(b.totalCount || 0) - Number(a.totalCount || 0);
+  });
+}
+
+function sortRestoreMonthRows(rows = []) {
+  const nonMonthKey = '非月份目录';
+  return [...rows].sort((a, b) => {
+    const aMonth = String(a.monthKey || nonMonthKey);
+    const bMonth = String(b.monthKey || nonMonthKey);
+    if (aMonth === nonMonthKey && bMonth !== nonMonthKey) {
+      return 1;
+    }
+    if (aMonth !== nonMonthKey && bMonth === nonMonthKey) {
+      return -1;
+    }
+    if (aMonth === bMonth) {
+      return Number(b.totalBytes || 0) - Number(a.totalBytes || 0);
+    }
+    return aMonth.localeCompare(bMonth);
+  });
+}
+
+function finalizeRestoreBreakdown(tracker) {
+  return {
+    byStatus: tracker.status,
+    byScope: sortRestoreBreakdownRowsByBytes([...tracker.byScope.values()]),
+    byCategory: sortRestoreBreakdownRowsByBytes([...tracker.byCategory.values()]),
+    byMonth: sortRestoreMonthRows([...tracker.byMonth.values()]),
+    byRoot: sortRestoreBreakdownRowsByBytes([...tracker.byRoot.values()]),
+    topEntries: [...tracker.topEntries],
+  };
+}
+
 export async function listRestorableBatches(indexPath, options = {}) {
   const recycleRoot = typeof options.recycleRoot === 'string' ? options.recycleRoot : null;
   const restoredSet = new Set();
@@ -348,6 +514,7 @@ export async function restoreBatch({
     restoredBytes: 0,
     errors: [],
   };
+  const breakdownTracker = createRestoreBreakdownTracker();
 
   const validationState = await buildRestoreValidationState({
     profileRoot,
@@ -379,6 +546,7 @@ export async function restoreBatch({
 
     if (invalidPathReason) {
       summary.skipCount += 1;
+      updateRestoreBreakdown(breakdownTracker, entry, 'skipped', 'skipped_invalid_path');
       await appendJsonLine(indexPath, {
         action: 'restore',
         time: Date.now(),
@@ -401,6 +569,7 @@ export async function restoreBatch({
 
     if (!(await pathExists(recyclePath))) {
       summary.skipCount += 1;
+      updateRestoreBreakdown(breakdownTracker, entry, 'skipped', 'skipped_missing_recycle');
       await appendJsonLine(indexPath, {
         action: 'restore',
         time: Date.now(),
@@ -447,6 +616,7 @@ export async function restoreBatch({
 
       if (strategy === 'skip') {
         summary.skipCount += 1;
+        updateRestoreBreakdown(breakdownTracker, entry, 'skipped', 'skipped_conflict');
         await appendJsonLine(indexPath, {
           action: 'restore',
           time: Date.now(),
@@ -474,6 +644,7 @@ export async function restoreBatch({
     if (dryRun) {
       summary.successCount += 1;
       summary.restoredBytes += Number(entry.sizeBytes || 0);
+      updateRestoreBreakdown(breakdownTracker, entry, 'dryRun', 'dry_run', targetPath);
 
       await appendJsonLine(indexPath, {
         action: 'restore',
@@ -504,6 +675,7 @@ export async function restoreBatch({
       await movePath(recyclePath, targetPath);
       summary.successCount += 1;
       summary.restoredBytes += Number(entry.sizeBytes || 0);
+      updateRestoreBreakdown(breakdownTracker, entry, 'success', 'success', targetPath);
 
       await appendJsonLine(indexPath, {
         action: 'restore',
@@ -524,6 +696,7 @@ export async function restoreBatch({
       });
     } catch (error) {
       summary.failCount += 1;
+      updateRestoreBreakdown(breakdownTracker, entry, 'failed', 'failed', targetPath);
       summary.errors.push({
         recyclePath,
         sourcePath: originalPath,
@@ -551,5 +724,6 @@ export async function restoreBatch({
     }
   }
 
+  summary.breakdown = finalizeRestoreBreakdown(breakdownTracker);
   return summary;
 }
