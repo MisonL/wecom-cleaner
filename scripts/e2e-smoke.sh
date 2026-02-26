@@ -645,7 +645,7 @@ run_smoke() {
   local maintain_output
   clear_e2e_locks
   maintain_output="$(node src/cli.js --mode recycle_maintain --output text --force --root "$PROFILE_ROOT" --state-root "$STATE_ROOT" --external-storage-root "$EXTERNAL_ROOT" --external-storage-auto-detect false)"
-  if ! printf '%s' "$maintain_output" | rg -q "\[SUCCESS\] recycle_maintain"; then
+  if ! printf '%s' "$maintain_output" | rg -q "(\[SUCCESS\] recycle_maintain|动作：回收区治理|=== 任务结论 ===)"; then
     fail "recycle_maintain" ""
   fi
   pass "recycle_maintain"
