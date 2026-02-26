@@ -2380,13 +2380,15 @@ function printCleanupTextResult(payload) {
   printTopRows(
     '分类统计（按命中范围）',
     matched.categoryStats,
-    (row) => `${row.categoryLabel || row.categoryKey}：${formatCount(row.targetCount)} 项，${formatBytesSafe(row.sizeBytes)}`,
+    (row) =>
+      `${row.categoryLabel || row.categoryKey}：${formatCount(row.targetCount)} 项，${formatBytesSafe(row.sizeBytes)}`,
     10
   );
   printTopRows(
     '月份统计（按命中范围）',
     matched.monthStats,
-    (row) => `${row.monthKey || '非月份目录'}：${formatCount(row.targetCount)} 项，${formatBytesSafe(row.sizeBytes)}`,
+    (row) =>
+      `${row.monthKey || '非月份目录'}：${formatCount(row.targetCount)} 项，${formatBytesSafe(row.sizeBytes)}`,
     12
   );
   printTopRows(
@@ -2450,13 +2452,15 @@ function printAnalysisTextResult(payload) {
   printTopRows(
     '分类统计（按命中范围）',
     matched.categoryStats,
-    (row) => `${row.categoryLabel || row.categoryKey}：${formatCount(row.targetCount)} 项，${formatBytesSafe(row.sizeBytes)}`,
+    (row) =>
+      `${row.categoryLabel || row.categoryKey}：${formatCount(row.targetCount)} 项，${formatBytesSafe(row.sizeBytes)}`,
     10
   );
   printTopRows(
     '月份统计（按命中范围）',
     matched.monthStats,
-    (row) => `${row.monthKey || '非月份目录'}：${formatCount(row.targetCount)} 项，${formatBytesSafe(row.sizeBytes)}`,
+    (row) =>
+      `${row.monthKey || '非月份目录'}：${formatCount(row.targetCount)} 项，${formatBytesSafe(row.sizeBytes)}`,
     12
   );
   printTopRows(
@@ -2527,7 +2531,8 @@ function printSpaceGovernanceTextResult(payload) {
   printTopRows(
     '目标类型统计（按命中范围）',
     matched.byTargetType,
-    (row) => `${row.targetLabel || row.targetKey}：${formatCount(row.targetCount)} 项，${formatBytesSafe(row.sizeBytes)}`,
+    (row) =>
+      `${row.targetLabel || row.targetKey}：${formatCount(row.targetCount)} 项，${formatBytesSafe(row.sizeBytes)}`,
     10
   );
   printTopRows(
@@ -2555,7 +2560,8 @@ function printRestoreTextResult(payload) {
   const data = payload.data || {};
   const matched = data.report?.matched || {};
   const executed = data.report?.executed || null;
-  const conflictText = CONFLICT_STRATEGY_DISPLAY.get(summary.conflictStrategy) || summary.conflictStrategy || '-';
+  const conflictText =
+    CONFLICT_STRATEGY_DISPLAY.get(summary.conflictStrategy) || summary.conflictStrategy || '-';
 
   let conclusion = '恢复任务完成。';
   if (payload.dryRun) {
@@ -2585,13 +2591,17 @@ function printRestoreTextResult(payload) {
     { label: '成功恢复', value: `${formatCount(summary.successCount)} 项` },
     { label: '跳过', value: `${formatCount(summary.skippedCount)} 项` },
     { label: '失败', value: `${formatCount(summary.failedCount)} 项` },
-    { label: payload.dryRun ? '预计恢复体积' : '实际恢复体积', value: formatBytesSafe(summary.restoredBytes) },
+    {
+      label: payload.dryRun ? '预计恢复体积' : '实际恢复体积',
+      value: formatBytesSafe(summary.restoredBytes),
+    },
   ]);
 
   printTopRows(
     '作用域统计（按批次命中）',
     matched.byScope,
-    (row) => `${actionDisplayName(row.scope)}：${formatCount(row.targetCount)} 项，${formatBytesSafe(row.sizeBytes)}`,
+    (row) =>
+      `${actionDisplayName(row.scope)}：${formatCount(row.targetCount)} 项，${formatBytesSafe(row.sizeBytes)}`,
     8
   );
   printTopRows(
@@ -2604,7 +2614,8 @@ function printRestoreTextResult(payload) {
   printTopRows(
     '月份统计（按批次命中）',
     matched.byMonth,
-    (row) => `${row.monthKey || '非月份目录'}：${formatCount(row.targetCount)} 项，${formatBytesSafe(row.sizeBytes)}`,
+    (row) =>
+      `${row.monthKey || '非月份目录'}：${formatCount(row.targetCount)} 项，${formatBytesSafe(row.sizeBytes)}`,
     10
   );
 
@@ -2668,7 +2679,10 @@ function printRecycleMaintainTextResult(payload) {
   ]);
 
   printTextRows('结果统计', [
-    { label: payload.dryRun ? '预计释放批次' : '已释放批次', value: `${formatCount(summary.deletedBatches)} 个` },
+    {
+      label: payload.dryRun ? '预计释放批次' : '已释放批次',
+      value: `${formatCount(summary.deletedBatches)} 个`,
+    },
     { label: payload.dryRun ? '预计释放空间' : '已释放空间', value: formatBytesSafe(summary.deletedBytes) },
     { label: '失败批次', value: `${formatCount(summary.failedBatches)} 个` },
     { label: '治理后批次数', value: `${formatCount(summary.remainingBatches)} 个` },

@@ -342,7 +342,15 @@ test('无交互 analysis 返回用户报告统计结构', async (t) => {
   const profilesRoot = await prepareFixture(root);
   const stateRoot = path.join(root, 'state');
 
-  const result = runCli(['--analysis-only', '--root', profilesRoot, '--state-root', stateRoot, '--accounts', 'all']);
+  const result = runCli([
+    '--analysis-only',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--accounts',
+    'all',
+  ]);
   assert.equal(result.status, 0);
 
   const payload = JSON.parse(String(result.stdout || '{}'));
