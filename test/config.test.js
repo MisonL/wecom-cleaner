@@ -46,15 +46,61 @@ test('parseCliArgs 可正确解析常用参数', () => {
   assert.equal(parsed.externalStorageAutoDetect, false);
   assert.equal(parsed.dryRunDefault, true);
   assert.equal(parsed.mode, 'analysis_only');
+  assert.equal(parsed.action, 'analysis_only');
+  assert.equal(parsed.actionFromMode, true);
   assert.equal(parsed.theme, 'dark');
   assert.equal(parsed.jsonOutput, true);
+  assert.equal(parsed.output, 'json');
   assert.equal(parsed.force, true);
+});
+
+test('parseCliArgs 可解析无交互动作与动作参数', () => {
+  const parsed = parseCliArgs([
+    '--cleanup-monthly',
+    '--accounts',
+    'current,acc001',
+    '--months',
+    '2024-01,2024-02',
+    '--categories',
+    'files,images',
+    '--include-non-month-dirs',
+    'true',
+    '--external-roots',
+    '/tmp/extA,/tmp/extB',
+    '--external-roots-source',
+    'preset,auto',
+    '--dry-run',
+    'false',
+    '--yes',
+    '--save-config',
+    '--output',
+    'json',
+  ]);
+
+  assert.equal(parsed.action, 'cleanup_monthly');
+  assert.equal(parsed.actionFlagCount, 1);
+  assert.deepEqual(parsed.accounts, ['current', 'acc001']);
+  assert.deepEqual(parsed.months, ['2024-01', '2024-02']);
+  assert.deepEqual(parsed.categories, ['files', 'images']);
+  assert.equal(parsed.includeNonMonthDirs, true);
+  assert.deepEqual(parsed.externalRoots, ['/tmp/extA', '/tmp/extB']);
+  assert.deepEqual(parsed.externalRootsSource, ['preset', 'auto']);
+  assert.equal(parsed.dryRun, false);
+  assert.equal(parsed.yes, true);
+  assert.equal(parsed.saveConfig, true);
+  assert.equal(parsed.output, 'json');
 });
 
 test('parseCliArgs 对非法参数会抛出 CliArgError', () => {
   assert.throws(() => parseCliArgs(['--theme', 'blue']), CliArgError);
   assert.throws(() => parseCliArgs(['--root']), CliArgError);
   assert.throws(() => parseCliArgs(['--unknown']), CliArgError);
+  assert.throws(() => parseCliArgs(['--cleanup-monthly', '--analysis-only']), /动作参数冲突/);
+  assert.throws(
+    () => parseCliArgs(['--cleanup-monthly', '--mode', 'cleanup_monthly']),
+    /不能与动作参数同时使用/
+  );
+  assert.throws(() => parseCliArgs(['--months', '2024-01', '--cutoff-month', '2024-02']), /不能同时使用/);
 });
 
 test('loadConfig/saveConfig/aliases 读写链路正常', async (t) => {
