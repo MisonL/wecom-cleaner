@@ -1,6 +1,6 @@
 {
   "name": "@mison/wecom-cleaner",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "企业微信本地聊天缓存清理工具（交互式 CLI/TUI）",
   "author": "MisonL",
   "license": "MIT",

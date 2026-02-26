@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "version": "0.1.0",
-  "baseUrl": "https://raw.githubusercontent.com/MisonL/wecom-cleaner/v0.1.0/native/bin",
+  "version": "1.0.0",
+  "baseUrl": "https://raw.githubusercontent.com/MisonL/wecom-cleaner/v1.0.0/native/bin",
   "targets": {
     "darwin-x64": {
       "binaryName": "wecom-cleaner-core",

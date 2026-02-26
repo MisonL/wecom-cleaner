@@ -87,6 +87,7 @@
 6. 可观测性与并发安全
 
 - `doctor` 模式可输出人类可读报告，或通过 `--json` 输出结构化结果。
+- `doctor` 模式为只读体检：不会自动创建状态目录/回收区，也不会触发 Zig 自动修复下载。
 - 多实例并发默认加锁，检测到陈旧锁可交互清理或通过 `--force` 自动清理。
 
 ## 能力边界
@@ -165,6 +166,7 @@ wecom-cleaner --force
 - `WECOM_CLEANER_NATIVE_AUTO_REPAIR=true|false`：Zig 自动修复总开关（默认 `true`）
 - `WECOM_CLEANER_NATIVE_BASE_URL=<url>`：核心下载基地址
 - `WECOM_CLEANER_NATIVE_DOWNLOAD_TIMEOUT_MS=<ms>`：下载超时（默认 `15000`）
+- `WECOM_CLEANER_NATIVE_PROBE_TIMEOUT_MS=<ms>`：核心探针超时（默认 `3000`，最小 `500`）
 - `WECOM_CLEANER_EXTERNAL_AUTO_DETECT=true|false`：外部存储自动探测总开关
 
 ## 数据与审计文件
@@ -231,6 +233,12 @@ npm run e2e:smoke -- --keep
 npm run pack:tgz:dry-run
 ```
 
+当前基线（`v1.0.0`）：
+
+- 单元测试：`47/47` 通过。
+- 覆盖率：`statements 85.65%`，`branches 70.99%`，`functions 91.39%`，`lines 85.65%`。
+- 全菜单 smoke：通过（含恢复冲突分支与 doctor JSON 分支）。
+
 ## 发布与打包
 
 `prepack` 会自动执行：
@@ -250,6 +258,36 @@ npm run pack:tgz
 ```
 
 输出示例：`wecom-cleaner-<version>.tgz`
+
+### 正式发布（GitHub Release + npm）
+
+```bash
+# 1) 发布前检查
+npm run check
+npm run test:coverage:check
+npm run format:check
+npm run e2e:smoke
+npm run pack:tgz
+
+# 2) 推送主分支与标签
+git push origin main
+git tag v1.0.0
+git push origin v1.0.0
+
+# 3) 发布 GitHub Release（附 tgz 包）
+gh release create v1.0.0 \
+  --title "v1.0.0" \
+  --notes-file docs/releases/v1.0.0.md \
+  wecom-cleaner-1.0.0.tgz
+
+# 4) 发布 npm
+npm publish --access public
+```
+
+建议发布前确认登录状态：
+
+- `gh auth status`
+- `npm whoami`
 
 跨平台构建示例：
 
