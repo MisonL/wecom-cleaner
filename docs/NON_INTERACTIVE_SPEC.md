@@ -35,7 +35,7 @@
 
 ## 4. 输出协议
 
-无交互默认输出 JSON，可通过 `--output text` 切换文本。
+无交互默认输出 JSON，可通过 `--output text` 切换文本任务卡片（中文结论 + 范围 + 统计 + 风险提示）。
 
 - `--output json|text`（默认 `json`）
 - `--json` 为兼容别名（等价 `--output json`）
@@ -51,6 +51,119 @@ JSON 顶层字段：
 - `data`：动作明细数据
 - `meta`：元信息（版本、耗时、引擎、时间戳等）
 
+`cleanup_monthly` 常见 `summary` 字段：
+
+- `batchId`
+- `hasWork`
+- `noTarget`
+- `matchedTargets`
+- `matchedBytes`
+- `successCount`
+- `skippedCount`
+- `failedCount`
+- `reclaimedBytes`
+- `accountCount`
+- `monthCount`
+- `categoryCount`
+- `externalRootCount`
+- `cutoffMonth`
+- `matchedMonthStart`
+- `matchedMonthEnd`
+- `rootPathCount`
+
+`cleanup_monthly` 的 `data.report`：
+
+- `matched`：
+  - `totalTargets` / `totalBytes`
+  - `monthRange` / `matchedMonths`
+  - `categoryStats` / `monthStats` / `accountStats` / `rootStats`
+  - `topPaths`（按体积排序）
+- `executed`：
+  - `byStatus`
+  - `byCategory` / `byMonth` / `byRoot`
+  - `topPaths`（按体积排序）
+
+`analysis_only` 常见 `summary` 字段：
+
+- `targetCount`
+- `totalBytes`
+- `accountCount`
+- `matchedAccountCount`
+- `categoryCount`
+- `monthBucketCount`
+
+`analysis_only` 的 `data.report`：
+
+- `matched`：
+  - `totalTargets` / `totalBytes`
+  - `monthRange` / `matchedMonths`
+  - `categoryStats` / `monthStats` / `accountStats` / `rootStats`
+  - `topPaths`
+
+`space_governance` 常见 `summary` 字段：
+
+- `matchedTargets` / `matchedBytes`
+- `successCount` / `skippedCount` / `failedCount` / `reclaimedBytes`
+- `tierCount` / `targetTypeCount` / `rootPathCount`
+- `allowRecentActive`
+
+`space_governance` 的 `data.report`：
+
+- `matched`：
+  - `totalTargets` / `totalBytes`
+  - `byTier` / `byTargetType` / `byAccount` / `byRoot`
+  - `topPaths`
+- `executed`：
+  - `byStatus`
+  - `byCategory` / `byMonth` / `byRoot`
+  - `topPaths`
+
+`restore` 常见 `summary` 字段：
+
+- `batchId`
+- `successCount` / `skippedCount` / `failedCount`
+- `restoredBytes`
+- `conflictStrategy`
+- `entryCount` / `matchedBytes`
+- `scopeCount` / `categoryCount` / `rootPathCount`
+
+`restore` 的 `data.report`：
+
+- `matched`：
+  - `totalEntries` / `totalBytes`
+  - `byScope` / `byCategory` / `byMonth` / `byRoot`
+  - `topEntries`
+- `executed`：
+  - `byStatus`
+  - `byScope` / `byCategory` / `byMonth` / `byRoot`
+  - `topEntries`
+
+`recycle_maintain` 常见 `summary` 字段：
+
+- `status`
+- `candidateCount`
+- `selectedByAge` / `selectedBySize`
+- `deletedBatches` / `deletedBytes` / `failedBatches`
+- `remainingBatches` / `remainingBytes`
+
+`recycle_maintain` 的 `data.report`：
+
+- `before` / `after`
+- `thresholdBytes` / `overThreshold`
+- `selectedCandidates`
+- `operations`
+
+`doctor` 常见 `summary` 字段：
+
+- `overall`
+- `pass` / `warn` / `fail`
+
+`doctor` 的 `data`：
+
+- `checks`：体检项列表（pass/warn/fail）
+- `metrics`：关键计数与容量
+- `runtime`：平台与运行时信息
+
 ## 5. 退出码
 
 - `0`：执行成功（含 dry-run 成功）
@@ -65,7 +178,7 @@ JSON 顶层字段：
 - `--external-storage-root <path[,path...]>`：配置层手动文件存储目录
 - `--external-storage-auto-detect <true|false>`：自动探测开关
 - `--external-roots <path[,path...]>`：动作层临时覆盖文件存储目录
-- `--external-roots-source <preset|configured|auto|all>`：按来源筛选探测目录（默认 `preset`）
+- `--external-roots-source <preset|configured|auto|all>`：按来源筛选探测目录（默认 `all`）
 - `--theme <auto|light|dark>`
 - `--interactive`：强制交互模式（与无交互动作参数互斥使用时，优先按交互模式执行）
 - `--force`：锁异常场景下强制清理并继续（兜底参数）
@@ -86,6 +199,10 @@ JSON 顶层字段：
 - `--accounts <all|current|id1,id2...>`
 - `--categories <all|key1,key2...>`
 
+说明：
+
+- `analysis-only` 默认按 `external-roots-source=all` 读取外部目录来源（只读动作，避免漏扫）。
+
 ### 7.3 `--space-governance`
 
 - `--accounts <all|current|id1,id2...>`
@@ -94,6 +211,11 @@ JSON 顶层字段：
 - `--suggested-only <true|false>`
 - `--allow-recent-active <true|false>`
 - `--dry-run <true|false>`
+
+说明：
+
+- `cleanup-monthly` / `space-governance` 默认 `external-roots-source=all`，优先减少漏扫。
+- 若需更保守范围，可显式设置 `--external-roots-source preset`（仅默认+手动配置来源）。
 
 ### 7.4 `--restore-batch <batchId>`
 

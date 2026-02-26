@@ -65,7 +65,7 @@
 
 - 支持默认路径、手动配置路径、自动探测路径。
 - 自动探测采用“结构 + 缓存特征”联合识别（如 `*/WXWork Files/Caches` + 企业微信缓存类别/月目录信号），不依赖目录名且降低误判。
-- 自动探测结果默认不预选，需用户确认后纳入处理。
+- 自动探测结果默认预选，执行前可手动取消；同时保留确认提示，避免误纳入无关目录。
 
 3. 删除与恢复链路
 
@@ -164,6 +164,15 @@ curl -fsSL https://raw.githubusercontent.com/MisonL/wecom-cleaner/main/scripts/i
 curl -fsSL https://raw.githubusercontent.com/MisonL/wecom-cleaner/main/scripts/install-skill.sh | bash -s -- --ref v1.1.0
 ```
 
+Agent 侧统一任务入口脚本（位于 `skills/wecom-cleaner-agent/scripts/`）：
+
+- `cleanup_monthly_report.sh`：年月清理任务卡片（预演/执行/复核）
+- `analysis_report.sh`：会话分析（只读）任务卡片
+- `space_governance_report.sh`：全量空间治理任务卡片
+- `restore_batch_report.sh`：批次恢复任务卡片
+- `recycle_maintain_report.sh`：回收区治理任务卡片
+- `doctor_report.sh`：系统自检任务卡片
+
 ## 常用参数
 
 运行方式：
@@ -231,6 +240,67 @@ wecom-cleaner --doctor
 - `--help` / `-h`：输出命令帮助并退出。
 - `--version` / `-v`：输出版本号并退出。
 
+### 各动作关键统计字段（JSON）
+
+#### `cleanup-monthly`
+
+- `summary.matchedTargets`：命中目标数
+- `summary.matchedBytes`：命中目标总字节
+- `summary.hasWork` / `summary.noTarget`：是否存在可执行目标
+- `summary.successCount` / `skippedCount` / `failedCount`
+- `summary.reclaimedBytes`：预计或实际释放字节
+- `summary.batchId`：真实执行批次号（dry-run 为预演批次）
+- `summary.matchedMonthStart` / `matchedMonthEnd`：本次命中的月份区间
+- `summary.rootPathCount`：涉及的清理根目录数量
+- `summary.accountCount` / `monthCount` / `categoryCount` / `externalRootCount`
+- `summary.cutoffMonth`：截止月份（当使用 `--cutoff-month` 时）
+
+`cleanup-monthly` 还会在 `data.report` 中返回可展示明细：
+
+- `data.report.matched.categoryStats`：按类别统计（条目数、体积）
+- `data.report.matched.monthStats`：按月份统计（条目数、体积）
+- `data.report.matched.rootStats`：按根目录统计（条目数、体积）
+- `data.report.matched.topPaths`：按体积 Top 路径样例
+- `data.report.executed.byCategory/byMonth/byRoot`：真实执行落地统计（成功/跳过/失败 + 体积）
+
+#### `analysis-only`
+
+- `summary.targetCount` / `totalBytes`：命中目录数与总体积
+- `summary.accountCount` / `matchedAccountCount` / `categoryCount` / `monthBucketCount`：维度汇总（范围账号数 vs 实际命中账号数）
+- `data.accountsSummary` / `categoriesSummary` / `monthsSummary`：分布统计
+- `data.report.matched`：统一的类别/月份/根目录/路径样例统计结构
+
+#### `space-governance`
+
+- `summary.matchedTargets` / `matchedBytes`
+- `summary.successCount` / `skippedCount` / `failedCount` / `reclaimedBytes`
+- `summary.tierCount` / `targetTypeCount` / `rootPathCount`
+- `data.report.matched.byTier/byTargetType/byAccount/byRoot/topPaths`
+- `data.report.executed.byCategory/byMonth/byRoot/topPaths`（真实执行时）
+
+#### `restore-batch`
+
+- `summary.batchId` / `entryCount` / `matchedBytes`
+- `summary.successCount` / `skippedCount` / `failedCount` / `restoredBytes`
+- `summary.scopeCount` / `categoryCount` / `rootPathCount`
+- `data.report.matched.byScope/byCategory/byMonth/byRoot/topEntries`
+- `data.report.executed.byScope/byCategory/byMonth/byRoot/topEntries`（真实执行时）
+
+#### `recycle-maintain`
+
+- `summary.candidateCount` / `selectedByAge` / `selectedBySize`
+- `summary.deletedBatches` / `deletedBytes` / `failedBatches`
+- `summary.remainingBatches` / `remainingBytes`
+- `data.report.before` / `after` / `thresholdBytes` / `overThreshold`
+- `data.report.selectedCandidates` / `operations`
+
+#### `doctor`
+
+- `summary.overall` / `pass` / `warn` / `fail`
+- `data.checks`：逐项体检结论（pass/warn/fail）
+- `data.metrics`：账号数、回收区占用、外部存储等关键指标
+- `data.runtime`：运行时环境信息
+
 ### 全局参数
 
 - `--root <path>`：Profile 根目录
@@ -238,7 +308,7 @@ wecom-cleaner --doctor
 - `--external-storage-root <path[,path...]>`：手动文件存储目录（配置层）
 - `--external-storage-auto-detect <true|false>`：外部存储自动探测总开关
 - `--external-roots <path[,path...]>`：本次动作临时覆盖的文件存储目录
-- `--external-roots-source <preset|configured|auto|all>`：按来源筛选探测目录（默认 `preset`）
+- `--external-roots-source <preset|configured|auto|all>`：按来源筛选探测目录（默认 `all`，优先减少漏扫；可按需收窄）
 - `--theme <auto|light|dark>`：Logo 主题
 - `--interactive`：即使携带参数也进入交互流程（可配合 `--mode`）
 - `--force`：锁异常场景下强制清理并继续（兜底参数，通常无需）
