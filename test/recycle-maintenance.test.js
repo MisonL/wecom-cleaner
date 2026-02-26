@@ -202,6 +202,29 @@ test('collectRecycleStats 在只读模式下不会创建缺失回收目录', asy
   assert.equal(await pathExists(recycleRoot), false);
 });
 
+test('maintainRecycleBin 的 dry-run 在回收区缺失时保持只读', async (t) => {
+  const root = await makeTempDir('wecom-recycle-maintain-dryrun-readonly-');
+  t.after(async () => removeDir(root));
+
+  const recycleRoot = path.join(root, 'missing-recycle');
+  const indexPath = path.join(root, 'index.jsonl');
+
+  const result = await maintainRecycleBin({
+    indexPath,
+    recycleRoot,
+    policy: {
+      enabled: true,
+      maxAgeDays: 30,
+      minKeepBatches: 20,
+      sizeThresholdGB: 20,
+    },
+    dryRun: true,
+  });
+
+  assert.equal(result.status, 'skipped_no_candidate');
+  assert.equal(await pathExists(recycleRoot), false);
+});
+
 test('maintainRecycleBin 不会因异常 batchId 触发越界删除', async (t) => {
   const root = await makeTempDir('wecom-recycle-maintain-batchid-');
   t.after(async () => removeDir(root));

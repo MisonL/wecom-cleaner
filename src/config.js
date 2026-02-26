@@ -152,6 +152,7 @@ export function parseCliArgs(argv) {
     saveConfig: false,
     jsonOutput: false,
     force: false,
+    interactive: false,
     action: null,
     actionFromMode: false,
     actionFlagCount: 0,
@@ -277,6 +278,10 @@ export function parseCliArgs(argv) {
     }
     if (token === '--force') {
       parsed.force = true;
+      continue;
+    }
+    if (token === '--interactive') {
+      parsed.interactive = true;
       continue;
     }
     if (token === '--accounts') {

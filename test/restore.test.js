@@ -127,6 +127,8 @@ test('restoreBatch 冲突策略: skip/overwrite/rename', async (t) => {
       const skipped = rows.find((row) => row.action === 'restore' && row.status === 'skipped_conflict');
       assert.ok(skipped);
       assert.equal(skipped.error_type, ERROR_TYPES.CONFLICT);
+      assert.equal(skipped.accountId, 'acc001');
+      assert.equal(skipped.categoryKey, 'files');
     }
 
     if (strategy === 'overwrite') {
@@ -223,6 +225,9 @@ test('restoreBatch 支持 dry-run 并写入审计', async (t) => {
   assert.equal(dryRunRow.dryRun, true);
   assert.equal(dryRunRow.conflict_strategy, 'overwrite');
   assert.equal(dryRunRow.would_overwrite, true);
+  assert.equal(dryRunRow.accountId, 'acc001');
+  assert.equal(dryRunRow.userName, '用户A');
+  assert.equal(dryRunRow.categoryKey, 'files');
 });
 
 test('restoreBatch 在移动失败时写入 failed 与 error_type', async (t) => {

@@ -201,7 +201,11 @@ export function selectBatchesForMaintenance(batches, policy, now = Date.now()) {
 export async function maintainRecycleBin({ indexPath, recycleRoot, policy, dryRun, onProgress }) {
   const normalizedPolicy = normalizeRecycleRetention(policy);
   const now = Date.now();
-  const before = await collectRecycleStats({ indexPath, recycleRoot });
+  const before = await collectRecycleStats({
+    indexPath,
+    recycleRoot,
+    createIfMissing: !dryRun,
+  });
   const selected = selectBatchesForMaintenance(before.batches, normalizedPolicy, now);
   const thresholdBytes = selected.thresholdBytes;
 

@@ -262,6 +262,21 @@ async function validateRestoreEntryPath({ originalPath, recyclePath, scope, vali
   return null;
 }
 
+function buildRestoreAuditMeta(entry = {}) {
+  return {
+    accountId: entry.accountId || null,
+    accountShortId: entry.accountShortId || null,
+    userName: entry.userName || null,
+    corpName: entry.corpName || null,
+    categoryKey: entry.categoryKey || null,
+    categoryLabel: entry.categoryLabel || null,
+    monthKey: entry.monthKey || null,
+    targetKey: entry.targetKey || null,
+    tier: entry.tier || null,
+    sizeBytes: Number(entry.sizeBytes || 0),
+  };
+}
+
 export async function listRestorableBatches(indexPath, options = {}) {
   const recycleRoot = typeof options.recycleRoot === 'string' ? options.recycleRoot : null;
   const restoredSet = new Set();
@@ -354,6 +369,7 @@ export async function restoreBatch({
     const recyclePath = entry.recyclePath;
     const originalPath = entry.sourcePath;
     const scope = typeof entry.scope === 'string' && entry.scope ? entry.scope : 'cleanup_monthly';
+    const auditMeta = buildRestoreAuditMeta(entry);
     const invalidPathReason = await validateRestoreEntryPath({
       originalPath,
       recyclePath,
@@ -370,6 +386,7 @@ export async function restoreBatch({
         batchId: batch.batchId,
         recyclePath,
         sourcePath: originalPath,
+        ...auditMeta,
         status: 'skipped_invalid_path',
         error_type: ERROR_TYPES.PATH_VALIDATION_FAILED,
         invalid_reason: invalidPathReason,
@@ -391,6 +408,7 @@ export async function restoreBatch({
         batchId: batch.batchId,
         recyclePath,
         sourcePath: originalPath,
+        ...auditMeta,
         status: 'skipped_missing_recycle',
         error_type: ERROR_TYPES.PATH_NOT_FOUND,
         profile_root: profileRoot,
@@ -436,6 +454,7 @@ export async function restoreBatch({
           batchId: batch.batchId,
           recyclePath,
           sourcePath: originalPath,
+          ...auditMeta,
           status: 'skipped_conflict',
           error_type: ERROR_TYPES.CONFLICT,
           profile_root: profileRoot,
@@ -464,6 +483,7 @@ export async function restoreBatch({
         recyclePath,
         sourcePath: originalPath,
         restoredPath: targetPath,
+        ...auditMeta,
         status: 'dry_run',
         dryRun: true,
         conflict_strategy: conflictStrategy,
@@ -493,6 +513,7 @@ export async function restoreBatch({
         recyclePath,
         sourcePath: originalPath,
         restoredPath: targetPath,
+        ...auditMeta,
         status: 'success',
         dryRun: false,
         profile_root: profileRoot,
@@ -516,6 +537,7 @@ export async function restoreBatch({
         batchId: batch.batchId,
         recyclePath,
         sourcePath: originalPath,
+        ...auditMeta,
         status: 'failed',
         error_type: classifyErrorType(error instanceof Error ? error.message : String(error)),
         dryRun: false,

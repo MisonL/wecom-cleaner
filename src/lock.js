@@ -63,11 +63,12 @@ export async function breakLock(lockPath) {
   await fs.rm(lockPath, { force: true });
 }
 
-export async function acquireLock(stateRoot, mode) {
+export async function acquireLock(stateRoot, mode, options = {}) {
+  const allowStaleBreak = options.allowStaleBreak !== false;
   const lockPath = resolveLockPath(stateRoot);
   await fs.mkdir(path.dirname(lockPath), { recursive: true });
 
-  const payload = {
+  const payloadBase = {
     pid: process.pid,
     mode: String(mode || 'unknown'),
     startedAt: Date.now(),
@@ -75,28 +76,55 @@ export async function acquireLock(stateRoot, mode) {
     version: process.env.npm_package_version || null,
   };
 
-  try {
-    await writeLockFile(lockPath, payload);
-  } catch (error) {
-    if (error && error.code !== 'EEXIST') {
-      throw error;
-    }
+  let recoveredFromStale = false;
+  let staleLockInfo = null;
 
-    const lockInfo = await readLockInfo(lockPath);
-    const lockPid = Number.parseInt(String(lockInfo?.pid || ''), 10);
-    const isStale = !isProcessRunning(lockPid);
-    throw new LockHeldError('检测到另一个实例正在运行', {
-      lockPath,
-      lockInfo,
-      isStale,
-    });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const payload = recoveredFromStale
+      ? {
+          ...payloadBase,
+          recoveredFromStale: true,
+          recoveredAt: Date.now(),
+          staleLockPid: staleLockInfo?.pid || null,
+        }
+      : payloadBase;
+
+    try {
+      await writeLockFile(lockPath, payload);
+      return {
+        lockPath,
+        lockInfo: payload,
+        async release() {
+          await fs.rm(lockPath, { force: true }).catch(() => {});
+        },
+      };
+    } catch (error) {
+      if (error && error.code !== 'EEXIST') {
+        throw error;
+      }
+
+      const lockInfo = await readLockInfo(lockPath);
+      const lockPid = Number.parseInt(String(lockInfo?.pid || ''), 10);
+      const isStale = !isProcessRunning(lockPid);
+
+      if (isStale && allowStaleBreak && attempt === 0) {
+        staleLockInfo = lockInfo;
+        recoveredFromStale = true;
+        await fs.rm(lockPath, { force: true }).catch(() => {});
+        continue;
+      }
+
+      throw new LockHeldError('检测到另一个实例正在运行', {
+        lockPath,
+        lockInfo,
+        isStale,
+      });
+    }
   }
 
-  return {
+  throw new LockHeldError('检测到锁文件冲突，且自动恢复失败', {
     lockPath,
-    lockInfo: payload,
-    async release() {
-      await fs.rm(lockPath, { force: true }).catch(() => {});
-    },
-  };
+    lockInfo: staleLockInfo,
+    isStale: Boolean(staleLockInfo),
+  });
 }

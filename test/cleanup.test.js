@@ -34,6 +34,7 @@ test('executeCleanup dry-run 不移动文件但记录审计', async (t) => {
     recycleRoot,
     indexPath,
     dryRun: true,
+    allowedRoots: [root],
   });
 
   assert.equal(result.successCount, 1);
@@ -101,6 +102,7 @@ test('executeCleanup 真删模式支持策略跳过、缺失跳过和移动回�
     recycleRoot,
     indexPath,
     dryRun: false,
+    allowedRoots: [root],
     shouldSkip: async (target) => (target.categoryKey === 'wwsecurity' ? 'skipped_policy_protected' : null),
   });
 
@@ -167,6 +169,7 @@ test('executeCleanup 在移动失败时写入 failed 与 error_type', async (t) 
     recycleRoot,
     indexPath,
     dryRun: false,
+    allowedRoots: [root],
   });
 
   assert.equal(result.failedCount, 1);
@@ -177,4 +180,47 @@ test('executeCleanup 在移动失败时写入 failed 与 error_type', async (t) 
   assert.equal(rows[0].status, 'failed');
   assert.equal(typeof rows[0].error_type, 'string');
   assert.equal(typeof rows[0].error, 'string');
+});
+
+test('executeCleanup 会拦截白名单根目录之外的目标路径', async (t) => {
+  const root = await makeTempDir('wecom-cleanup-invalid-path-');
+  t.after(async () => removeDir(root));
+
+  const allowedRoot = path.join(root, 'allowed-root');
+  const outsideRoot = path.join(root, 'outside-root');
+  const source = path.join(outsideRoot, 'source-outside');
+  const recycleRoot = path.join(root, 'recycle-bin');
+  const indexPath = path.join(root, 'index.jsonl');
+  await ensureFile(path.join(allowedRoot, '.keep'), 'ok');
+  await ensureFile(path.join(source, 'payload.txt'), 'hello');
+
+  const result = await executeCleanup({
+    targets: [
+      {
+        path: source,
+        accountId: 'acc001',
+        accountShortId: 'acc001',
+        userName: '用户A',
+        corpName: '企业A',
+        categoryKey: 'files',
+        categoryLabel: '聊天文件',
+        monthKey: '2024-01',
+        sizeBytes: 5,
+      },
+    ],
+    recycleRoot,
+    indexPath,
+    dryRun: false,
+    allowedRoots: [allowedRoot],
+  });
+
+  assert.equal(result.successCount, 0);
+  assert.equal(result.skippedCount, 1);
+  assert.equal(await pathExists(source), true);
+
+  const rows = await readJsonLines(indexPath);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].status, 'skipped_invalid_path');
+  assert.equal(rows[0].error_type, ERROR_TYPES.PATH_VALIDATION_FAILED);
+  assert.equal(rows[0].invalid_reason, 'source_outside_allowed_root');
 });

@@ -26,7 +26,7 @@ test('resolveLockPath 与 acquireLock/release 链路正常', async (t) => {
   assert.equal(existsAfterRelease, false);
 });
 
-test('acquireLock 能识别运行中锁与陈旧锁', async (t) => {
+test('acquireLock 能识别运行中锁并自动恢复陈旧锁', async (t) => {
   const root = await makeTempDir('wecom-lock-held-');
   t.after(async () => removeDir(root));
 
@@ -53,8 +53,28 @@ test('acquireLock 能识别运行中锁与陈旧锁', async (t) => {
     'utf-8'
   );
 
+  const recovered = await acquireLock(root, 'restore');
+  assert.equal(recovered.lockInfo.pid, process.pid);
+  assert.equal(recovered.lockInfo.mode, 'restore');
+  assert.equal(recovered.lockInfo.recoveredFromStale, true);
+  await recovered.release();
+
+  await fs.writeFile(
+    lockPath,
+    `${JSON.stringify(
+      {
+        pid: -1,
+        mode: 'stale',
+        startedAt: Date.now() - 3600_000,
+        hostname: 'localhost',
+      },
+      null,
+      2
+    )}\n`,
+    'utf-8'
+  );
   await assert.rejects(
-    () => acquireLock(root, 'restore'),
+    () => acquireLock(root, 'restore', { allowStaleBreak: false }),
     (error) => error instanceof LockHeldError && error.isStale === true
   );
 

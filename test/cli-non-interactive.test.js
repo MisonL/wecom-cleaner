@@ -158,3 +158,28 @@ test('无交互兼容 --mode 可映射动作并输出迁移 warning', async (t) 
     true
   );
 });
+
+test('--interactive 可在带参数时进入交互模式并按 --mode 直达功能', async (t) => {
+  const root = await makeTempDir('wecom-cli-interactive-override-');
+  t.after(async () => removeDir(root));
+
+  const profilesRoot = await prepareFixture(root);
+  const stateRoot = path.join(root, 'state');
+  await fs.mkdir(stateRoot, { recursive: true });
+
+  const result = runCli([
+    '--interactive',
+    '--mode',
+    'doctor',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--external-storage-auto-detect',
+    'false',
+  ]);
+
+  assert.equal(result.status, 0);
+  assert.equal(String(result.stdout || '').includes('系统自检'), true);
+  assert.equal(String(result.stderr || '').includes('必须指定一个动作参数'), false);
+});

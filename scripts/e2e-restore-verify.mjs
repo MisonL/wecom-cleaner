@@ -53,6 +53,7 @@ async function prepareUiBatch({ profileRoot, uiStateRoot }) {
     recycleRoot,
     indexPath,
     dryRun: false,
+    allowedRoots: [profileRoot],
   });
 
   assert(result.successCount === 1, 'prepare-ui: 预置批次失败');
@@ -83,6 +84,7 @@ async function prepareUiConflictBatch({ profileRoot, uiStateRoot }) {
     recycleRoot,
     indexPath,
     dryRun: false,
+    allowedRoots: [profileRoot],
     scope: 'cleanup_monthly',
   });
 
@@ -113,6 +115,7 @@ async function runConflictCase({ strategy, accountRoot, profileRoot, recycleRoot
     recycleRoot,
     indexPath,
     dryRun: false,
+    allowedRoots: [profileRoot],
     scope: 'cleanup_monthly',
   });
 

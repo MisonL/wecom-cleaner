@@ -38,6 +38,7 @@ test('parseCliArgs 可正确解析常用参数', () => {
     'dark',
     '--json',
     '--force',
+    '--interactive',
   ]);
 
   assert.equal(parsed.rootDir, '/tmp/profiles');
@@ -52,6 +53,7 @@ test('parseCliArgs 可正确解析常用参数', () => {
   assert.equal(parsed.jsonOutput, true);
   assert.equal(parsed.output, 'json');
   assert.equal(parsed.force, true);
+  assert.equal(parsed.interactive, true);
 });
 
 test('parseCliArgs 可解析无交互动作与动作参数', () => {

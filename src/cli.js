@@ -92,6 +92,20 @@ const NON_INTERACTIVE_ACTIONS = new Set([
   MODES.RECYCLE_MAINTAIN,
   MODES.DOCTOR,
 ]);
+const INTERACTIVE_MODE_ALIASES = new Map([
+  ['start', MODES.START],
+  ['cleanup_monthly', MODES.CLEANUP_MONTHLY],
+  ['cleanup-monthly', MODES.CLEANUP_MONTHLY],
+  ['analysis_only', MODES.ANALYSIS_ONLY],
+  ['analysis-only', MODES.ANALYSIS_ONLY],
+  ['space_governance', MODES.SPACE_GOVERNANCE],
+  ['space-governance', MODES.SPACE_GOVERNANCE],
+  ['restore', MODES.RESTORE],
+  ['recycle_maintain', MODES.RECYCLE_MAINTAIN],
+  ['recycle-maintain', MODES.RECYCLE_MAINTAIN],
+  ['doctor', MODES.DOCTOR],
+  ['settings', MODES.SETTINGS],
+]);
 const OUTPUT_JSON = 'json';
 const OUTPUT_TEXT = 'text';
 
@@ -1394,6 +1408,24 @@ function resolveActionFromCli(cliArgs, hasAnyArgs) {
   return cliArgs.action;
 }
 
+function resolveInteractiveStartMode(cliArgs) {
+  const rawMode = String(cliArgs.mode || '')
+    .trim()
+    .toLowerCase();
+  if (rawMode) {
+    const mappedMode = INTERACTIVE_MODE_ALIASES.get(rawMode);
+    if (!mappedMode) {
+      throw new UsageError(`参数 --mode 的值无效: ${cliArgs.mode}`);
+    }
+    return mappedMode;
+  }
+
+  if (NON_INTERACTIVE_ACTIONS.has(cliArgs.action)) {
+    return cliArgs.action;
+  }
+  return MODES.START;
+}
+
 function resolveDestructiveDryRun(cliArgs) {
   if (typeof cliArgs.dryRun === 'boolean') {
     if (cliArgs.dryRun === false && !cliArgs.yes) {
@@ -1730,6 +1762,7 @@ async function runCleanupModeNonInteractive(context, cliArgs, warnings = []) {
     recycleRoot: config.recycleRoot,
     indexPath: config.indexPath,
     dryRun,
+    allowedRoots: [config.rootDir, ...externalResolved.roots],
   });
   return {
     ok: result.failedCount === 0,
@@ -1859,6 +1892,10 @@ async function runSpaceGovernanceModeNonInteractive(context, cliArgs, warnings =
   }
   const allowRecentActive = cliArgs.allowRecentActive === true;
   const dryRun = resolveDestructiveDryRun(cliArgs);
+  const governanceRoot = inferDataRootFromProfilesRoot(config.rootDir);
+  const governanceAllowedRoots = governanceRoot
+    ? [governanceRoot, ...externalResolved.roots]
+    : [config.rootDir, ...externalResolved.roots];
 
   if (selectedTargets.length === 0) {
     return {
@@ -1888,6 +1925,7 @@ async function runSpaceGovernanceModeNonInteractive(context, cliArgs, warnings =
     recycleRoot: config.recycleRoot,
     indexPath: config.indexPath,
     dryRun,
+    allowedRoots: governanceAllowedRoots,
     scope: MODES.SPACE_GOVERNANCE,
     shouldSkip: (target) => {
       if (!target.deletable) {
@@ -2333,6 +2371,7 @@ async function runCleanupMode(context) {
     recycleRoot: config.recycleRoot,
     indexPath: config.indexPath,
     dryRun: executeDryRun,
+    allowedRoots: [config.rootDir, ...selectedExternalStorageRoots],
     onProgress: (current, total) => printProgress('移动目录', current, total),
   });
 
@@ -2611,11 +2650,15 @@ async function runSpaceGovernanceMode(context) {
   }
 
   printSection('开始全量空间治理');
+  const governanceAllowedRoots = scan.dataRoot
+    ? [scan.dataRoot, ...selectedExternalStorageRoots]
+    : [config.rootDir, ...selectedExternalStorageRoots];
   const result = await executeCleanup({
     targets: selectedTargets,
     recycleRoot: config.recycleRoot,
     indexPath: config.indexPath,
     dryRun,
+    allowedRoots: governanceAllowedRoots,
     scope: MODES.SPACE_GOVERNANCE,
     shouldSkip: (target) => {
       if (!target.deletable) {
@@ -3336,10 +3379,13 @@ async function main() {
   const rawArgv = process.argv.slice(2);
   const hasAnyArgs = rawArgv.length > 0;
   const cliArgs = parseCliArgs(rawArgv);
-  const action = resolveActionFromCli(cliArgs, hasAnyArgs);
-  const interactiveMode = !hasAnyArgs;
-  const lockMode = action || MODES.START;
-  const readOnlyConfig = action === MODES.DOCTOR;
+  const forceInteractive = cliArgs.interactive === true;
+  const hasNonInteractiveArgs = hasAnyArgs && !forceInteractive;
+  const action = resolveActionFromCli(cliArgs, hasNonInteractiveArgs);
+  const interactiveMode = !hasNonInteractiveArgs;
+  const interactiveStartMode = interactiveMode ? resolveInteractiveStartMode(cliArgs) : MODES.START;
+  const lockMode = interactiveMode ? interactiveStartMode : action || MODES.START;
+  const readOnlyConfig = lockMode === MODES.DOCTOR;
 
   const config = await loadConfig(cliArgs, {
     readOnly: readOnlyConfig,
@@ -3350,7 +3396,7 @@ async function main() {
   const __dirname = path.dirname(__filename);
   const projectRoot = path.resolve(__dirname, '..');
   const nativeProbe =
-    action === MODES.DOCTOR
+    lockMode === MODES.DOCTOR
       ? { nativeCorePath: null, repairNote: null }
       : await detectNativeCore(projectRoot, {
           stateRoot: config.stateRoot,
@@ -3375,6 +3421,13 @@ async function main() {
 
   try {
     if (interactiveMode) {
+      if (interactiveStartMode !== MODES.START) {
+        await runMode(interactiveStartMode, context, {
+          jsonOutput: false,
+          force: cliArgs.force,
+        });
+        return;
+      }
       await runInteractiveLoop(context);
       return;
     }
