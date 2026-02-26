@@ -391,10 +391,10 @@ npm run e2e:smoke -- --keep
 npm run pack:tgz:dry-run
 ```
 
-当前基线（`v1.1.0`）：
+当前基线（主分支）：
 
-- 单元测试：`68/68` 通过。
-- 覆盖率：`statements 86.57%`，`branches 73.96%`，`functions 93.25%`，`lines 86.57%`。
+- 单元测试：`78/78` 通过。
+- 覆盖率：`statements 88.28%`，`branches 74.44%`，`functions 94.89%`，`lines 88.28%`。
 - 全菜单 smoke：通过（含恢复冲突分支与 doctor JSON 分支）。
 
 ## 发布与打包
@@ -408,6 +408,8 @@ npm run pack:tgz:dry-run
 
 - `native/bin/darwin-x64/wecom-cleaner-core`
 - `native/bin/darwin-arm64/wecom-cleaner-core`
+
+说明：`native/bin/` 为构建产物目录，不纳入 Git 版本管理。
 
 本地交付包（无作用域前缀）建议：
 
@@ -426,17 +428,21 @@ npm run test:coverage:check
 npm run format:check
 npm run e2e:smoke
 npm run pack:tgz
+npm run pack:release-assets
 
 # 2) 推送主分支与标签
 git push origin main
-git tag v1.1.0
-git push origin v1.1.0
+git tag v1.2.0
+git push origin v1.2.0
 
-# 3) 发布 GitHub Release（附 tgz 包）
-gh release create v1.1.0 \
-  --title "v1.1.0" \
-  --notes-file docs/releases/v1.1.0.md \
-  wecom-cleaner-1.1.0.tgz
+# 3) 发布 GitHub Release（附 npm 包 + 双架构核心附件）
+gh release create v1.2.0 \
+  --title "v1.2.0" \
+  --notes-file docs/releases/v1.2.0.md \
+  wecom-cleaner-1.2.0.tgz \
+  dist/release/wecom-cleaner-core-v1.2.0-darwin-x64 \
+  dist/release/wecom-cleaner-core-v1.2.0-darwin-arm64 \
+  dist/release/wecom-cleaner-core-v1.2.0-SHA256SUMS.txt
 
 # 4) 发布 npm
 npm publish --access public

@@ -6,14 +6,41 @@
 
 ## [Unreleased]
 
+暂无。
+
+## [1.2.0] - 2026-02-26
+
 ### Added
 
-- 新增 CLI 帮助与版本参数：`--help/-h`、`--version/-v`。
+- 新增无交互文本任务卡片输出：按动作展示结论、处理范围、统计、分类分布与风险提示。
+- 新增 `scripts/pack-release-assets.js`，可生成 GitHub Release 双架构核心附件与 `SHA256SUMS`。
+- 新增 npm 脚本：
+  - `npm run pack:release-assets`
+  - `npm run pack:release-assets:dry-run`
+- 新增 `wecom-cleaner-agent` 报告脚本：
+  - `cleanup_monthly_report.sh`
+  - `analysis_report.sh`
+  - `space_governance_report.sh`
+  - `restore_batch_report.sh`
+  - `recycle_maintain_report.sh`
+  - `doctor_report.sh`
 
 ### Changed
 
-- 优化 `wecom-cleaner-agent` 技能执行规范：减少无效探测、固定三段式进度反馈、异常时再扩展分析。
-- 更新技能命令参考，增加“极简三步清理模板”。
+- 无交互 `cleanup-monthly` / `space-governance` 默认外部目录来源调整为 `all`（减少漏扫）。
+- 交互模式外部目录选择默认预选自动探测目录，可手动取消。
+- Agent 技能规范升级为“脚本优先 + 用户任务卡片优先”，减少技术键值直出。
+- 发布流程调整为：GitHub Release 上传独立附件（`darwin-x64`、`darwin-arm64`）+ npm tgz。
+- `native/bin/` 改为构建产物目录，不再纳入 Git 版本管理。
+
+### Fixed
+
+- 修复 Zig 核心目录体积统计错误（目录不再按 inode 大小误判）。
+- 增强清理/恢复/回收区治理的执行分布统计（按状态/类别/月份/路径可追踪）。
+
+### Security
+
+- 清理 Git 历史中的二进制构建产物，降低仓库污染与历史包袱风险。
 
 ## [1.1.0] - 2026-02-26
 
