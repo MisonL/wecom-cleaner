@@ -56,6 +56,20 @@ class PromptAbortError extends Error {
   }
 }
 
+class ConfirmationRequiredError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'ConfirmationRequiredError';
+  }
+}
+
+class UsageError extends CliArgError {
+  constructor(message) {
+    super(message);
+    this.name = 'UsageError';
+  }
+}
+
 function isPromptAbort(error) {
   if (!error) {
     return false;
@@ -70,6 +84,16 @@ function isPromptAbort(error) {
 }
 
 const PROMPT_BACK = '__prompt_back__';
+const NON_INTERACTIVE_ACTIONS = new Set([
+  MODES.CLEANUP_MONTHLY,
+  MODES.ANALYSIS_ONLY,
+  MODES.SPACE_GOVERNANCE,
+  MODES.RESTORE,
+  MODES.RECYCLE_MAINTAIN,
+  MODES.DOCTOR,
+]);
+const OUTPUT_JSON = 'json';
+const OUTPUT_TEXT = 'text';
 
 function isBackCommand(inputValue) {
   const normalized = String(inputValue || '')
@@ -1322,6 +1346,756 @@ function printGovernancePreview({ targets, dataRoot }) {
   }
 }
 
+function uniqueStrings(values = []) {
+  return [...new Set(values.map((item) => String(item || '').trim()).filter(Boolean))];
+}
+
+function normalizeActionOutputMode(cliArgs) {
+  if (cliArgs.output === OUTPUT_TEXT || cliArgs.output === OUTPUT_JSON) {
+    return cliArgs.output;
+  }
+  return OUTPUT_JSON;
+}
+
+function actionFlagName(action) {
+  if (action === MODES.CLEANUP_MONTHLY) {
+    return '--cleanup-monthly';
+  }
+  if (action === MODES.ANALYSIS_ONLY) {
+    return '--analysis-only';
+  }
+  if (action === MODES.SPACE_GOVERNANCE) {
+    return '--space-governance';
+  }
+  if (action === MODES.RESTORE) {
+    return '--restore-batch <batchId>';
+  }
+  if (action === MODES.RECYCLE_MAINTAIN) {
+    return '--recycle-maintain';
+  }
+  if (action === MODES.DOCTOR) {
+    return '--doctor';
+  }
+  return `--${String(action || '').replace(/_/g, '-')}`;
+}
+
+function resolveActionFromCli(cliArgs, hasAnyArgs) {
+  if (!hasAnyArgs) {
+    return null;
+  }
+  if (!cliArgs.action || !NON_INTERACTIVE_ACTIONS.has(cliArgs.action)) {
+    throw new UsageError(
+      [
+        '无交互模式必须指定一个动作参数：',
+        '--cleanup-monthly | --analysis-only | --space-governance | --restore-batch <batchId> | --recycle-maintain | --doctor',
+      ].join('\n')
+    );
+  }
+  return cliArgs.action;
+}
+
+function resolveDestructiveDryRun(cliArgs) {
+  if (typeof cliArgs.dryRun === 'boolean') {
+    if (cliArgs.dryRun === false && !cliArgs.yes) {
+      throw new ConfirmationRequiredError('检测到真实执行请求，但未提供 --yes 确认参数。');
+    }
+    return cliArgs.dryRun;
+  }
+  return !cliArgs.yes;
+}
+
+function categoryDefaultSelection(config) {
+  const configured = Array.isArray(config.defaultCategories) ? config.defaultCategories : [];
+  if (configured.length > 0) {
+    return uniqueStrings(configured);
+  }
+  return CACHE_CATEGORIES.filter((item) => item.defaultSelected !== false).map((item) => item.key);
+}
+
+function resolveCategoryKeys(rawValues, mode, config) {
+  const allKeys = CACHE_CATEGORIES.map((item) => item.key);
+  const keySet = new Set(allKeys);
+  const values = Array.isArray(rawValues)
+    ? rawValues.map((item) =>
+        String(item || '')
+          .trim()
+          .toLowerCase()
+      )
+    : [];
+  if (values.length === 0) {
+    if (mode === MODES.ANALYSIS_ONLY) {
+      return allKeys;
+    }
+    return categoryDefaultSelection(config);
+  }
+
+  if (values.includes('all')) {
+    return allKeys;
+  }
+
+  const normalized = uniqueStrings(values);
+  for (const value of normalized) {
+    if (!keySet.has(value)) {
+      throw new UsageError(`参数 --categories 中存在未知类型: ${value}`);
+    }
+  }
+  return normalized;
+}
+
+function resolveMonthFilters(cliArgs, availableMonths) {
+  const normalizedMonths = uniqueStrings(availableMonths);
+  if (normalizedMonths.length === 0) {
+    return [];
+  }
+
+  if (Array.isArray(cliArgs.months) && cliArgs.months.length > 0) {
+    const selected = uniqueStrings(
+      cliArgs.months.map((item) => {
+        const month = normalizeMonthKey(item);
+        if (!month) {
+          throw new UsageError(`参数 --months 中存在非法年月: ${item}`);
+        }
+        return month;
+      })
+    );
+    return selected;
+  }
+
+  if (cliArgs.cutoffMonth) {
+    const cutoff = normalizeMonthKey(cliArgs.cutoffMonth);
+    if (!cutoff) {
+      throw new UsageError(`参数 --cutoff-month 非法: ${cliArgs.cutoffMonth}`);
+    }
+    return normalizedMonths.filter((month) => compareMonthKey(month, cutoff) <= 0);
+  }
+
+  const autoCutoff = monthByDaysBefore(730);
+  return normalizedMonths.filter((month) => compareMonthKey(month, autoCutoff) <= 0);
+}
+
+function resolveAccountSelection(accounts, rawSelector) {
+  const warnings = [];
+  if (!Array.isArray(accounts) || accounts.length === 0) {
+    return { selectedAccountIds: [], warnings };
+  }
+
+  const selector = Array.isArray(rawSelector)
+    ? rawSelector
+        .map((item) =>
+          String(item || '')
+            .trim()
+            .toLowerCase()
+        )
+        .filter(Boolean)
+    : [];
+  const byId = new Map(accounts.map((account) => [String(account.id), account]));
+  const byShortId = new Map(accounts.map((account) => [String(account.shortId).toLowerCase(), account]));
+
+  if (selector.length === 0) {
+    const current = accounts.filter((item) => item.isCurrent).map((item) => item.id);
+    if (current.length > 0) {
+      return { selectedAccountIds: current, warnings };
+    }
+    return { selectedAccountIds: accounts.map((item) => item.id), warnings };
+  }
+
+  if (selector.includes('all')) {
+    return { selectedAccountIds: accounts.map((item) => item.id), warnings };
+  }
+
+  const selected = new Set();
+  if (selector.includes('current')) {
+    const current = accounts.filter((item) => item.isCurrent).map((item) => item.id);
+    if (current.length > 0) {
+      current.forEach((id) => selected.add(id));
+    } else {
+      warnings.push('参数 --accounts 包含 current，但未识别当前登录账号，已回退到全账号。');
+      accounts.map((item) => item.id).forEach((id) => selected.add(id));
+    }
+  }
+
+  for (const token of selector) {
+    if (token === 'current') {
+      continue;
+    }
+    if (byId.has(token)) {
+      selected.add(token);
+      continue;
+    }
+    const shortMatched = byShortId.get(token);
+    if (shortMatched) {
+      selected.add(shortMatched.id);
+      continue;
+    }
+    throw new UsageError(`参数 --accounts 中存在未知账号标识: ${token}`);
+  }
+
+  if (selected.size === 0) {
+    throw new UsageError('参数 --accounts 解析后为空，请至少选择一个账号。');
+  }
+  return {
+    selectedAccountIds: [...selected],
+    warnings,
+  };
+}
+
+function normalizeExternalRootsSource(rawSources) {
+  const sources = Array.isArray(rawSources) && rawSources.length > 0 ? rawSources : ['preset'];
+  const set = new Set(
+    sources
+      .map((item) =>
+        String(item || '')
+          .trim()
+          .toLowerCase()
+      )
+      .filter(Boolean)
+  );
+  if (set.has('all')) {
+    return new Set(['builtin', 'configured', 'auto']);
+  }
+  const resolved = new Set();
+  if (set.has('preset')) {
+    resolved.add('builtin');
+    resolved.add('configured');
+  }
+  if (set.has('configured')) {
+    resolved.add('configured');
+  }
+  if (set.has('auto')) {
+    resolved.add('auto');
+  }
+  return resolved;
+}
+
+function resolveExternalStorageForAction(detected, cliArgs, options = {}) {
+  const warnings = [];
+  const normalized = normalizeExternalStorageDetection(detected);
+  const detectedRoots = Array.isArray(normalized.roots) ? normalized.roots : [];
+  const rootSources = normalized.meta?.rootSources || {};
+
+  if (Array.isArray(cliArgs.externalRoots) && cliArgs.externalRoots.length > 0) {
+    const roots = uniqueStrings(cliArgs.externalRoots.map((item) => expandHome(item)));
+    return { roots, warnings };
+  }
+
+  const defaultSources = Array.isArray(options.defaultSources) ? options.defaultSources : ['preset'];
+  const sourceAllowSet = normalizeExternalRootsSource(cliArgs.externalRootsSource || defaultSources);
+  const selected = detectedRoots.filter((rootPath) => sourceAllowSet.has(rootSources[rootPath] || 'auto'));
+  return { roots: selected, warnings };
+}
+
+function resolveConflictStrategy(rawValue) {
+  const normalized = String(rawValue || 'skip')
+    .trim()
+    .toLowerCase();
+  if (!['skip', 'overwrite', 'rename'].includes(normalized)) {
+    throw new UsageError(`参数 --conflict 的值无效: ${rawValue}`);
+  }
+  return normalized;
+}
+
+function resolveGovernanceTierFilters(rawValue = []) {
+  const values = uniqueStrings(rawValue.map((item) => String(item || '').toLowerCase()));
+  if (values.length === 0) {
+    return null;
+  }
+  const allowed = new Set([
+    SPACE_GOVERNANCE_TIERS.SAFE,
+    SPACE_GOVERNANCE_TIERS.CAUTION,
+    SPACE_GOVERNANCE_TIERS.PROTECTED,
+  ]);
+  for (const value of values) {
+    if (!allowed.has(value)) {
+      throw new UsageError(`参数 --tiers 中存在非法层级: ${value}`);
+    }
+  }
+  return new Set(values);
+}
+
+function responseSummaryFromCleanupResult(result, extra = {}) {
+  return {
+    batchId: result.batchId,
+    successCount: result.successCount,
+    skippedCount: result.skippedCount,
+    failedCount: result.failedCount,
+    reclaimedBytes: result.reclaimedBytes,
+    ...extra,
+  };
+}
+
+function toStructuredError(item = {}, fallbackCode = 'E_ACTION_FAILED') {
+  const message = String(item.message || item.error || 'unknown_error');
+  return {
+    code: classifyErrorType(message) || fallbackCode,
+    message,
+    path: item.path || item.sourcePath || item.recyclePath || null,
+  };
+}
+
+function printNonInteractiveTextResult(payload) {
+  const statusText = payload.ok ? 'SUCCESS' : 'FAILED';
+  console.log(`[${statusText}] ${payload.action}`);
+  if (payload.summary && typeof payload.summary === 'object') {
+    for (const [key, value] of Object.entries(payload.summary)) {
+      console.log(`${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`);
+    }
+  }
+  if (Array.isArray(payload.warnings) && payload.warnings.length > 0) {
+    console.log('warnings:');
+    payload.warnings.forEach((item) => console.log(`- ${item}`));
+  }
+  if (Array.isArray(payload.errors) && payload.errors.length > 0) {
+    console.log('errors:');
+    payload.errors.forEach((item) => console.log(`- ${item.code}: ${item.message}`));
+  }
+}
+
+function emitNonInteractivePayload(payload, outputMode) {
+  if (outputMode === OUTPUT_TEXT) {
+    printNonInteractiveTextResult(payload);
+    return;
+  }
+  console.log(JSON.stringify(payload, null, 2));
+}
+
+async function runCleanupModeNonInteractive(context, cliArgs, warnings = []) {
+  const { config, aliases, nativeCorePath } = context;
+  const accounts = await discoverAccounts(config.rootDir, aliases);
+  const accountResolved = resolveAccountSelection(accounts, cliArgs.accounts);
+  warnings.push(...accountResolved.warnings);
+
+  const detectedExternalStorage = await detectExternalStorageRoots({
+    configuredRoots: config.externalStorageRoots,
+    profilesRoot: config.rootDir,
+    autoDetect: config.externalStorageAutoDetect !== false,
+    returnMeta: true,
+  });
+  const externalResolved = resolveExternalStorageForAction(detectedExternalStorage, cliArgs, {
+    defaultSources: ['preset'],
+  });
+  warnings.push(...externalResolved.warnings);
+
+  const categoryKeys = resolveCategoryKeys(cliArgs.categories, MODES.CLEANUP_MONTHLY, config);
+  const availableMonths = await collectAvailableMonths(
+    accounts,
+    accountResolved.selectedAccountIds,
+    categoryKeys,
+    externalResolved.roots
+  );
+  const monthFilters = resolveMonthFilters(cliArgs, availableMonths);
+  const includeNonMonthDirs = Boolean(cliArgs.includeNonMonthDirs);
+  const dryRun = resolveDestructiveDryRun(cliArgs);
+
+  const scan = await collectCleanupTargets({
+    accounts,
+    selectedAccountIds: accountResolved.selectedAccountIds,
+    categoryKeys,
+    monthFilters,
+    includeNonMonthDirs,
+    externalStorageRoots: externalResolved.roots,
+    nativeCorePath,
+  });
+  context.lastRunEngineUsed = scan.engineUsed;
+  if (scan.nativeFallbackReason) {
+    warnings.push(scan.nativeFallbackReason);
+  }
+
+  const targets = scan.targets || [];
+  if (targets.length === 0) {
+    return {
+      ok: true,
+      action: MODES.CLEANUP_MONTHLY,
+      dryRun,
+      summary: {
+        matchedTargets: 0,
+        reclaimedBytes: 0,
+        successCount: 0,
+        skippedCount: 0,
+        failedCount: 0,
+      },
+      warnings,
+      errors: [],
+      data: {
+        selectedAccounts: accountResolved.selectedAccountIds,
+        selectedMonths: monthFilters,
+        selectedCategories: categoryKeys,
+        selectedExternalRoots: externalResolved.roots,
+        engineUsed: scan.engineUsed || 'node',
+      },
+    };
+  }
+
+  const result = await executeCleanup({
+    targets,
+    recycleRoot: config.recycleRoot,
+    indexPath: config.indexPath,
+    dryRun,
+  });
+  return {
+    ok: result.failedCount === 0,
+    action: MODES.CLEANUP_MONTHLY,
+    dryRun,
+    summary: responseSummaryFromCleanupResult(result, {
+      matchedTargets: targets.length,
+    }),
+    warnings,
+    errors: result.errors.map((item) => toStructuredError(item)),
+    data: {
+      selectedAccounts: accountResolved.selectedAccountIds,
+      selectedMonths: monthFilters,
+      selectedCategories: categoryKeys,
+      selectedExternalRoots: externalResolved.roots,
+      includeNonMonthDirs,
+      engineUsed: scan.engineUsed || 'node',
+    },
+  };
+}
+
+async function runAnalysisModeNonInteractive(context, cliArgs, warnings = []) {
+  const { config, aliases, nativeCorePath } = context;
+  const accounts = await discoverAccounts(config.rootDir, aliases);
+  const accountResolved = resolveAccountSelection(accounts, cliArgs.accounts);
+  warnings.push(...accountResolved.warnings);
+
+  const detectedExternalStorage = await detectExternalStorageRoots({
+    configuredRoots: config.externalStorageRoots,
+    profilesRoot: config.rootDir,
+    autoDetect: config.externalStorageAutoDetect !== false,
+    returnMeta: true,
+  });
+  const externalResolved = resolveExternalStorageForAction(detectedExternalStorage, cliArgs, {
+    defaultSources: ['preset'],
+  });
+  warnings.push(...externalResolved.warnings);
+
+  const categoryKeys = resolveCategoryKeys(cliArgs.categories, MODES.ANALYSIS_ONLY, config);
+  const result = await analyzeCacheFootprint({
+    accounts,
+    selectedAccountIds: accountResolved.selectedAccountIds,
+    categoryKeys,
+    externalStorageRoots: externalResolved.roots,
+    nativeCorePath,
+  });
+  context.lastRunEngineUsed = result.engineUsed;
+  if (result.nativeFallbackReason) {
+    warnings.push(result.nativeFallbackReason);
+  }
+
+  return {
+    ok: true,
+    action: MODES.ANALYSIS_ONLY,
+    dryRun: null,
+    summary: {
+      targetCount: result.targets.length,
+      totalBytes: result.totalBytes,
+      accountCount: result.accountsSummary.length,
+      categoryCount: result.categoriesSummary.length,
+      monthBucketCount: result.monthsSummary.length,
+    },
+    warnings,
+    errors: [],
+    data: {
+      engineUsed: result.engineUsed || 'node',
+      selectedAccounts: accountResolved.selectedAccountIds,
+      selectedCategories: categoryKeys,
+      selectedExternalRoots: externalResolved.roots,
+      accountsSummary: result.accountsSummary,
+      categoriesSummary: result.categoriesSummary,
+      monthsSummary: result.monthsSummary,
+    },
+  };
+}
+
+async function runSpaceGovernanceModeNonInteractive(context, cliArgs, warnings = []) {
+  const { config, aliases, nativeCorePath } = context;
+  const accounts = await discoverAccounts(config.rootDir, aliases);
+  const accountResolved = resolveAccountSelection(accounts, cliArgs.accounts);
+  warnings.push(...accountResolved.warnings);
+
+  const detectedExternalStorage = await detectExternalStorageRoots({
+    configuredRoots: config.externalStorageRoots,
+    profilesRoot: config.rootDir,
+    autoDetect: config.externalStorageAutoDetect !== false,
+    returnMeta: true,
+  });
+  const externalResolved = resolveExternalStorageForAction(detectedExternalStorage, cliArgs, {
+    defaultSources: ['preset'],
+  });
+  warnings.push(...externalResolved.warnings);
+
+  const scan = await scanSpaceGovernanceTargets({
+    accounts,
+    selectedAccountIds: accountResolved.selectedAccountIds,
+    rootDir: config.rootDir,
+    externalStorageRoots: externalResolved.roots,
+    nativeCorePath,
+    autoSuggest: config.spaceGovernance?.autoSuggest,
+  });
+  context.lastRunEngineUsed = scan.engineUsed;
+  if (scan.nativeFallbackReason) {
+    warnings.push(scan.nativeFallbackReason);
+  }
+
+  const selectableTargets = scan.targets.filter((item) => item.deletable);
+  const targetIdSet = new Set(selectableTargets.map((item) => item.id));
+  const selectedById =
+    Array.isArray(cliArgs.targets) && cliArgs.targets.length > 0
+      ? uniqueStrings(cliArgs.targets)
+      : selectableTargets.map((item) => item.id);
+
+  for (const targetId of selectedById) {
+    if (!targetIdSet.has(targetId)) {
+      throw new UsageError(`参数 --targets 中存在未知治理目标: ${targetId}`);
+    }
+  }
+
+  const tierFilterSet = resolveGovernanceTierFilters(cliArgs.tiers || []);
+  let selectedTargets = selectableTargets.filter((item) => selectedById.includes(item.id));
+  if (tierFilterSet) {
+    selectedTargets = selectedTargets.filter((item) => tierFilterSet.has(item.tier));
+  }
+  if (cliArgs.suggestedOnly === true) {
+    selectedTargets = selectedTargets.filter((item) => item.suggested);
+  }
+  const allowRecentActive = cliArgs.allowRecentActive === true;
+  const dryRun = resolveDestructiveDryRun(cliArgs);
+
+  if (selectedTargets.length === 0) {
+    return {
+      ok: true,
+      action: MODES.SPACE_GOVERNANCE,
+      dryRun,
+      summary: {
+        matchedTargets: 0,
+        reclaimedBytes: 0,
+        successCount: 0,
+        skippedCount: 0,
+        failedCount: 0,
+      },
+      warnings,
+      errors: [],
+      data: {
+        selectedAccounts: accountResolved.selectedAccountIds,
+        selectedExternalRoots: externalResolved.roots,
+        selectedTargetIds: [],
+        engineUsed: scan.engineUsed || 'node',
+      },
+    };
+  }
+
+  const result = await executeCleanup({
+    targets: selectedTargets,
+    recycleRoot: config.recycleRoot,
+    indexPath: config.indexPath,
+    dryRun,
+    scope: MODES.SPACE_GOVERNANCE,
+    shouldSkip: (target) => {
+      if (!target.deletable) {
+        return 'skipped_policy_protected';
+      }
+      if (target.recentlyActive && !allowRecentActive) {
+        return 'skipped_recently_active';
+      }
+      return null;
+    },
+  });
+
+  return {
+    ok: result.failedCount === 0,
+    action: MODES.SPACE_GOVERNANCE,
+    dryRun,
+    summary: responseSummaryFromCleanupResult(result, {
+      matchedTargets: selectedTargets.length,
+      allowRecentActive,
+    }),
+    warnings,
+    errors: result.errors.map((item) => toStructuredError(item)),
+    data: {
+      selectedAccounts: accountResolved.selectedAccountIds,
+      selectedExternalRoots: externalResolved.roots,
+      selectedTargetIds: selectedTargets.map((item) => item.id),
+      engineUsed: scan.engineUsed || 'node',
+    },
+  };
+}
+
+async function runRestoreModeNonInteractive(context, cliArgs, warnings = []) {
+  const { config } = context;
+  if (!cliArgs.restoreBatchId) {
+    throw new UsageError('动作 --restore-batch 缺少 batchId。');
+  }
+  const conflictStrategy = resolveConflictStrategy(cliArgs.conflict);
+  const dryRun = resolveDestructiveDryRun(cliArgs);
+
+  const governanceRoot = inferDataRootFromProfilesRoot(config.rootDir);
+  const detectedExternalStorage = await detectExternalStorageRoots({
+    configuredRoots: config.externalStorageRoots,
+    profilesRoot: config.rootDir,
+    autoDetect: config.externalStorageAutoDetect !== false,
+    returnMeta: true,
+  });
+  const externalResolved = resolveExternalStorageForAction(detectedExternalStorage, cliArgs, {
+    defaultSources: ['all'],
+  });
+  warnings.push(...externalResolved.warnings);
+  const governanceAllowRoots = governanceRoot
+    ? [...externalResolved.roots]
+    : [config.rootDir, ...externalResolved.roots];
+
+  const batches = await listRestorableBatches(config.indexPath, { recycleRoot: config.recycleRoot });
+  const batch = batches.find((item) => item.batchId === cliArgs.restoreBatchId);
+  if (!batch) {
+    throw new UsageError(`未找到可恢复批次: ${cliArgs.restoreBatchId}`);
+  }
+
+  const result = await restoreBatch({
+    batch,
+    indexPath: config.indexPath,
+    dryRun,
+    profileRoot: config.rootDir,
+    extraProfileRoots: externalResolved.roots,
+    recycleRoot: config.recycleRoot,
+    governanceRoot,
+    extraGovernanceRoots: governanceAllowRoots,
+    onConflict: async () => ({ action: conflictStrategy, applyToAll: true }),
+  });
+
+  return {
+    ok: result.failCount === 0,
+    action: MODES.RESTORE,
+    dryRun,
+    summary: {
+      batchId: result.batchId,
+      successCount: result.successCount,
+      skippedCount: result.skipCount,
+      failedCount: result.failCount,
+      restoredBytes: result.restoredBytes,
+      conflictStrategy,
+    },
+    warnings,
+    errors: result.errors.map((item) => toStructuredError(item)),
+    data: {
+      selectedExternalRoots: externalResolved.roots,
+      governanceRoot,
+    },
+  };
+}
+
+async function runRecycleMaintainModeNonInteractive(context, cliArgs, warnings = []) {
+  const { config } = context;
+  const dryRun = resolveDestructiveDryRun(cliArgs);
+
+  const policy = normalizeRecycleRetention({
+    ...config.recycleRetention,
+    enabled:
+      typeof cliArgs.retentionEnabled === 'boolean'
+        ? cliArgs.retentionEnabled
+        : config.recycleRetention?.enabled,
+    maxAgeDays:
+      typeof cliArgs.retentionMaxAgeDays === 'number'
+        ? cliArgs.retentionMaxAgeDays
+        : config.recycleRetention?.maxAgeDays,
+    minKeepBatches:
+      typeof cliArgs.retentionMinKeepBatches === 'number'
+        ? cliArgs.retentionMinKeepBatches
+        : config.recycleRetention?.minKeepBatches,
+    sizeThresholdGB:
+      typeof cliArgs.retentionSizeThresholdGB === 'number'
+        ? cliArgs.retentionSizeThresholdGB
+        : config.recycleRetention?.sizeThresholdGB,
+  });
+  const result = await maintainRecycleBin({
+    indexPath: config.indexPath,
+    recycleRoot: config.recycleRoot,
+    policy,
+    dryRun,
+  });
+
+  if (!dryRun) {
+    config.recycleRetention = {
+      ...policy,
+      lastRunAt: Date.now(),
+    };
+    await saveConfig(config);
+  }
+
+  return {
+    ok: result.failBatches === 0,
+    action: MODES.RECYCLE_MAINTAIN,
+    dryRun,
+    summary: {
+      status: result.status,
+      candidateCount: result.candidateCount,
+      deletedBatches: result.deletedBatches,
+      deletedBytes: result.deletedBytes,
+      failedBatches: result.failBatches,
+      remainingBatches: result.after?.totalBatches || 0,
+      remainingBytes: result.after?.totalBytes || 0,
+    },
+    warnings,
+    errors: result.errors.map((item) => ({
+      code: item.errorType || 'E_RECYCLE_MAINTAIN_FAILED',
+      message: item.message || 'unknown_error',
+      batchId: item.batchId || null,
+      invalidReason: item.invalidReason || null,
+    })),
+    data: {
+      policy,
+    },
+  };
+}
+
+async function runDoctorModeNonInteractive(context, _cliArgs, warnings = []) {
+  const report = await runDoctor({
+    config: context.config,
+    aliases: context.aliases,
+    projectRoot: context.projectRoot,
+    appVersion: context.appMeta?.version || null,
+  });
+
+  return {
+    ok: true,
+    action: MODES.DOCTOR,
+    dryRun: null,
+    summary: {
+      overall: report.overall,
+      pass: report.summary.pass,
+      warn: report.summary.warn,
+      fail: report.summary.fail,
+    },
+    warnings,
+    errors: [],
+    data: report,
+  };
+}
+
+async function runNonInteractiveAction(action, context, cliArgs) {
+  const warnings = [];
+  if (cliArgs.actionFromMode) {
+    warnings.push(`参数 --mode 已进入兼容模式，建议改为动作参数（例如 ${actionFlagName(action)}）。`);
+  }
+
+  if (action === MODES.CLEANUP_MONTHLY) {
+    return runCleanupModeNonInteractive(context, cliArgs, warnings);
+  }
+  if (action === MODES.ANALYSIS_ONLY) {
+    return runAnalysisModeNonInteractive(context, cliArgs, warnings);
+  }
+  if (action === MODES.SPACE_GOVERNANCE) {
+    return runSpaceGovernanceModeNonInteractive(context, cliArgs, warnings);
+  }
+  if (action === MODES.RESTORE) {
+    return runRestoreModeNonInteractive(context, cliArgs, warnings);
+  }
+  if (action === MODES.RECYCLE_MAINTAIN) {
+    return runRecycleMaintainModeNonInteractive(context, cliArgs, warnings);
+  }
+  if (action === MODES.DOCTOR) {
+    return runDoctorModeNonInteractive(context, cliArgs, warnings);
+  }
+  throw new UsageError(`不支持的无交互动作: ${action}`);
+}
+
 async function runCleanupMode(context) {
   const { config, aliases, nativeCorePath } = context;
 
@@ -2498,11 +3272,77 @@ async function acquireExecutionLock(stateRoot, mode, options = {}) {
   }
 }
 
+async function runInteractiveLoop(context) {
+  while (true) {
+    const accounts = await discoverAccounts(context.config.rootDir, context.aliases);
+    const detectedExternalStorage = await detectExternalStorageRoots({
+      configuredRoots: context.config.externalStorageRoots,
+      profilesRoot: context.config.rootDir,
+      autoDetect: context.config.externalStorageAutoDetect !== false,
+      returnMeta: true,
+    });
+    const detectedExternalStorageRoots = detectedExternalStorage.roots;
+    const profileRootHealth = await evaluateProfileRootHealth(context.config.rootDir, accounts);
+    printHeader({
+      config: context.config,
+      accountCount: accounts.length,
+      nativeCorePath: context.nativeCorePath,
+      lastRunEngineUsed: context.lastRunEngineUsed || null,
+      appMeta: context.appMeta,
+      nativeRepairNote: context.nativeRepairNote,
+      externalStorageRoots: detectedExternalStorageRoots,
+      externalStorageMeta: detectedExternalStorage.meta,
+      profileRootHealth,
+    });
+
+    const mode = await askSelect({
+      message: '开始菜单：请选择功能',
+      default: MODES.CLEANUP_MONTHLY,
+      choices: [
+        { name: '年月清理（默认，可执行删除）', value: MODES.CLEANUP_MONTHLY },
+        { name: '会话分析（只读，不处理）', value: MODES.ANALYSIS_ONLY },
+        { name: '全量空间治理（分级，安全优先）', value: MODES.SPACE_GOVERNANCE },
+        { name: '恢复已删除批次', value: MODES.RESTORE },
+        { name: '回收区治理（保留策略）', value: MODES.RECYCLE_MAINTAIN },
+        { name: '系统自检（doctor）', value: MODES.DOCTOR },
+        { name: '交互配置', value: MODES.SETTINGS },
+        { name: '退出', value: 'exit' },
+      ],
+    });
+
+    if (mode === 'exit') {
+      break;
+    }
+
+    await runMode(mode, context, {
+      jsonOutput: false,
+      force: false,
+    });
+
+    const back = await askConfirm({
+      message: '返回主菜单？',
+      default: true,
+    });
+
+    if (!back) {
+      break;
+    }
+  }
+
+  console.log('已退出。');
+}
+
 async function main() {
-  const cliArgs = parseCliArgs(process.argv.slice(2));
-  const runModeValue = cliArgs.mode || MODES.START;
+  const rawArgv = process.argv.slice(2);
+  const hasAnyArgs = rawArgv.length > 0;
+  const cliArgs = parseCliArgs(rawArgv);
+  const action = resolveActionFromCli(cliArgs, hasAnyArgs);
+  const interactiveMode = !hasAnyArgs;
+  const lockMode = action || MODES.START;
+  const readOnlyConfig = action === MODES.DOCTOR;
+
   const config = await loadConfig(cliArgs, {
-    readOnly: runModeValue === MODES.DOCTOR,
+    readOnly: readOnlyConfig,
   });
   const aliases = await loadAliases(config.aliasPath);
 
@@ -2510,13 +3350,14 @@ async function main() {
   const __dirname = path.dirname(__filename);
   const projectRoot = path.resolve(__dirname, '..');
   const nativeProbe =
-    runModeValue === MODES.DOCTOR
+    action === MODES.DOCTOR
       ? { nativeCorePath: null, repairNote: null }
       : await detectNativeCore(projectRoot, {
           stateRoot: config.stateRoot,
           allowAutoRepair: true,
         });
   const appMeta = await loadAppMeta(projectRoot);
+  const outputMode = normalizeActionOutputMode(cliArgs);
 
   const context = {
     config,
@@ -2528,76 +3369,44 @@ async function main() {
   };
 
   let lockHandle = null;
-  if (runModeValue !== MODES.DOCTOR) {
-    lockHandle = await acquireExecutionLock(config.stateRoot, runModeValue, { force: cliArgs.force });
+  if (lockMode !== MODES.DOCTOR) {
+    lockHandle = await acquireExecutionLock(config.stateRoot, lockMode, { force: cliArgs.force });
   }
 
   try {
-    if (cliArgs.mode) {
-      await runMode(cliArgs.mode, context, {
-        jsonOutput: cliArgs.jsonOutput,
-        force: cliArgs.force,
-      });
+    if (interactiveMode) {
+      await runInteractiveLoop(context);
       return;
     }
 
-    while (true) {
-      const accounts = await discoverAccounts(config.rootDir, context.aliases);
-      const detectedExternalStorage = await detectExternalStorageRoots({
-        configuredRoots: config.externalStorageRoots,
-        profilesRoot: config.rootDir,
-        autoDetect: config.externalStorageAutoDetect !== false,
-        returnMeta: true,
-      });
-      const detectedExternalStorageRoots = detectedExternalStorage.roots;
-      const profileRootHealth = await evaluateProfileRootHealth(config.rootDir, accounts);
-      printHeader({
-        config,
-        accountCount: accounts.length,
-        nativeCorePath: context.nativeCorePath,
-        lastRunEngineUsed: context.lastRunEngineUsed || null,
-        appMeta: context.appMeta,
-        nativeRepairNote: context.nativeRepairNote,
-        externalStorageRoots: detectedExternalStorageRoots,
-        externalStorageMeta: detectedExternalStorage.meta,
-        profileRootHealth,
-      });
-
-      const mode = await askSelect({
-        message: '开始菜单：请选择功能',
-        default: MODES.CLEANUP_MONTHLY,
-        choices: [
-          { name: '年月清理（默认，可执行删除）', value: MODES.CLEANUP_MONTHLY },
-          { name: '会话分析（只读，不处理）', value: MODES.ANALYSIS_ONLY },
-          { name: '全量空间治理（分级，安全优先）', value: MODES.SPACE_GOVERNANCE },
-          { name: '恢复已删除批次', value: MODES.RESTORE },
-          { name: '回收区治理（保留策略）', value: MODES.RECYCLE_MAINTAIN },
-          { name: '系统自检（doctor）', value: MODES.DOCTOR },
-          { name: '交互配置', value: MODES.SETTINGS },
-          { name: '退出', value: 'exit' },
-        ],
-      });
-
-      if (mode === 'exit') {
-        break;
-      }
-
-      await runMode(mode, context, {
-        jsonOutput: false,
-        force: false,
-      });
-
-      const back = await askConfirm({
-        message: '返回主菜单？',
-        default: true,
-      });
-
-      if (!back) {
-        break;
-      }
+    const startedAt = Date.now();
+    const result = await runNonInteractiveAction(action, context, cliArgs);
+    if (cliArgs.saveConfig) {
+      await saveConfig(config);
     }
 
-    console.log('已退出。');
+    const payload = {
+      ok: Boolean(result.ok),
+      action,
+      dryRun: result.dryRun ?? null,
+      summary: result.summary || {},
+      warnings: Array.isArray(result.warnings) ? result.warnings : [],
+      errors: Array.isArray(result.errors) ? result.errors : [],
+      data: result.data || {},
+      meta: {
+        app: APP_NAME,
+        package: PACKAGE_NAME,
+        version: appMeta.version,
+        timestamp: Date.now(),
+        durationMs: Date.now() - startedAt,
+        output: outputMode,
+        engine: context.lastRunEngineUsed || (context.nativeCorePath ? 'zig_ready' : 'node'),
+      },
+    };
+    emitNonInteractivePayload(payload, outputMode);
+    if (!payload.ok) {
+      process.exitCode = 1;
+    }
   } finally {
     if (lockHandle && typeof lockHandle.release === 'function') {
       await lockHandle.release();
@@ -2609,6 +3418,10 @@ main().catch((error) => {
   if (error instanceof PromptAbortError) {
     console.log('\n已取消。');
     process.exit(0);
+  }
+  if (error instanceof ConfirmationRequiredError) {
+    console.error(`确认错误: ${error.message}`);
+    process.exit(3);
   }
   if (error instanceof CliArgError) {
     console.error(`参数错误: ${error.message}`);

@@ -4,6 +4,25 @@ import { ensureDir, expandHome, readJson, writeJson } from './utils.js';
 import { normalizeRecycleRetention } from './recycle-maintenance.js';
 
 const ALLOWED_THEMES = new Set(['auto', 'light', 'dark']);
+const ALLOWED_OUTPUTS = new Set(['json', 'text']);
+const ALLOWED_CONFLICT_STRATEGIES = new Set(['skip', 'overwrite', 'rename']);
+const ALLOWED_EXTERNAL_ROOT_SOURCES = new Set(['preset', 'configured', 'auto', 'all']);
+const ALLOWED_GOVERNANCE_TIERS = new Set(['safe', 'caution', 'protected']);
+const ACTION_FLAG_MAP = new Map([
+  ['--cleanup-monthly', 'cleanup_monthly'],
+  ['--analysis-only', 'analysis_only'],
+  ['--space-governance', 'space_governance'],
+  ['--recycle-maintain', 'recycle_maintain'],
+  ['--doctor', 'doctor'],
+]);
+const MODE_TO_ACTION_MAP = new Map([
+  ['cleanup_monthly', 'cleanup_monthly'],
+  ['analysis_only', 'analysis_only'],
+  ['space_governance', 'space_governance'],
+  ['recycle_maintain', 'recycle_maintain'],
+  ['restore', 'restore'],
+  ['doctor', 'doctor'],
+]);
 
 export class CliArgError extends Error {
   constructor(message) {
@@ -19,6 +38,42 @@ function normalizeTheme(theme) {
   const normalized = theme.trim().toLowerCase();
   if (!ALLOWED_THEMES.has(normalized)) {
     return null;
+  }
+  return normalized;
+}
+
+function normalizeOutput(output) {
+  if (typeof output !== 'string') {
+    return null;
+  }
+  const normalized = output.trim().toLowerCase();
+  if (!ALLOWED_OUTPUTS.has(normalized)) {
+    return null;
+  }
+  return normalized;
+}
+
+function parseCsvList(rawValue) {
+  return String(rawValue || '')
+    .split(/[,\n;]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function parsePositiveInteger(flag, rawValue) {
+  const num = Number.parseInt(String(rawValue || ''), 10);
+  if (!Number.isFinite(num) || num < 1) {
+    throw new CliArgError(`参数 ${flag} 的值必须是 >= 1 的整数: ${rawValue}`);
+  }
+  return num;
+}
+
+function parseEnumValue(flag, rawValue, allowedSet) {
+  const normalized = String(rawValue || '')
+    .trim()
+    .toLowerCase();
+  if (!allowedSet.has(normalized)) {
+    throw new CliArgError(`参数 ${flag} 的值无效: ${rawValue}`);
   }
   return normalized;
 }
@@ -91,9 +146,34 @@ export function parseCliArgs(argv) {
     dryRunDefault: null,
     mode: null,
     theme: null,
+    output: null,
+    dryRun: null,
+    yes: false,
+    saveConfig: false,
     jsonOutput: false,
     force: false,
+    action: null,
+    actionFromMode: false,
+    actionFlagCount: 0,
+    restoreBatchId: null,
+    accounts: null,
+    months: null,
+    cutoffMonth: null,
+    categories: null,
+    includeNonMonthDirs: null,
+    externalRoots: null,
+    externalRootsSource: null,
+    targets: null,
+    tiers: null,
+    suggestedOnly: null,
+    allowRecentActive: null,
+    conflict: null,
+    retentionEnabled: null,
+    retentionMaxAgeDays: null,
+    retentionMinKeepBatches: null,
+    retentionSizeThresholdGB: null,
   };
+  const actionValues = [];
 
   const takeValue = (flag, index) => {
     const value = argv[index + 1];
@@ -116,6 +196,12 @@ export function parseCliArgs(argv) {
 
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
+    if (ACTION_FLAG_MAP.has(token)) {
+      parsed.action = ACTION_FLAG_MAP.get(token);
+      parsed.actionFlagCount += 1;
+      actionValues.push(parsed.action);
+      continue;
+    }
     if (token === '--root') {
       parsed.rootDir = takeValue(token, i);
       i += 1;
@@ -146,6 +232,14 @@ export function parseCliArgs(argv) {
       i += 1;
       continue;
     }
+    if (token === '--restore-batch') {
+      parsed.restoreBatchId = takeValue(token, i);
+      parsed.action = 'restore';
+      parsed.actionFlagCount += 1;
+      actionValues.push('restore');
+      i += 1;
+      continue;
+    }
     if (token === '--theme') {
       const theme = normalizeTheme(takeValue(token, i));
       if (!theme) {
@@ -153,6 +247,28 @@ export function parseCliArgs(argv) {
       }
       parsed.theme = theme;
       i += 1;
+      continue;
+    }
+    if (token === '--output') {
+      const output = normalizeOutput(takeValue(token, i));
+      if (!output) {
+        throw new CliArgError(`参数 --output 的值无效: ${argv[i + 1]}`);
+      }
+      parsed.output = output;
+      i += 1;
+      continue;
+    }
+    if (token === '--dry-run') {
+      parsed.dryRun = parseBooleanFlag(token, takeValue(token, i));
+      i += 1;
+      continue;
+    }
+    if (token === '--yes') {
+      parsed.yes = true;
+      continue;
+    }
+    if (token === '--save-config') {
+      parsed.saveConfig = true;
       continue;
     }
     if (token === '--json') {
@@ -163,9 +279,134 @@ export function parseCliArgs(argv) {
       parsed.force = true;
       continue;
     }
+    if (token === '--accounts') {
+      parsed.accounts = parseCsvList(takeValue(token, i));
+      i += 1;
+      continue;
+    }
+    if (token === '--months') {
+      parsed.months = parseCsvList(takeValue(token, i));
+      i += 1;
+      continue;
+    }
+    if (token === '--cutoff-month') {
+      parsed.cutoffMonth = takeValue(token, i);
+      i += 1;
+      continue;
+    }
+    if (token === '--categories') {
+      parsed.categories = parseCsvList(takeValue(token, i));
+      i += 1;
+      continue;
+    }
+    if (token === '--include-non-month-dirs') {
+      parsed.includeNonMonthDirs = parseBooleanFlag(token, takeValue(token, i));
+      i += 1;
+      continue;
+    }
+    if (token === '--external-roots') {
+      parsed.externalRoots = parseCsvList(takeValue(token, i));
+      i += 1;
+      continue;
+    }
+    if (token === '--external-roots-source') {
+      const sourceValues = parseCsvList(takeValue(token, i)).map((item) => item.toLowerCase());
+      if (sourceValues.length === 0) {
+        throw new CliArgError('参数 --external-roots-source 至少需要一个值');
+      }
+      for (const source of sourceValues) {
+        if (!ALLOWED_EXTERNAL_ROOT_SOURCES.has(source)) {
+          throw new CliArgError(`参数 --external-roots-source 的值无效: ${source}`);
+        }
+      }
+      parsed.externalRootsSource = sourceValues;
+      i += 1;
+      continue;
+    }
+    if (token === '--targets') {
+      parsed.targets = parseCsvList(takeValue(token, i));
+      i += 1;
+      continue;
+    }
+    if (token === '--tiers') {
+      const values = parseCsvList(takeValue(token, i)).map((item) => item.toLowerCase());
+      if (values.length === 0) {
+        throw new CliArgError('参数 --tiers 至少需要一个值');
+      }
+      for (const tier of values) {
+        if (!ALLOWED_GOVERNANCE_TIERS.has(tier)) {
+          throw new CliArgError(`参数 --tiers 的值无效: ${tier}`);
+        }
+      }
+      parsed.tiers = values;
+      i += 1;
+      continue;
+    }
+    if (token === '--suggested-only') {
+      parsed.suggestedOnly = parseBooleanFlag(token, takeValue(token, i));
+      i += 1;
+      continue;
+    }
+    if (token === '--allow-recent-active') {
+      parsed.allowRecentActive = parseBooleanFlag(token, takeValue(token, i));
+      i += 1;
+      continue;
+    }
+    if (token === '--conflict') {
+      parsed.conflict = parseEnumValue(token, takeValue(token, i), ALLOWED_CONFLICT_STRATEGIES);
+      i += 1;
+      continue;
+    }
+    if (token === '--retention-enabled') {
+      parsed.retentionEnabled = parseBooleanFlag(token, takeValue(token, i));
+      i += 1;
+      continue;
+    }
+    if (token === '--retention-max-age-days') {
+      parsed.retentionMaxAgeDays = parsePositiveInteger(token, takeValue(token, i));
+      i += 1;
+      continue;
+    }
+    if (token === '--retention-min-keep-batches') {
+      parsed.retentionMinKeepBatches = parsePositiveInteger(token, takeValue(token, i));
+      i += 1;
+      continue;
+    }
+    if (token === '--retention-size-threshold-gb') {
+      parsed.retentionSizeThresholdGB = parsePositiveInteger(token, takeValue(token, i));
+      i += 1;
+      continue;
+    }
     if (token.startsWith('-')) {
       throw new CliArgError(`不支持的参数: ${token}`);
     }
+  }
+
+  if (parsed.months && parsed.cutoffMonth) {
+    throw new CliArgError('参数 --months 与 --cutoff-month 不能同时使用');
+  }
+
+  if (parsed.actionFlagCount > 1 || new Set(actionValues).size > 1) {
+    throw new CliArgError('动作参数冲突：一次只能指定一个动作（如 --cleanup-monthly）');
+  }
+
+  if (parsed.mode && parsed.action) {
+    throw new CliArgError('参数 --mode 不能与动作参数同时使用');
+  }
+
+  if (parsed.mode && !parsed.action) {
+    const mapped = MODE_TO_ACTION_MAP.get(String(parsed.mode || '').trim());
+    if (mapped) {
+      parsed.action = mapped;
+      parsed.actionFromMode = true;
+    }
+  }
+
+  if (parsed.jsonOutput) {
+    if (parsed.output && parsed.output !== 'json') {
+      throw new CliArgError('参数 --json 与 --output text 不能同时使用');
+    }
+    parsed.output = 'json';
   }
 
   return parsed;

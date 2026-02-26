@@ -331,7 +331,7 @@ export async function runDoctor({ config, aliases, projectRoot, appVersion }) {
       '回收区健康',
       recycleOverThreshold ? STATUS_WARN : STATUS_PASS,
       `批次 ${recycleStats.totalBatches} 个，容量 ${recycleStats.totalBytes} bytes，阈值 ${thresholdBytes} bytes`,
-      recycleOverThreshold ? '建议执行回收区治理（--mode recycle_maintain）。' : ''
+      recycleOverThreshold ? '建议执行回收区治理（--recycle-maintain）。' : ''
     )
   );
 
