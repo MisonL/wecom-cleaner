@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import os from 'node:os';
 import { promises as fs } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -35,6 +36,22 @@ async function prepareFixture(root) {
   return profilesRoot;
 }
 
+async function prepareAutoExternalRoot(prefix = 'wecom-cli-auto-root') {
+  const parent = path.join(
+    os.homedir(),
+    'Documents',
+    `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
+  );
+  const externalRoot = path.join(parent, 'WXWork_Data');
+  const monthDir = path.join(externalRoot, 'WXWork Files', 'Caches', 'Files', '2024-01');
+  await fs.mkdir(monthDir, { recursive: true });
+  await fs.writeFile(path.join(monthDir, 'external.txt'), 'external', 'utf-8');
+  return {
+    parent,
+    externalRoot: path.resolve(externalRoot),
+  };
+}
+
 function runCli(args, env = {}) {
   return spawnSync(process.execPath, [CLI_PATH, ...args], {
     cwd: REPO_ROOT,
@@ -45,6 +62,32 @@ function runCli(args, env = {}) {
     },
     encoding: 'utf-8',
   });
+}
+
+async function readLastCleanupBatchId(indexPath) {
+  const exists = await fs
+    .stat(indexPath)
+    .then(() => true)
+    .catch(() => false);
+  if (!exists) {
+    return null;
+  }
+  const content = await fs.readFile(indexPath, 'utf-8');
+  const lines = String(content || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    try {
+      const row = JSON.parse(lines[i]);
+      if (row?.action === 'cleanup' && row?.status === 'success' && row?.batchId) {
+        return row.batchId;
+      }
+    } catch {
+      // ignore invalid jsonl row
+    }
+  }
+  return null;
 }
 
 test('无交互 cleanup 默认返回 JSON 且未加 --yes 时强制 dry-run', async (t) => {
@@ -73,7 +116,25 @@ test('无交互 cleanup 默认返回 JSON 且未加 --yes 时强制 dry-run', as
   assert.equal(payload.action, 'cleanup_monthly');
   assert.equal(payload.ok, true);
   assert.equal(payload.dryRun, true);
+  assert.equal(payload.summary.hasWork, true);
+  assert.equal(payload.summary.noTarget, false);
+  assert.equal(payload.summary.matchedTargets >= 1, true);
+  assert.equal(payload.summary.matchedBytes >= 1, true);
   assert.equal(payload.summary.successCount >= 1, true);
+  assert.equal(payload.summary.accountCount, 1);
+  assert.equal(payload.summary.categoryCount, 1);
+  assert.equal(payload.summary.monthCount, 1);
+  assert.equal(payload.summary.rootPathCount >= 1, true);
+  assert.equal(typeof payload.summary.matchedMonthStart, 'string');
+  assert.equal(typeof payload.summary.matchedMonthEnd, 'string');
+  assert.equal(Array.isArray(payload.data?.report?.matched?.categoryStats), true);
+  assert.equal(Array.isArray(payload.data?.report?.matched?.monthStats), true);
+  assert.equal(Array.isArray(payload.data?.report?.matched?.rootStats), true);
+  assert.equal(Array.isArray(payload.data?.report?.matched?.topPaths), true);
+  assert.equal(Array.isArray(payload.data?.report?.executed?.byCategory), true);
+  assert.equal(Array.isArray(payload.data?.report?.executed?.byMonth), true);
+  assert.equal(Array.isArray(payload.data?.report?.executed?.byRoot), true);
+  assert.equal(Array.isArray(payload.data?.report?.executed?.topPaths), true);
 
   const sourcePath = path.join(profilesRoot, 'acc001', 'Caches', 'Files', '2024-01');
   const exists = await fs
@@ -81,6 +142,81 @@ test('无交互 cleanup 默认返回 JSON 且未加 --yes 时强制 dry-run', as
     .then(() => true)
     .catch(() => false);
   assert.equal(exists, true);
+});
+
+test('无交互 cleanup 在无命中目标时返回 noTarget 且不生成批次', async (t) => {
+  const root = await makeTempDir('wecom-cli-ni-cleanup-empty-');
+  t.after(async () => removeDir(root));
+
+  const profilesRoot = await prepareFixture(root);
+  const stateRoot = path.join(root, 'state');
+
+  const result = runCli([
+    '--cleanup-monthly',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--accounts',
+    'all',
+    '--categories',
+    'files',
+    '--months',
+    '2024-02',
+  ]);
+
+  assert.equal(result.status, 0);
+  const payload = JSON.parse(String(result.stdout || '{}'));
+  assert.equal(payload.action, 'cleanup_monthly');
+  assert.equal(payload.ok, true);
+  assert.equal(payload.dryRun, true);
+  assert.equal(payload.summary.hasWork, false);
+  assert.equal(payload.summary.noTarget, true);
+  assert.equal(payload.summary.matchedTargets, 0);
+  assert.equal(payload.summary.matchedBytes, 0);
+  assert.equal(payload.summary.reclaimedBytes, 0);
+  assert.equal(payload.summary.successCount, 0);
+  assert.equal(payload.summary.skippedCount, 0);
+  assert.equal(payload.summary.failedCount, 0);
+  assert.equal(payload.summary.batchId, null);
+  assert.equal(payload.summary.monthCount, 1);
+  assert.equal(payload.summary.rootPathCount, 0);
+  assert.equal(payload.summary.matchedMonthStart, null);
+  assert.equal(payload.summary.matchedMonthEnd, null);
+  assert.equal(payload.data?.report?.matched?.totalTargets, 0);
+  assert.equal(payload.data?.report?.executed, null);
+});
+
+test('无交互 cleanup 默认 external-roots-source=all，会自动纳入探测到的外部目录', async (t) => {
+  const root = await makeTempDir('wecom-cli-ni-cleanup-auto-root-');
+  t.after(async () => removeDir(root));
+
+  const profilesRoot = await prepareFixture(root);
+  const stateRoot = path.join(root, 'state');
+  const autoExternal = await prepareAutoExternalRoot('wecom-cli-auto-source');
+  t.after(async () => removeDir(autoExternal.parent));
+
+  const result = runCli([
+    '--cleanup-monthly',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--accounts',
+    'all',
+    '--categories',
+    'files',
+    '--months',
+    '2024-01',
+  ]);
+
+  assert.equal(result.status, 0);
+  const payload = JSON.parse(String(result.stdout || '{}'));
+  assert.equal(payload.action, 'cleanup_monthly');
+  assert.equal(payload.ok, true);
+  assert.equal(Array.isArray(payload.data?.selectedExternalRoots), true);
+  assert.equal(payload.data.selectedExternalRoots.includes(autoExternal.externalRoot), true);
+  assert.equal(payload.summary.externalRootCount >= 1, true);
 });
 
 test('无交互真实执行必须显式 --yes，否则退出码为 3', async (t) => {
@@ -197,4 +333,271 @@ test('CLI 支持 --version 并输出版本号', () => {
   const result = runCli(['--version']);
   assert.equal(result.status, 0);
   assert.match(String(result.stdout || '').trim(), /^\d+\.\d+\.\d+$/);
+});
+
+test('无交互 analysis 返回用户报告统计结构', async (t) => {
+  const root = await makeTempDir('wecom-cli-ni-analysis-');
+  t.after(async () => removeDir(root));
+
+  const profilesRoot = await prepareFixture(root);
+  const stateRoot = path.join(root, 'state');
+
+  const result = runCli(['--analysis-only', '--root', profilesRoot, '--state-root', stateRoot, '--accounts', 'all']);
+  assert.equal(result.status, 0);
+
+  const payload = JSON.parse(String(result.stdout || '{}'));
+  assert.equal(payload.action, 'analysis_only');
+  assert.equal(payload.ok, true);
+  assert.equal(Array.isArray(payload.data?.report?.matched?.categoryStats), true);
+  assert.equal(Array.isArray(payload.data?.report?.matched?.monthStats), true);
+  assert.equal(Array.isArray(payload.data?.report?.matched?.accountStats), true);
+  assert.equal(Array.isArray(payload.data?.report?.matched?.rootStats), true);
+  assert.equal(Array.isArray(payload.data?.report?.matched?.topPaths), true);
+});
+
+test('无交互 space-governance 返回统一报告结构', async (t) => {
+  const root = await makeTempDir('wecom-cli-ni-governance-');
+  t.after(async () => removeDir(root));
+
+  const profilesRoot = await prepareFixture(root);
+  const stateRoot = path.join(root, 'state');
+
+  const result = runCli([
+    '--space-governance',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--accounts',
+    'all',
+    '--tiers',
+    'safe,caution',
+  ]);
+  assert.equal(result.status, 0);
+
+  const payload = JSON.parse(String(result.stdout || '{}'));
+  assert.equal(payload.action, 'space_governance');
+  assert.equal(payload.ok, true);
+  assert.equal(Array.isArray(payload.data?.report?.matched?.byTier), true);
+  assert.equal(Array.isArray(payload.data?.report?.matched?.byTargetType), true);
+  assert.equal(Array.isArray(payload.data?.report?.matched?.byAccount), true);
+  assert.equal(Array.isArray(payload.data?.report?.matched?.byRoot), true);
+  assert.equal(Array.isArray(payload.data?.report?.matched?.topPaths), true);
+  if (payload.data?.report?.executed) {
+    assert.equal(Array.isArray(payload.data.report.executed.byCategory), true);
+    assert.equal(Array.isArray(payload.data.report.executed.byMonth), true);
+    assert.equal(Array.isArray(payload.data.report.executed.byRoot), true);
+  } else {
+    assert.equal(payload.summary.matchedTargets, 0);
+  }
+});
+
+test('无交互 restore-batch 返回匹配与执行报告结构', async (t) => {
+  const root = await makeTempDir('wecom-cli-ni-restore-');
+  t.after(async () => removeDir(root));
+
+  const profilesRoot = await prepareFixture(root);
+  const stateRoot = path.join(root, 'state');
+
+  const cleanupResult = runCli([
+    '--cleanup-monthly',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--accounts',
+    'all',
+    '--categories',
+    'files',
+    '--months',
+    '2024-01',
+    '--dry-run',
+    'false',
+    '--yes',
+  ]);
+  assert.equal(cleanupResult.status, 0);
+
+  const indexPath = path.join(stateRoot, 'index.jsonl');
+  const batchId = await readLastCleanupBatchId(indexPath);
+  assert.equal(typeof batchId, 'string');
+  assert.equal(Boolean(batchId), true);
+
+  const restoreResult = runCli([
+    '--restore-batch',
+    batchId,
+    '--conflict',
+    'rename',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+  ]);
+  assert.equal(restoreResult.status, 0);
+
+  const payload = JSON.parse(String(restoreResult.stdout || '{}'));
+  assert.equal(payload.action, 'restore');
+  assert.equal(payload.dryRun, true);
+  assert.equal(payload.summary.batchId, batchId);
+  assert.equal(Array.isArray(payload.data?.report?.matched?.byScope), true);
+  assert.equal(Array.isArray(payload.data?.report?.matched?.byCategory), true);
+  assert.equal(Array.isArray(payload.data?.report?.matched?.byMonth), true);
+  assert.equal(Array.isArray(payload.data?.report?.matched?.byRoot), true);
+  assert.equal(Array.isArray(payload.data?.report?.matched?.topEntries), true);
+  assert.equal(Array.isArray(payload.data?.report?.executed?.byScope), true);
+  assert.equal(Array.isArray(payload.data?.report?.executed?.byCategory), true);
+  assert.equal(Array.isArray(payload.data?.report?.executed?.byMonth), true);
+  assert.equal(Array.isArray(payload.data?.report?.executed?.byRoot), true);
+});
+
+test('无交互 recycle-maintain 返回候选与执行明细结构', async (t) => {
+  const root = await makeTempDir('wecom-cli-ni-recycle-');
+  t.after(async () => removeDir(root));
+
+  const profilesRoot = await prepareFixture(root);
+  const stateRoot = path.join(root, 'state');
+
+  const result = runCli(['--recycle-maintain', '--root', profilesRoot, '--state-root', stateRoot]);
+  assert.equal(result.status, 0);
+
+  const payload = JSON.parse(String(result.stdout || '{}'));
+  assert.equal(payload.action, 'recycle_maintain');
+  assert.equal(payload.ok, true);
+  assert.equal(typeof payload.summary.candidateCount, 'number');
+  assert.equal(typeof payload.summary.deletedBatches, 'number');
+  assert.equal(typeof payload.summary.deletedBytes, 'number');
+  assert.equal(Array.isArray(payload.data?.report?.selectedCandidates), true);
+  assert.equal(Array.isArray(payload.data?.report?.operations), true);
+  assert.equal(typeof payload.data?.report?.before?.totalBatches, 'number');
+  assert.equal(typeof payload.data?.report?.after?.totalBatches, 'number');
+});
+
+test('无交互 --output text 输出中文任务卡片（覆盖全部动作）', async (t) => {
+  const root = await makeTempDir('wecom-cli-ni-text-output-');
+  t.after(async () => removeDir(root));
+
+  const profilesRoot = await prepareFixture(root);
+  const stateRoot = path.join(root, 'state');
+
+  const cleanupText = runCli([
+    '--cleanup-monthly',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--accounts',
+    'all',
+    '--categories',
+    'files',
+    '--months',
+    '2024-01',
+    '--external-storage-auto-detect',
+    'false',
+    '--output',
+    'text',
+  ]);
+  assert.equal(cleanupText.status, 0);
+  assert.match(String(cleanupText.stdout || ''), /任务结论/);
+  assert.match(String(cleanupText.stdout || ''), /分类统计（按命中范围）/);
+  assert.match(String(cleanupText.stdout || ''), /月份统计（按命中范围）/);
+
+  const analysisText = runCli([
+    '--analysis-only',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--accounts',
+    'all',
+    '--external-storage-auto-detect',
+    'false',
+    '--output',
+    'text',
+  ]);
+  assert.equal(analysisText.status, 0);
+  assert.match(String(analysisText.stdout || ''), /只读分析完成/);
+  assert.match(String(analysisText.stdout || ''), /结果统计/);
+
+  const governanceText = runCli([
+    '--space-governance',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--accounts',
+    'all',
+    '--external-storage-auto-detect',
+    'false',
+    '--output',
+    'text',
+  ]);
+  assert.equal(governanceText.status, 0);
+  assert.match(String(governanceText.stdout || ''), /分级统计（按命中范围）/);
+
+  const cleanupExec = runCli([
+    '--cleanup-monthly',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--accounts',
+    'all',
+    '--categories',
+    'files',
+    '--months',
+    '2024-01',
+    '--external-storage-auto-detect',
+    'false',
+    '--dry-run',
+    'false',
+    '--yes',
+  ]);
+  assert.equal(cleanupExec.status, 0);
+  const batchId = await readLastCleanupBatchId(path.join(stateRoot, 'index.jsonl'));
+  assert.equal(typeof batchId, 'string');
+  assert.equal(Boolean(batchId), true);
+
+  const restoreText = runCli([
+    '--restore-batch',
+    batchId,
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--conflict',
+    'rename',
+    '--external-storage-auto-detect',
+    'false',
+    '--output',
+    'text',
+  ]);
+  assert.equal(restoreText.status, 0);
+  assert.match(String(restoreText.stdout || ''), /作用域统计（按批次命中）/);
+
+  const recycleText = runCli([
+    '--recycle-maintain',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--external-storage-auto-detect',
+    'false',
+    '--output',
+    'text',
+  ]);
+  assert.equal(recycleText.status, 0);
+  assert.match(String(recycleText.stdout || ''), /操作分布/);
+
+  const doctorText = runCli([
+    '--doctor',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--external-storage-auto-detect',
+    'false',
+    '--output',
+    'text',
+  ]);
+  assert.equal(doctorText.status, 0);
+  assert.match(String(doctorText.stdout || ''), /检查统计/);
 });
