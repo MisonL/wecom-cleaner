@@ -6,12 +6,13 @@ fn isAbsPath(path: []const u8) bool {
 
 fn pathSize(path: []const u8) !u64 {
     const cwd = std.fs.cwd();
-
     const file_res = if (isAbsPath(path)) std.fs.openFileAbsolute(path, .{}) else cwd.openFile(path, .{});
     if (file_res) |file| {
         defer file.close();
         const st = try file.stat();
-        return st.size;
+        if (st.kind != .directory) {
+            return st.size;
+        }
     } else |err| {
         if (err != error.IsDir) {
             return err;
