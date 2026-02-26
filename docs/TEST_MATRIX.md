@@ -24,6 +24,8 @@
 - `restore`
 - `recycle_maintain`
 - `doctor`
+- `check_update`
+- `upgrade`
 
 ### 维度 C：范围组合
 
@@ -94,13 +96,15 @@
 4. `restore`：`skip/overwrite/rename` 三冲突策略
 5. `recycle_maintain`：`disabled` / `no_candidate` / `partial_failed`
 6. `doctor`：只读模式不创建状态目录
-7. Agent 报告脚本：成功、无目标、失败三态退出码与卡片完整性
+7. `check_update`：npm 正常 / npm 失败回退 GitHub / 全部失败
+8. `upgrade`：未确认拒绝、已是最新不执行、执行失败可返回非 0
+9. Agent 报告脚本：成功、无目标、失败三态退出码与卡片完整性
 
 ## 当前门禁（执行顺序）
 
 1. `npm run check`
 2. `npm run test:coverage:check`
-3. `shellcheck skills/wecom-cleaner-agent/scripts/*.sh`
+3. `shellcheck skills/wecom-cleaner-agent/scripts/*.sh scripts/upgrade.sh scripts/install-skill.sh scripts/release-gate.sh`
 4. `npm run e2e:smoke`
 
 说明：若新增动作/字段，需先补此文档矩阵与断言，再提交实现。

@@ -18,6 +18,42 @@
 
 - 暂无。
 
+## [1.3.0] - 2026-02-27
+
+### Added
+
+- 新增自主升级体系（`src/updater.js`）：
+  - 版本检查源优先 npm，失败自动回退 GitHub Release。
+  - 三时段自动检查策略（早/午/晚）与启动期检查决策。
+  - 升级执行支持 `npm` 与 `github-script` 两种方式。
+- 新增无交互升级相关动作与参数：
+  - `--check-update`
+  - `--upgrade <npm|github-script>`
+  - `--upgrade-version <x.y.z>`
+  - `--upgrade-channel <stable|pre>`
+  - `--upgrade-yes`
+- 新增 GitHub 托管升级脚本：`scripts/upgrade.sh`。
+- 新增升级能力测试：`test/updater.test.js`，覆盖版本比较、三时段检查、源回退与升级命令构造。
+- 新增 Skills 升级能力脚本：
+  - `skills/wecom-cleaner-agent/scripts/check_update_report.sh`
+  - `skills/wecom-cleaner-agent/scripts/upgrade_report.sh`
+
+### Changed
+
+- `src/cli.js` 接入升级体系：
+  - 非交互新增 `check_update`/`upgrade` 动作输出（JSON + text）。
+  - 交互模式检测到新版本后支持“npm 升级 / GitHub 脚本升级 / 稍后 / 跳过该版本”。
+  - 非交互输出统一补充 `data.userFacingSummary`。
+- `src/config.js` 新增 `selfUpdate` 配置持久化与参数解析支持。
+- `src/doctor.js` 新增“升级检查配置”体检项（启用状态、通道、最近检查时间、跳过版本）。
+- 质量门禁脚本增强：`release:gate` 将 `scripts/upgrade.sh` 一并纳入 shellcheck。
+- E2E smoke 的开始菜单断言已适配新增菜单项（`检查更新与升级`）。
+
+### Fixed
+
+- 修复 `scripts/install-skill.sh` 在 shellcheck 下的 `SC2088` 问题（`~` 引号匹配）。
+- 修复 Zig 核心 `--ping` 版本标识与当前版本不一致的问题。
+
 ## [1.2.1] - 2026-02-26
 
 ### Added

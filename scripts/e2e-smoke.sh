@@ -41,6 +41,7 @@ export E2E_PROFILE_ROOT="$PROFILE_ROOT"
 export E2E_STATE_ROOT="$STATE_ROOT"
 export E2E_EXTERNAL_ROOT="$EXTERNAL_ROOT"
 export E2E_UI_STATE_ROOT="$UI_STATE"
+export WECOM_CLEANER_AUTO_UPDATE="false"
 
 cleanup() {
   if [[ "$KEEP_ARTIFACTS" -eq 1 ]]; then
@@ -183,7 +184,7 @@ log_user 0
 log_file -noappend $logfile
 spawn node src/cli.js --interactive --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
 expect "开始菜单"
-send "\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\r"
+send "\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\r"
 expect {
   "已退出。" { exit 0 }
   timeout { exit 11 }

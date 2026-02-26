@@ -61,7 +61,7 @@ done
 
 # 允许传入尚不存在的目标目录，避免因父目录不存在导致 cd 失败
 case "${TARGET_ROOT}" in
-  "~" | "~/"*)
+  \~ | \~/*)
     TARGET_ROOT="${HOME}${TARGET_ROOT#"~"}"
     ;;
 esac

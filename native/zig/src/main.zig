@@ -57,7 +57,7 @@ fn dirTreeSize(dir: *std.fs.Dir) !u64 {
 }
 
 fn printPing(writer: *std.Io.Writer) !void {
-    try writer.writeAll("{\"ok\":true,\"engine\":\"zig\",\"version\":\"1.1.0\"}\n");
+    try writer.writeAll("{\"ok\":true,\"engine\":\"zig\",\"version\":\"1.3.0\"}\n");
 }
 
 fn runDu(args: []const []const u8, writer: *std.Io.Writer) !void {

@@ -92,6 +92,15 @@
 - `doctor` 模式为只读体检：不会自动创建状态目录/回收区，也不会触发 Zig 自动修复下载。
 - 多实例并发默认加锁；检测到陈旧锁会优先自动恢复，异常场景可用 `--force` 兜底清理。
 
+7. 自主升级体系
+
+- 启动后按“早/午/晚”三时段检查更新（默认开启）。
+- 版本源优先 npmjs，失败自动回退 GitHub Release。
+- 交互模式发现新版本时可直接选择升级方式：
+  - npm 升级（默认）
+  - GitHub 脚本升级
+- 无交互模式仅提示不阻断任务执行。
+
 ## 能力边界
 
 企业微信会话数据库为私有/加密格式，当前无法稳定建立“会话名 -> 本地缓存目录”的强映射。
@@ -159,10 +168,10 @@ GitHub 备选方式（无 npm 包依赖）：
 curl -fsSL https://raw.githubusercontent.com/MisonL/wecom-cleaner/main/scripts/install-skill.sh | bash
 ```
 
-若需安装指定版本标签（例如 `v1.2.1`）：
+若需安装指定版本标签（例如 `v1.3.0`）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MisonL/wecom-cleaner/main/scripts/install-skill.sh | bash -s -- --ref v1.2.1
+curl -fsSL https://raw.githubusercontent.com/MisonL/wecom-cleaner/main/scripts/install-skill.sh | bash -s -- --ref v1.3.0
 ```
 
 Agent 侧统一任务入口脚本（位于 `skills/wecom-cleaner-agent/scripts/`）：
@@ -173,6 +182,8 @@ Agent 侧统一任务入口脚本（位于 `skills/wecom-cleaner-agent/scripts/`
 - `restore_batch_report.sh`：批次恢复任务卡片
 - `recycle_maintain_report.sh`：回收区治理任务卡片
 - `doctor_report.sh`：系统自检任务卡片
+- `check_update_report.sh`：检查更新任务卡片
+- `upgrade_report.sh`：程序升级任务卡片（默认预演）
 
 ## 常用参数
 
@@ -191,6 +202,8 @@ Agent 侧统一任务入口脚本（位于 `skills/wecom-cleaner-agent/scripts/`
 - `--restore-batch <batchId>`
 - `--recycle-maintain`
 - `--doctor`
+- `--check-update`
+- `--upgrade <npm|github-script>`
 
 ### 无交互安全规则
 
@@ -230,6 +243,15 @@ wecom-cleaner --restore-batch 20260226-105009-ffa098 --conflict rename
 
 # 系统自检（默认 JSON 输出）
 wecom-cleaner --doctor
+
+# 检查更新（不执行升级）
+wecom-cleaner --check-update --output text
+
+# 执行升级（npm 默认方式）
+wecom-cleaner --upgrade npm --upgrade-yes
+
+# 执行升级（GitHub 托管脚本方式）
+wecom-cleaner --upgrade github-script --upgrade-version 1.3.1 --upgrade-yes
 ```
 
 ### 输出与兼容参数
@@ -240,6 +262,9 @@ wecom-cleaner --doctor
 - `--save-config`：将本次全局配置参数写回 `config.json`。
 - `--help` / `-h`：输出命令帮助并退出。
 - `--version` / `-v`：输出版本号并退出。
+- `--upgrade-channel stable|pre`：升级检查通道（稳定版/预发布）。
+- `--upgrade-version <x.y.z>`：指定升级目标版本。
+- `--upgrade-yes`：确认执行升级动作（无此参数将拒绝执行升级）。
 
 ### 各动作关键统计字段（JSON）
 
@@ -302,6 +327,23 @@ wecom-cleaner --doctor
 - `data.metrics`：账号数、回收区占用、外部存储等关键指标
 - `data.runtime`：运行时环境信息
 
+#### `check-update`
+
+- `summary.checked`：是否完成检查
+- `summary.hasUpdate`：是否发现新版本
+- `summary.currentVersion` / `latestVersion`
+- `summary.source`：`npm` 或 `github`
+- `summary.channel`：`stable` 或 `pre`
+- `data.update`：检查详情（含 `errors`、`checkReason`、`checkedAt`）
+
+#### `upgrade`
+
+- `summary.executed`：是否执行了升级命令
+- `summary.method`：`npm` 或 `github-script`
+- `summary.targetVersion`：目标版本
+- `summary.status`：升级命令退出码
+- `data.upgrade.command`：实际执行命令
+
 ### 全局参数
 
 - `--root <path>`：Profile 根目录
@@ -327,6 +369,7 @@ wecom-cleaner --doctor
 - `WECOM_CLEANER_NATIVE_DOWNLOAD_TIMEOUT_MS=<ms>`：下载超时（默认 `15000`）
 - `WECOM_CLEANER_NATIVE_PROBE_TIMEOUT_MS=<ms>`：核心探针超时（默认 `3000`，最小 `500`）
 - `WECOM_CLEANER_EXTERNAL_AUTO_DETECT=true|false`：外部存储自动探测总开关
+- `WECOM_CLEANER_AUTO_UPDATE=true|false`：自主升级自动检查总开关（默认 `true`）
 
 ## 数据与审计文件
 
@@ -395,8 +438,8 @@ npm run pack:tgz:dry-run
 
 当前基线（主分支）：
 
-- 单元测试：`91/91` 通过。
-- 覆盖率：`statements 88.49%`，`branches 75.01%`，`functions 95.02%`，`lines 88.49%`。
+- 单元测试：`100/100` 通过。
+- 覆盖率：`statements 87.63%`，`branches 74.03%`，`functions 92.47%`，`lines 87.63%`。
 - 全菜单 smoke：通过（含恢复冲突分支与 doctor JSON 分支）。
 
 ## 测试矩阵
@@ -439,18 +482,19 @@ npm run pack:tgz
 npm run pack:release-assets
 
 # 2) 推送主分支与标签
+VERSION="1.3.0"
 git push origin main
-git tag v1.2.1
-git push origin v1.2.1
+git tag "v${VERSION}"
+git push origin "v${VERSION}"
 
 # 3) 发布 GitHub Release（附 npm 包 + 双架构核心附件）
-gh release create v1.2.1 \
-  --title "v1.2.1" \
-  --notes-file docs/releases/v1.2.1.md \
-  wecom-cleaner-1.2.1.tgz \
-  dist/release/wecom-cleaner-core-v1.2.1-darwin-x64 \
-  dist/release/wecom-cleaner-core-v1.2.1-darwin-arm64 \
-  dist/release/wecom-cleaner-core-v1.2.1-SHA256SUMS.txt
+gh release create "v${VERSION}" \
+  --title "v${VERSION}" \
+  --notes-file "docs/releases/v${VERSION}.md" \
+  "wecom-cleaner-${VERSION}.tgz" \
+  "dist/release/wecom-cleaner-core-v${VERSION}-darwin-x64" \
+  "dist/release/wecom-cleaner-core-v${VERSION}-darwin-arm64" \
+  "dist/release/wecom-cleaner-core-v${VERSION}-SHA256SUMS.txt"
 
 # 4) 发布 npm
 npm publish --access public
