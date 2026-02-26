@@ -5,11 +5,11 @@
   "targets": {
     "darwin-x64": {
       "binaryName": "wecom-cleaner-core",
-      "sha256": "de64bdd48cabf59f1c99ea4165d5d026dd54459339052d882cb4fc1788b90b67"
+      "sha256": "14cfa26895101e7b71824e6bb9282f08a38f9dad72d4df2934094eb2ceefbad0"
     },
     "darwin-arm64": {
       "binaryName": "wecom-cleaner-core",
-      "sha256": "f3a72b8544724a23fc71ae017e985fe6768468a6859f18911db0d1835fe94829"
+      "sha256": "fc33ce3fb44309170da8c2867d11eae552e2e9d3c95b8f0e5a8e8392bb630744"
     }
   }
 }
