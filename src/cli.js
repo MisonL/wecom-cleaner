@@ -907,7 +907,7 @@ function printHeader({
     printLine('文件存储', '未检测到（可在设置里手动添加）');
   }
   if ((sourceCounts?.auto || 0) > 0) {
-    printLine('探测提示', '自动探测目录默认不预选，纳入处理前请确认。', { muted: true });
+    printLine('探测提示', '自动探测目录已默认纳入，可在后续步骤取消勾选。', { muted: true });
   }
   if ((sourceCounts?.auto || 0) > 0 && (sourceCounts?.builtin || 0) + (sourceCounts?.configured || 0) === 0) {
     printLine('操作建议', '建议在“交互配置 -> 手动追加文件存储根目录”先确认常用路径。', { muted: true });
@@ -1030,8 +1030,8 @@ async function chooseExternalStorageRoots(detectedExternalStorage, modeText, opt
   const guideRows = Array.isArray(options.guideRows)
     ? options.guideRows
     : [
-        { label: '默认', value: '已预选默认路径与手动配置路径' },
-        { label: '自动', value: '自动探测目录默认不预选，需显式确认' },
+        { label: '默认', value: '默认/手动/自动目录均已预选，可按需取消' },
+        { label: '自动', value: '自动探测目录可能包含非企微路径，执行前请再次确认' },
         { label: '回退', value: allowBack ? '可选“← 返回上一步”' : '当前步骤不支持回退' },
       ];
   const normalized = normalizeExternalStorageDetection(detectedExternalStorage);
@@ -1053,7 +1053,7 @@ async function chooseExternalStorageRoots(detectedExternalStorage, modeText, opt
     choices: externalStorageRoots.map((rootPath) => ({
       name: formatExternalStorageChoiceLabel(rootPath, rootSources[rootPath]),
       value: rootPath,
-      checked: rootSources[rootPath] !== 'auto',
+      checked: true,
     })),
   });
   if (isPromptBack(selected)) {
@@ -1067,12 +1067,12 @@ async function chooseExternalStorageRoots(detectedExternalStorage, modeText, opt
 
   const allowAuto = allowBack
     ? await askConfirmWithBack({
-        message: `你勾选了自动探测目录 ${autoSelected.length} 项，可能包含非企业微信目录。确认纳入本次扫描吗？`,
-        default: false,
+        message: `已勾选自动探测目录 ${autoSelected.length} 项，可能包含非企业微信目录。确认继续纳入本次扫描吗？`,
+        default: true,
       })
     : await askConfirm({
-        message: `你勾选了自动探测目录 ${autoSelected.length} 项，可能包含非企业微信目录。确认纳入本次扫描吗？`,
-        default: false,
+        message: `已勾选自动探测目录 ${autoSelected.length} 项，可能包含非企业微信目录。确认继续纳入本次扫描吗？`,
+        default: true,
       });
   if (isPromptBack(allowAuto)) {
     return PROMPT_BACK;
@@ -1247,6 +1247,414 @@ function summarizeTargets(targets) {
     totalBytes,
     byCategory: [...byCategory.values()].sort((a, b) => b.sizeBytes - a.sizeBytes),
     byAccount: [...byAccount.values()].sort((a, b) => b.sizeBytes - a.sizeBytes),
+  };
+}
+
+function resolveCleanupTargetRootPath(target) {
+  const accountPath = String(target?.accountPath || '').trim();
+  const categoryPath = String(target?.categoryPath || '').trim();
+  if (accountPath && categoryPath) {
+    return path.resolve(accountPath, categoryPath);
+  }
+  if (accountPath) {
+    return path.resolve(accountPath);
+  }
+  if (target?.path) {
+    return path.dirname(path.resolve(target.path));
+  }
+  return null;
+}
+
+function pushTopTargetRow(rows, row, limit = 20) {
+  rows.push(row);
+  rows.sort((a, b) => Number(b.sizeBytes || 0) - Number(a.sizeBytes || 0));
+  if (rows.length > limit) {
+    rows.length = limit;
+  }
+}
+
+function buildCleanupTargetReport(targets, { topPathLimit = 20 } = {}) {
+  const categoryMap = new Map();
+  const monthMap = new Map();
+  const accountMap = new Map();
+  const rootMap = new Map();
+  const monthSet = new Set();
+  const topPaths = [];
+  let totalBytes = 0;
+
+  for (const item of targets || []) {
+    const sizeBytes = Number(item?.sizeBytes || 0);
+    totalBytes += sizeBytes;
+
+    const categoryKey = String(item?.categoryKey || 'unknown');
+    if (!categoryMap.has(categoryKey)) {
+      categoryMap.set(categoryKey, {
+        categoryKey,
+        categoryLabel: item?.categoryLabel || categoryKey,
+        targetCount: 0,
+        sizeBytes: 0,
+      });
+    }
+    const categoryRow = categoryMap.get(categoryKey);
+    categoryRow.targetCount += 1;
+    categoryRow.sizeBytes += sizeBytes;
+
+    const monthKey = String(item?.monthKey || '非月份目录');
+    if (monthKey !== '非月份目录') {
+      monthSet.add(monthKey);
+    }
+    if (!monthMap.has(monthKey)) {
+      monthMap.set(monthKey, {
+        monthKey,
+        targetCount: 0,
+        sizeBytes: 0,
+      });
+    }
+    const monthRow = monthMap.get(monthKey);
+    monthRow.targetCount += 1;
+    monthRow.sizeBytes += sizeBytes;
+
+    const accountKey = String(item?.accountId || 'unknown');
+    if (!accountMap.has(accountKey)) {
+      accountMap.set(accountKey, {
+        accountId: item?.accountId || null,
+        accountShortId: item?.accountShortId || '-',
+        userName: item?.userName || '-',
+        corpName: item?.corpName || '-',
+        isExternalStorage: Boolean(item?.isExternalStorage),
+        targetCount: 0,
+        sizeBytes: 0,
+      });
+    }
+    const accountRow = accountMap.get(accountKey);
+    accountRow.targetCount += 1;
+    accountRow.sizeBytes += sizeBytes;
+
+    const rootPath = resolveCleanupTargetRootPath(item);
+    const rootKey = rootPath || '(unknown)';
+    if (!rootMap.has(rootKey)) {
+      rootMap.set(rootKey, {
+        rootPath: rootPath || null,
+        rootType: item?.isExternalStorage ? 'external' : 'profile',
+        targetCount: 0,
+        sizeBytes: 0,
+      });
+    }
+    const rootRow = rootMap.get(rootKey);
+    rootRow.targetCount += 1;
+    rootRow.sizeBytes += sizeBytes;
+
+    pushTopTargetRow(
+      topPaths,
+      {
+        path: item?.path || null,
+        sizeBytes,
+        categoryKey,
+        categoryLabel: item?.categoryLabel || categoryKey,
+        monthKey: item?.monthKey || null,
+        accountShortId: item?.accountShortId || '-',
+        isExternalStorage: Boolean(item?.isExternalStorage),
+      },
+      topPathLimit
+    );
+  }
+
+  const matchedMonths = [...monthSet].sort((a, b) => compareMonthKey(a, b));
+  const monthRange =
+    matchedMonths.length > 0
+      ? {
+          from: matchedMonths[0],
+          to: matchedMonths[matchedMonths.length - 1],
+        }
+      : null;
+
+  const byBytesDesc = (a, b) => {
+    const bytesDiff = Number(b.sizeBytes || 0) - Number(a.sizeBytes || 0);
+    if (bytesDiff !== 0) {
+      return bytesDiff;
+    }
+    return Number(b.targetCount || 0) - Number(a.targetCount || 0);
+  };
+  const byMonth = [...monthMap.values()].sort((a, b) => {
+    const aMonth = String(a.monthKey || '非月份目录');
+    const bMonth = String(b.monthKey || '非月份目录');
+    if (aMonth === '非月份目录' && bMonth !== '非月份目录') {
+      return 1;
+    }
+    if (aMonth !== '非月份目录' && bMonth === '非月份目录') {
+      return -1;
+    }
+    if (aMonth === bMonth) {
+      return Number(b.sizeBytes || 0) - Number(a.sizeBytes || 0);
+    }
+    return compareMonthKey(aMonth, bMonth);
+  });
+
+  return {
+    totalTargets: Array.isArray(targets) ? targets.length : 0,
+    totalBytes,
+    monthRange,
+    matchedMonths,
+    categoryStats: [...categoryMap.values()].sort(byBytesDesc),
+    monthStats: byMonth,
+    accountStats: [...accountMap.values()].sort(byBytesDesc),
+    rootStats: [...rootMap.values()].sort(byBytesDesc),
+    topPaths,
+  };
+}
+
+function buildGovernanceTargetReport(targets, { topPathLimit = 20 } = {}) {
+  const byTierMap = new Map();
+  const byTargetMap = new Map();
+  const byAccountMap = new Map();
+  const byRootMap = new Map();
+  const topPaths = [];
+  let totalBytes = 0;
+
+  for (const item of targets || []) {
+    const sizeBytes = Number(item?.sizeBytes || 0);
+    totalBytes += sizeBytes;
+
+    const tierKey = String(item?.tier || 'unknown');
+    if (!byTierMap.has(tierKey)) {
+      byTierMap.set(tierKey, {
+        tier: tierKey,
+        tierLabel: governanceTierLabel(tierKey),
+        targetCount: 0,
+        sizeBytes: 0,
+        suggestedCount: 0,
+        recentlyActiveCount: 0,
+      });
+    }
+    const tierRow = byTierMap.get(tierKey);
+    tierRow.targetCount += 1;
+    tierRow.sizeBytes += sizeBytes;
+    if (item?.suggested) {
+      tierRow.suggestedCount += 1;
+    }
+    if (item?.recentlyActive) {
+      tierRow.recentlyActiveCount += 1;
+    }
+
+    const targetKey = String(item?.targetKey || item?.categoryKey || 'unknown');
+    if (!byTargetMap.has(targetKey)) {
+      byTargetMap.set(targetKey, {
+        targetKey,
+        targetLabel: item?.targetLabel || item?.categoryLabel || targetKey,
+        targetCount: 0,
+        sizeBytes: 0,
+      });
+    }
+    const targetRow = byTargetMap.get(targetKey);
+    targetRow.targetCount += 1;
+    targetRow.sizeBytes += sizeBytes;
+
+    const accountKey = String(item?.accountId || 'global');
+    if (!byAccountMap.has(accountKey)) {
+      byAccountMap.set(accountKey, {
+        accountId: item?.accountId || null,
+        accountShortId: item?.accountShortId || (item?.accountId ? '-' : '全局'),
+        userName: item?.userName || '-',
+        corpName: item?.corpName || '-',
+        targetCount: 0,
+        sizeBytes: 0,
+      });
+    }
+    const accountRow = byAccountMap.get(accountKey);
+    accountRow.targetCount += 1;
+    accountRow.sizeBytes += sizeBytes;
+
+    const rootPath = item?.path ? path.dirname(path.resolve(item.path)) : null;
+    const rootKey = rootPath || '(unknown)';
+    if (!byRootMap.has(rootKey)) {
+      byRootMap.set(rootKey, {
+        rootPath: rootPath || null,
+        rootType: item?.isExternalStorage ? 'external' : 'profile',
+        targetCount: 0,
+        sizeBytes: 0,
+      });
+    }
+    const rootRow = byRootMap.get(rootKey);
+    rootRow.targetCount += 1;
+    rootRow.sizeBytes += sizeBytes;
+
+    pushTopTargetRow(
+      topPaths,
+      {
+        path: item?.path || null,
+        sizeBytes,
+        targetKey,
+        targetLabel: item?.targetLabel || item?.categoryLabel || targetKey,
+        tier: tierKey,
+        tierLabel: governanceTierLabel(tierKey),
+        accountShortId: item?.accountShortId || '-',
+        suggested: Boolean(item?.suggested),
+        recentlyActive: Boolean(item?.recentlyActive),
+      },
+      topPathLimit
+    );
+  }
+
+  const byBytesDesc = (a, b) => {
+    const bytesDiff = Number(b.sizeBytes || 0) - Number(a.sizeBytes || 0);
+    if (bytesDiff !== 0) {
+      return bytesDiff;
+    }
+    return Number(b.targetCount || 0) - Number(a.targetCount || 0);
+  };
+
+  return {
+    totalTargets: Array.isArray(targets) ? targets.length : 0,
+    totalBytes,
+    byTier: [...byTierMap.values()].sort((a, b) => governanceTierRank(a.tier) - governanceTierRank(b.tier)),
+    byTargetType: [...byTargetMap.values()].sort(byBytesDesc),
+    byAccount: [...byAccountMap.values()].sort(byBytesDesc),
+    byRoot: [...byRootMap.values()].sort(byBytesDesc),
+    topPaths,
+  };
+}
+
+function buildRestoreBatchTargetReport(entries, { topPathLimit = 20 } = {}) {
+  const sourceEntries = Array.isArray(entries) ? entries : [];
+  const byScopeMap = new Map();
+  const byCategoryMap = new Map();
+  const byMonthMap = new Map();
+  const byAccountMap = new Map();
+  const byRootMap = new Map();
+  const topEntries = [];
+  const monthSet = new Set();
+  let totalBytes = 0;
+
+  for (const entry of sourceEntries) {
+    const sizeBytes = Number(entry?.sizeBytes || 0);
+    totalBytes += sizeBytes;
+
+    const scope = String(entry?.scope || MODES.CLEANUP_MONTHLY);
+    if (!byScopeMap.has(scope)) {
+      byScopeMap.set(scope, {
+        scope,
+        targetCount: 0,
+        sizeBytes: 0,
+      });
+    }
+    const scopeRow = byScopeMap.get(scope);
+    scopeRow.targetCount += 1;
+    scopeRow.sizeBytes += sizeBytes;
+
+    const categoryKey = String(entry?.categoryKey || entry?.targetKey || 'unknown');
+    if (!byCategoryMap.has(categoryKey)) {
+      byCategoryMap.set(categoryKey, {
+        categoryKey,
+        categoryLabel: entry?.categoryLabel || categoryKey,
+        targetCount: 0,
+        sizeBytes: 0,
+      });
+    }
+    const categoryRow = byCategoryMap.get(categoryKey);
+    categoryRow.targetCount += 1;
+    categoryRow.sizeBytes += sizeBytes;
+
+    const monthKey = String(entry?.monthKey || '非月份目录');
+    if (monthKey !== '非月份目录') {
+      monthSet.add(monthKey);
+    }
+    if (!byMonthMap.has(monthKey)) {
+      byMonthMap.set(monthKey, {
+        monthKey,
+        targetCount: 0,
+        sizeBytes: 0,
+      });
+    }
+    const monthRow = byMonthMap.get(monthKey);
+    monthRow.targetCount += 1;
+    monthRow.sizeBytes += sizeBytes;
+
+    const accountKey = String(entry?.accountId || 'unknown');
+    if (!byAccountMap.has(accountKey)) {
+      byAccountMap.set(accountKey, {
+        accountId: entry?.accountId || null,
+        accountShortId: entry?.accountShortId || '-',
+        userName: entry?.userName || '-',
+        corpName: entry?.corpName || '-',
+        targetCount: 0,
+        sizeBytes: 0,
+      });
+    }
+    const accountRow = byAccountMap.get(accountKey);
+    accountRow.targetCount += 1;
+    accountRow.sizeBytes += sizeBytes;
+
+    const sourcePath = String(entry?.sourcePath || '').trim();
+    const rootPath = sourcePath ? path.dirname(path.resolve(sourcePath)) : null;
+    const rootKey = rootPath || '(unknown)';
+    if (!byRootMap.has(rootKey)) {
+      byRootMap.set(rootKey, {
+        rootPath: rootPath || null,
+        targetCount: 0,
+        sizeBytes: 0,
+      });
+    }
+    const rootRow = byRootMap.get(rootKey);
+    rootRow.targetCount += 1;
+    rootRow.sizeBytes += sizeBytes;
+
+    pushTopTargetRow(
+      topEntries,
+      {
+        sourcePath: sourcePath || null,
+        recyclePath: entry?.recyclePath || null,
+        sizeBytes,
+        scope,
+        categoryKey,
+        categoryLabel: entry?.categoryLabel || categoryKey,
+        monthKey: entry?.monthKey || null,
+        accountShortId: entry?.accountShortId || '-',
+      },
+      topPathLimit
+    );
+  }
+
+  const monthRange =
+    monthSet.size > 0
+      ? (() => {
+          const months = [...monthSet].sort((a, b) => compareMonthKey(a, b));
+          return { from: months[0], to: months[months.length - 1] };
+        })()
+      : null;
+
+  const byBytesDesc = (a, b) => {
+    const bytesDiff = Number(b.sizeBytes || 0) - Number(a.sizeBytes || 0);
+    if (bytesDiff !== 0) {
+      return bytesDiff;
+    }
+    return Number(b.targetCount || 0) - Number(a.targetCount || 0);
+  };
+
+  const monthRows = [...byMonthMap.values()].sort((a, b) => {
+    const aMonth = String(a.monthKey || '非月份目录');
+    const bMonth = String(b.monthKey || '非月份目录');
+    if (aMonth === '非月份目录' && bMonth !== '非月份目录') {
+      return 1;
+    }
+    if (aMonth !== '非月份目录' && bMonth === '非月份目录') {
+      return -1;
+    }
+    if (aMonth === bMonth) {
+      return Number(b.sizeBytes || 0) - Number(a.sizeBytes || 0);
+    }
+    return compareMonthKey(aMonth, bMonth);
+  });
+
+  return {
+    totalEntries: sourceEntries.length,
+    totalBytes,
+    monthRange,
+    byScope: [...byScopeMap.values()].sort(byBytesDesc),
+    byCategory: [...byCategoryMap.values()].sort(byBytesDesc),
+    byMonth: monthRows,
+    byAccount: [...byAccountMap.values()].sort(byBytesDesc),
+    byRoot: [...byRootMap.values()].sort(byBytesDesc),
+    topEntries,
   };
 }
 
@@ -1653,6 +2061,14 @@ function resolveExternalStorageForAction(detected, cliArgs, options = {}) {
   const defaultSources = Array.isArray(options.defaultSources) ? options.defaultSources : ['preset'];
   const sourceAllowSet = normalizeExternalRootsSource(cliArgs.externalRootsSource || defaultSources);
   const selected = detectedRoots.filter((rootPath) => sourceAllowSet.has(rootSources[rootPath] || 'auto'));
+  const excludedAuto = detectedRoots.filter(
+    (rootPath) => (rootSources[rootPath] || 'auto') === 'auto' && !sourceAllowSet.has('auto')
+  );
+  if (excludedAuto.length > 0) {
+    warnings.push(
+      `检测到 ${excludedAuto.length} 个自动探测文件存储目录未纳入本次扫描；如需纳入，请添加参数 --external-roots-source all。`
+    );
+  }
   return { roots: selected, warnings };
 }
 
@@ -1704,22 +2120,655 @@ function toStructuredError(item = {}, fallbackCode = 'E_ACTION_FAILED') {
   };
 }
 
-function printNonInteractiveTextResult(payload) {
-  const statusText = payload.ok ? 'SUCCESS' : 'FAILED';
-  console.log(`[${statusText}] ${payload.action}`);
-  if (payload.summary && typeof payload.summary === 'object') {
-    for (const [key, value] of Object.entries(payload.summary)) {
-      console.log(`${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`);
+const ACTION_DISPLAY_NAMES = new Map([
+  [MODES.CLEANUP_MONTHLY, '年月清理'],
+  [MODES.ANALYSIS_ONLY, '会话分析（只读）'],
+  [MODES.SPACE_GOVERNANCE, '全量空间治理'],
+  [MODES.RESTORE, '恢复已删除批次'],
+  [MODES.RECYCLE_MAINTAIN, '回收区治理'],
+  [MODES.DOCTOR, '系统自检'],
+]);
+
+const CONFLICT_STRATEGY_DISPLAY = new Map([
+  ['skip', '跳过冲突项'],
+  ['overwrite', '覆盖目标路径'],
+  ['rename', '自动重命名后恢复'],
+]);
+
+function actionDisplayName(action) {
+  return ACTION_DISPLAY_NAMES.get(action) || String(action || '-');
+}
+
+function hasDisplayValue(value) {
+  return !(value === undefined || value === null || value === '');
+}
+
+function formatCount(value) {
+  const num = Number(value || 0);
+  return Number.isFinite(num) ? num.toLocaleString('zh-CN') : String(value || 0);
+}
+
+function formatBytesSafe(value) {
+  const num = Number(value || 0);
+  return Number.isFinite(num) ? formatBytes(num) : '-';
+}
+
+function formatDuration(value) {
+  const ms = Number(value || 0);
+  if (!Number.isFinite(ms) || ms < 0) {
+    return '-';
+  }
+  if (ms < 1000) {
+    return `${Math.round(ms)}ms`;
+  }
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function formatEngineLabel(engine) {
+  const key = String(engine || '').toLowerCase();
+  if (key === 'zig') {
+    return 'Zig 核心';
+  }
+  if (key === 'zig_ready') {
+    return 'Zig 已就绪（本次未实际使用）';
+  }
+  if (key === 'node') {
+    return 'Node 引擎';
+  }
+  return key || '-';
+}
+
+function formatYesNo(value) {
+  return value ? '是' : '否';
+}
+
+function categoryLabelFromKey(categoryKey) {
+  const matched = CACHE_CATEGORIES.find((item) => item.key === categoryKey);
+  return matched?.label || categoryKey;
+}
+
+function formatCategoryList(categoryKeys, limit = 8) {
+  const keys = Array.isArray(categoryKeys) ? categoryKeys : [];
+  if (keys.length === 0) {
+    return '未指定';
+  }
+  const labels = uniqueStrings(keys.map((item) => categoryLabelFromKey(item)));
+  const shown = labels.slice(0, limit).join('、');
+  if (labels.length > limit) {
+    return `${shown}（其余 ${labels.length - limit} 类已省略）`;
+  }
+  return shown;
+}
+
+function formatAccountList(accountIds, limit = 6) {
+  const ids = uniqueStrings(Array.isArray(accountIds) ? accountIds : []);
+  if (ids.length === 0) {
+    return '-';
+  }
+  if (ids.length <= limit) {
+    return ids.join('、');
+  }
+  return `${ids.slice(0, limit).join('、')}（其余 ${ids.length - limit} 个已省略）`;
+}
+
+function formatMonthScope(selectedMonths, summary = {}, matched = null) {
+  const months = uniqueStrings(Array.isArray(selectedMonths) ? selectedMonths : []).sort((a, b) =>
+    compareMonthKey(a, b)
+  );
+  if (months.length > 0) {
+    if (months.length === 1) {
+      return `${months[0]}（共 1 个月）`;
     }
+    return `${months[0]} ~ ${months[months.length - 1]}（共 ${months.length} 个月）`;
   }
-  if (Array.isArray(payload.warnings) && payload.warnings.length > 0) {
-    console.log('warnings:');
-    payload.warnings.forEach((item) => console.log(`- ${item}`));
+  if (summary.cutoffMonth) {
+    return `截至 ${summary.cutoffMonth}（含）`;
   }
-  if (Array.isArray(payload.errors) && payload.errors.length > 0) {
-    console.log('errors:');
-    payload.errors.forEach((item) => console.log(`- ${item.code}: ${item.message}`));
+  const from = matched?.monthRange?.from || summary.matchedMonthStart;
+  const to = matched?.monthRange?.to || summary.matchedMonthEnd;
+  if (from && to) {
+    return `${from} ~ ${to}`;
   }
+  return '未指定（按当前筛选规则）';
+}
+
+function formatRootScope(roots, maxSamples = 2) {
+  const list = uniqueStrings(Array.isArray(roots) ? roots : []);
+  if (list.length === 0) {
+    return '未纳入外部文件存储目录';
+  }
+  const samples = list.slice(0, maxSamples).map((item) => trimToWidth(item, 72));
+  return `${list.length} 个（示例：${samples.join('；')}）`;
+}
+
+function printTextRows(title, rows, options = {}) {
+  const list = Array.isArray(rows) ? rows.filter(Boolean) : [];
+  const emptyText = options.emptyText || '无';
+  printSection(title);
+  if (list.length === 0) {
+    console.log(`- ${emptyText}`);
+    return;
+  }
+  for (const row of list) {
+    if (typeof row === 'string') {
+      console.log(`- ${row}`);
+      continue;
+    }
+    const label = row.label || '-';
+    const value = hasDisplayValue(row.value) ? row.value : '-';
+    const note = row.note ? `（${row.note}）` : '';
+    console.log(`- ${label}：${value}${note}`);
+  }
+}
+
+function printTopRows(title, rows, renderLine, limit = 8, emptyText = '无') {
+  const source = Array.isArray(rows) ? rows : [];
+  printSection(title);
+  if (source.length === 0) {
+    console.log(`- ${emptyText}`);
+    return;
+  }
+  const shown = source.slice(0, limit);
+  shown.forEach((item) => {
+    const line = renderLine(item);
+    if (line) {
+      console.log(`- ${line}`);
+    }
+  });
+  if (source.length > limit) {
+    console.log(`- 其余 ${source.length - limit} 项已省略`);
+  }
+}
+
+function formatExecutedBreakdownLine(row, label) {
+  const successText = `${formatCount(row?.successCount)} 项/${formatBytesSafe(row?.successBytes)}`;
+  const skippedText = `${formatCount(row?.skippedCount)} 项`;
+  const failedText = `${formatCount(row?.failedCount)} 项`;
+  const dryRunText = `${formatCount(row?.dryRunCount)} 项/${formatBytesSafe(row?.dryRunBytes)}`;
+  return `${label}：成功 ${successText}，跳过 ${skippedText}，失败 ${failedText}，预演 ${dryRunText}`;
+}
+
+function printRuntimeAndRisk(payload) {
+  const warnings = Array.isArray(payload.warnings) ? payload.warnings : [];
+  const errors = Array.isArray(payload.errors) ? payload.errors : [];
+  if (warnings.length > 0) {
+    printTextRows(
+      '风险提示',
+      warnings.map((item) => ({ label: '警告', value: item })),
+      { emptyText: '无' }
+    );
+  }
+  if (errors.length > 0) {
+    printTextRows(
+      '错误明细',
+      errors.map((item) => ({
+        label: item.code || 'UNKNOWN',
+        value: `${item.message || 'unknown_error'}${item.path ? `（${trimToWidth(item.path, 72)}）` : ''}`,
+      })),
+      { emptyText: '无' }
+    );
+  }
+  printTextRows('运行状态', [
+    { label: '耗时', value: formatDuration(payload.meta?.durationMs), note: '本次任务处理总耗时' },
+    { label: '引擎', value: formatEngineLabel(payload.meta?.engine) },
+    { label: 'warnings', value: formatCount(warnings.length) },
+    { label: 'errors', value: formatCount(errors.length) },
+  ]);
+}
+
+function printCleanupTextResult(payload) {
+  const summary = payload.summary || {};
+  const data = payload.data || {};
+  const matched = data.report?.matched || {};
+  const executed = data.report?.executed || null;
+
+  let conclusion = '任务完成。';
+  if (summary.noTarget) {
+    conclusion = '当前范围未发现可清理目录，已按安全策略结束（未执行真实删除）。';
+  } else if (payload.dryRun) {
+    conclusion = '已完成预演，本次未执行真实删除。';
+  } else if (summary.failedCount > 0) {
+    conclusion = '已执行真实清理，但存在失败项，建议查看错误明细。';
+  } else {
+    conclusion = '已执行真实清理，命中目录已移动到回收区。';
+  }
+
+  printTextRows('任务结论', [
+    { label: '动作', value: actionDisplayName(payload.action) },
+    { label: '结果', value: payload.ok ? '成功' : '部分失败' },
+    {
+      label: '执行方式',
+      value: payload.dryRun ? '预演（dry-run）' : '真实清理（移动到回收区）',
+      note: payload.dryRun ? '不会删除数据，仅预估结果' : '可按批次恢复',
+    },
+    { label: '结论', value: conclusion },
+  ]);
+
+  printTextRows('处理范围', [
+    {
+      label: '账号范围',
+      value: `${formatCount(summary.accountCount)} 个（${formatAccountList(data.selectedAccounts)}）`,
+    },
+    { label: '时间范围', value: formatMonthScope(data.selectedMonths, summary, matched) },
+    { label: '缓存类别', value: formatCategoryList(data.selectedCategories) },
+    {
+      label: '文件存储目录',
+      value: formatRootScope(data.selectedExternalRoots),
+      note: '包含用户在企微设置里修改的文件存储路径',
+    },
+    {
+      label: '非月份目录',
+      value: formatYesNo(data.includeNonMonthDirs),
+      note: '是=会包含数字目录/临时目录等',
+    },
+  ]);
+
+  printTextRows('结果统计', [
+    { label: '命中目录', value: `${formatCount(summary.matchedTargets)} 项`, note: '本次范围内可处理目标数' },
+    { label: '命中体积', value: formatBytesSafe(summary.matchedBytes), note: '命中目录当前占用空间' },
+    {
+      label: payload.dryRun ? '预计可释放' : '实际已释放',
+      value: formatBytesSafe(summary.reclaimedBytes),
+      note: payload.dryRun ? '若执行真实清理，理论可回收空间' : '已移动到回收区的体积',
+    },
+    { label: '成功', value: `${formatCount(summary.successCount)} 项` },
+    { label: '跳过', value: `${formatCount(summary.skippedCount)} 项` },
+    { label: '失败', value: `${formatCount(summary.failedCount)} 项` },
+    { label: '回收批次', value: summary.batchId || '-' },
+  ]);
+
+  printTopRows(
+    '分类统计（按命中范围）',
+    matched.categoryStats,
+    (row) => `${row.categoryLabel || row.categoryKey}：${formatCount(row.targetCount)} 项，${formatBytesSafe(row.sizeBytes)}`,
+    10
+  );
+  printTopRows(
+    '月份统计（按命中范围）',
+    matched.monthStats,
+    (row) => `${row.monthKey || '非月份目录'}：${formatCount(row.targetCount)} 项，${formatBytesSafe(row.sizeBytes)}`,
+    12
+  );
+  printTopRows(
+    '目录统计（按命中范围）',
+    matched.rootStats,
+    (row) =>
+      `${trimToWidth(row.rootPath || '-', 72)}：${formatCount(row.targetCount)} 项，${formatBytesSafe(row.sizeBytes)}`,
+    8
+  );
+
+  if (executed) {
+    printTopRows(
+      payload.dryRun ? '预演分布（按类别）' : '执行分布（按类别）',
+      executed.byCategory,
+      (row) => formatExecutedBreakdownLine(row, row.categoryLabel || row.categoryKey || '-'),
+      8
+    );
+    printTopRows(
+      payload.dryRun ? '预演分布（按月份）' : '执行分布（按月份）',
+      executed.byMonth,
+      (row) => formatExecutedBreakdownLine(row, row.monthKey || '非月份目录'),
+      10
+    );
+  }
+
+  printRuntimeAndRisk(payload);
+}
+
+function printAnalysisTextResult(payload) {
+  const summary = payload.summary || {};
+  const data = payload.data || {};
+  const matched = data.report?.matched || {};
+  const range = matched.monthRange
+    ? `${matched.monthRange.from} ~ ${matched.monthRange.to}`
+    : '无月份目录（可能仅命中非月份目录）';
+
+  printTextRows('任务结论', [
+    { label: '动作', value: actionDisplayName(payload.action) },
+    { label: '结果', value: '只读分析完成' },
+    { label: '说明', value: '本次不会删除任何数据，仅统计分布与占用情况' },
+  ]);
+
+  printTextRows('处理范围', [
+    {
+      label: '账号范围',
+      value: `${formatCount(summary.accountCount)} 个（实际命中 ${formatCount(summary.matchedAccountCount)} 个）`,
+      note: '实际命中指本次统计中出现数据的账号',
+    },
+    { label: '缓存类别', value: formatCategoryList(data.selectedCategories) },
+    { label: '文件存储目录', value: formatRootScope(data.selectedExternalRoots) },
+    { label: '时间范围', value: range },
+  ]);
+
+  printTextRows('结果统计', [
+    { label: '命中目录', value: `${formatCount(summary.targetCount)} 项` },
+    { label: '总占用', value: formatBytesSafe(summary.totalBytes) },
+    { label: '类别数', value: `${formatCount(summary.categoryCount)} 类` },
+    { label: '月份桶', value: `${formatCount(summary.monthBucketCount)} 个` },
+  ]);
+
+  printTopRows(
+    '分类统计（按命中范围）',
+    matched.categoryStats,
+    (row) => `${row.categoryLabel || row.categoryKey}：${formatCount(row.targetCount)} 项，${formatBytesSafe(row.sizeBytes)}`,
+    10
+  );
+  printTopRows(
+    '月份统计（按命中范围）',
+    matched.monthStats,
+    (row) => `${row.monthKey || '非月份目录'}：${formatCount(row.targetCount)} 项，${formatBytesSafe(row.sizeBytes)}`,
+    12
+  );
+  printTopRows(
+    '目录统计（按命中范围）',
+    matched.rootStats,
+    (row) =>
+      `${trimToWidth(row.rootPath || '-', 72)}：${formatCount(row.targetCount)} 项，${formatBytesSafe(row.sizeBytes)}`,
+    8
+  );
+  printRuntimeAndRisk(payload);
+}
+
+function printSpaceGovernanceTextResult(payload) {
+  const summary = payload.summary || {};
+  const data = payload.data || {};
+  const matched = data.report?.matched || {};
+  const executed = data.report?.executed || null;
+
+  let conclusion = '治理扫描完成。';
+  if (summary.matchedTargets === 0) {
+    conclusion = '当前范围未发现可治理目录。';
+  } else if (payload.dryRun) {
+    conclusion = '已完成治理预演，尚未执行真实清理。';
+  } else if (summary.failedCount > 0) {
+    conclusion = '治理已执行，但存在失败项，请查看错误明细。';
+  } else {
+    conclusion = '治理已执行，目标目录已移动到回收区。';
+  }
+
+  printTextRows('任务结论', [
+    { label: '动作', value: actionDisplayName(payload.action) },
+    { label: '结果', value: payload.ok ? '成功' : '部分失败' },
+    { label: '执行方式', value: payload.dryRun ? '预演（dry-run）' : '真实治理（移动到回收区）' },
+    { label: '结论', value: conclusion },
+  ]);
+
+  printTextRows('处理范围', [
+    {
+      label: '账号范围',
+      value: `${formatCount(data.selectedAccounts?.length)} 个（${formatAccountList(data.selectedAccounts)}）`,
+    },
+    { label: '治理目标', value: `${formatCount(data.selectedTargetIds?.length)} 项` },
+    { label: '文件存储目录', value: formatRootScope(data.selectedExternalRoots) },
+    {
+      label: '近期活跃目录',
+      value: formatYesNo(summary.allowRecentActive),
+      note: '否=会自动跳过近期活跃目标',
+    },
+  ]);
+
+  printTextRows('结果统计', [
+    { label: '命中目录', value: `${formatCount(summary.matchedTargets)} 项` },
+    { label: '命中体积', value: formatBytesSafe(summary.matchedBytes) },
+    { label: payload.dryRun ? '预计可释放' : '实际已释放', value: formatBytesSafe(summary.reclaimedBytes) },
+    { label: '成功', value: `${formatCount(summary.successCount)} 项` },
+    { label: '跳过', value: `${formatCount(summary.skippedCount)} 项` },
+    { label: '失败', value: `${formatCount(summary.failedCount)} 项` },
+    { label: '回收批次', value: summary.batchId || '-' },
+  ]);
+
+  printTopRows(
+    '分级统计（按命中范围）',
+    matched.byTier,
+    (row) =>
+      `${row.tierLabel || row.tier}：${formatCount(row.targetCount)} 项，${formatBytesSafe(row.sizeBytes)}，建议项 ${formatCount(row.suggestedCount)}`,
+    8
+  );
+  printTopRows(
+    '目标类型统计（按命中范围）',
+    matched.byTargetType,
+    (row) => `${row.targetLabel || row.targetKey}：${formatCount(row.targetCount)} 项，${formatBytesSafe(row.sizeBytes)}`,
+    10
+  );
+  printTopRows(
+    '目录统计（按命中范围）',
+    matched.byRoot,
+    (row) =>
+      `${trimToWidth(row.rootPath || '-', 72)}：${formatCount(row.targetCount)} 项，${formatBytesSafe(row.sizeBytes)}`,
+    8
+  );
+
+  if (executed) {
+    printTopRows(
+      payload.dryRun ? '预演分布（按类别）' : '执行分布（按类别）',
+      executed.byCategory,
+      (row) => formatExecutedBreakdownLine(row, row.categoryLabel || row.categoryKey || '-'),
+      8
+    );
+  }
+
+  printRuntimeAndRisk(payload);
+}
+
+function printRestoreTextResult(payload) {
+  const summary = payload.summary || {};
+  const data = payload.data || {};
+  const matched = data.report?.matched || {};
+  const executed = data.report?.executed || null;
+  const conflictText = CONFLICT_STRATEGY_DISPLAY.get(summary.conflictStrategy) || summary.conflictStrategy || '-';
+
+  let conclusion = '恢复任务完成。';
+  if (payload.dryRun) {
+    conclusion = '已完成恢复预演，尚未写回原路径。';
+  } else if (summary.failedCount > 0) {
+    conclusion = '恢复已执行，但存在失败项，请按错误明细复核。';
+  } else {
+    conclusion = '恢复已执行完成。';
+  }
+
+  printTextRows('任务结论', [
+    { label: '动作', value: actionDisplayName(payload.action) },
+    { label: '批次号', value: summary.batchId || '-' },
+    { label: '执行方式', value: payload.dryRun ? '预演（dry-run）' : '真实恢复' },
+    { label: '冲突策略', value: conflictText },
+    { label: '结论', value: conclusion },
+  ]);
+
+  printTextRows('处理范围', [
+    { label: '批次条目', value: `${formatCount(summary.entryCount)} 项` },
+    { label: '匹配体积', value: formatBytesSafe(summary.matchedBytes) },
+    { label: '作用域数', value: `${formatCount(summary.scopeCount)} 类` },
+    { label: '文件存储目录', value: formatRootScope(data.selectedExternalRoots) },
+  ]);
+
+  printTextRows('结果统计', [
+    { label: '成功恢复', value: `${formatCount(summary.successCount)} 项` },
+    { label: '跳过', value: `${formatCount(summary.skippedCount)} 项` },
+    { label: '失败', value: `${formatCount(summary.failedCount)} 项` },
+    { label: payload.dryRun ? '预计恢复体积' : '实际恢复体积', value: formatBytesSafe(summary.restoredBytes) },
+  ]);
+
+  printTopRows(
+    '作用域统计（按批次命中）',
+    matched.byScope,
+    (row) => `${actionDisplayName(row.scope)}：${formatCount(row.targetCount)} 项，${formatBytesSafe(row.sizeBytes)}`,
+    8
+  );
+  printTopRows(
+    '类别统计（按批次命中）',
+    matched.byCategory,
+    (row) =>
+      `${row.categoryLabel || row.categoryKey}：${formatCount(row.targetCount)} 项，${formatBytesSafe(row.sizeBytes)}`,
+    10
+  );
+  printTopRows(
+    '月份统计（按批次命中）',
+    matched.byMonth,
+    (row) => `${row.monthKey || '非月份目录'}：${formatCount(row.targetCount)} 项，${formatBytesSafe(row.sizeBytes)}`,
+    10
+  );
+
+  if (executed) {
+    printTopRows(
+      payload.dryRun ? '预演分布（按作用域）' : '执行分布（按作用域）',
+      executed.byScope,
+      (row) => formatExecutedBreakdownLine(row, actionDisplayName(row.scope)),
+      8
+    );
+  }
+
+  printRuntimeAndRisk(payload);
+}
+
+const RECYCLE_STATUS_LABELS = new Map([
+  ['success', '治理完成'],
+  ['dry_run', '预演完成'],
+  ['partial_failed', '部分失败'],
+  ['skipped_disabled', '已跳过（策略关闭）'],
+  ['skipped_no_candidate', '已跳过（无候选批次）'],
+]);
+
+function recycleStatusLabel(status) {
+  return RECYCLE_STATUS_LABELS.get(status) || status || '-';
+}
+
+function printRecycleMaintainTextResult(payload) {
+  const summary = payload.summary || {};
+  const report = payload.data?.report || {};
+  const policy = payload.data?.policy || {};
+  const operations = Array.isArray(report.operations) ? report.operations : [];
+  const operationStatus = operations.reduce((acc, item) => {
+    const key = String(item?.status || 'unknown');
+    acc.set(key, (acc.get(key) || 0) + 1);
+    return acc;
+  }, new Map());
+
+  printTextRows('任务结论', [
+    { label: '动作', value: actionDisplayName(payload.action) },
+    { label: '状态', value: recycleStatusLabel(summary.status) },
+    { label: '执行方式', value: payload.dryRun ? '预演（dry-run）' : '真实治理' },
+    {
+      label: '结论',
+      value:
+        summary.candidateCount > 0
+          ? payload.dryRun
+            ? '已完成预演，未实际删除回收批次。'
+            : '已按保留策略处理回收区批次。'
+          : '当前没有需要治理的回收批次。',
+    },
+  ]);
+
+  printTextRows('处理范围', [
+    { label: '候选批次', value: `${formatCount(summary.candidateCount)} 个` },
+    { label: '按年龄选中', value: `${formatCount(summary.selectedByAge)} 个` },
+    { label: '按容量选中', value: `${formatCount(summary.selectedBySize)} 个` },
+    { label: '保留天数阈值', value: `${formatCount(policy.maxAgeDays)} 天` },
+    { label: '最少保留批次', value: `${formatCount(policy.minKeepBatches)} 个` },
+    { label: '容量阈值', value: `${formatCount(policy.sizeThresholdGB)} GB` },
+  ]);
+
+  printTextRows('结果统计', [
+    { label: payload.dryRun ? '预计释放批次' : '已释放批次', value: `${formatCount(summary.deletedBatches)} 个` },
+    { label: payload.dryRun ? '预计释放空间' : '已释放空间', value: formatBytesSafe(summary.deletedBytes) },
+    { label: '失败批次', value: `${formatCount(summary.failedBatches)} 个` },
+    { label: '治理后批次数', value: `${formatCount(summary.remainingBatches)} 个` },
+    { label: '治理后占用', value: formatBytesSafe(summary.remainingBytes) },
+  ]);
+
+  printTopRows(
+    '操作分布',
+    [...operationStatus.entries()].map(([status, count]) => ({ status, count })),
+    (row) => `${row.status}：${formatCount(row.count)} 个批次`,
+    10
+  );
+
+  printRuntimeAndRisk(payload);
+}
+
+function printDoctorTextResult(payload) {
+  const summary = payload.summary || {};
+  const checks = Array.isArray(payload.data?.checks) ? payload.data.checks : [];
+  const failedChecks = checks.filter((item) => item.status === 'fail');
+  const warningChecks = checks.filter((item) => item.status === 'warn');
+
+  printTextRows('任务结论', [
+    { label: '动作', value: actionDisplayName(payload.action) },
+    { label: '总体状态', value: doctorStatusText(summary.overall) },
+    {
+      label: '结论',
+      value:
+        summary.fail > 0
+          ? '存在失败项，建议先处理失败检查后再执行清理。'
+          : summary.warn > 0
+            ? '存在告警项，建议先处理高风险告警。'
+            : '系统状态良好。',
+    },
+  ]);
+
+  printTextRows('检查统计', [
+    { label: '通过', value: `${formatCount(summary.pass)} 项` },
+    { label: '警告', value: `${formatCount(summary.warn)} 项` },
+    { label: '失败', value: `${formatCount(summary.fail)} 项` },
+    { label: '平台', value: payload.data?.runtime?.targetTag || '-' },
+  ]);
+
+  printTopRows(
+    '失败检查项',
+    failedChecks,
+    (item) => `${item.title}：${item.detail}${item.suggestion ? `（建议：${item.suggestion}）` : ''}`,
+    8,
+    '无'
+  );
+  printTopRows(
+    '告警检查项',
+    warningChecks,
+    (item) => `${item.title}：${item.detail}${item.suggestion ? `（建议：${item.suggestion}）` : ''}`,
+    8,
+    '无'
+  );
+
+  printRuntimeAndRisk(payload);
+}
+
+function printGenericTextResult(payload) {
+  printTextRows('任务结论', [
+    { label: '动作', value: actionDisplayName(payload.action) },
+    { label: '结果', value: payload.ok ? '成功' : '失败' },
+  ]);
+  const summaryRows = Object.entries(payload.summary || {}).map(([key, value]) => ({
+    label: key,
+    value: typeof value === 'object' ? JSON.stringify(value) : value,
+  }));
+  printTextRows('结果统计', summaryRows);
+  printRuntimeAndRisk(payload);
+}
+
+function printNonInteractiveTextResult(payload) {
+  if (payload.action === MODES.CLEANUP_MONTHLY) {
+    printCleanupTextResult(payload);
+    return;
+  }
+  if (payload.action === MODES.ANALYSIS_ONLY) {
+    printAnalysisTextResult(payload);
+    return;
+  }
+  if (payload.action === MODES.SPACE_GOVERNANCE) {
+    printSpaceGovernanceTextResult(payload);
+    return;
+  }
+  if (payload.action === MODES.RESTORE) {
+    printRestoreTextResult(payload);
+    return;
+  }
+  if (payload.action === MODES.RECYCLE_MAINTAIN) {
+    printRecycleMaintainTextResult(payload);
+    return;
+  }
+  if (payload.action === MODES.DOCTOR) {
+    printDoctorTextResult(payload);
+    return;
+  }
+  printGenericTextResult(payload);
 }
 
 function emitNonInteractivePayload(payload, outputMode) {
@@ -1743,7 +2792,7 @@ async function runCleanupModeNonInteractive(context, cliArgs, warnings = []) {
     returnMeta: true,
   });
   const externalResolved = resolveExternalStorageForAction(detectedExternalStorage, cliArgs, {
-    defaultSources: ['preset'],
+    defaultSources: ['all'],
   });
   warnings.push(...externalResolved.warnings);
 
@@ -1757,6 +2806,14 @@ async function runCleanupModeNonInteractive(context, cliArgs, warnings = []) {
   const monthFilters = resolveMonthFilters(cliArgs, availableMonths);
   const includeNonMonthDirs = Boolean(cliArgs.includeNonMonthDirs);
   const dryRun = resolveDestructiveDryRun(cliArgs);
+  const cleanupScopeSummary = {
+    accountCount: accountResolved.selectedAccountIds.length,
+    monthCount: monthFilters.length,
+    categoryCount: categoryKeys.length,
+    externalRootCount: externalResolved.roots.length,
+    cutoffMonth: cliArgs.cutoffMonth || null,
+    explicitMonthCount: Array.isArray(cliArgs.months) ? cliArgs.months.length : 0,
+  };
 
   const scan = await collectCleanupTargets({
     accounts,
@@ -1773,17 +2830,28 @@ async function runCleanupModeNonInteractive(context, cliArgs, warnings = []) {
   }
 
   const targets = scan.targets || [];
+  const matchedBytes = targets.reduce((total, item) => total + Number(item?.sizeBytes || 0), 0);
+  const matchedReport = buildCleanupTargetReport(targets, { topPathLimit: 20 });
   if (targets.length === 0) {
     return {
       ok: true,
       action: MODES.CLEANUP_MONTHLY,
       dryRun,
       summary: {
+        batchId: null,
+        hasWork: false,
+        noTarget: true,
         matchedTargets: 0,
+        matchedBytes: 0,
         reclaimedBytes: 0,
         successCount: 0,
         skippedCount: 0,
         failedCount: 0,
+        engineUsed: scan.engineUsed || 'node',
+        matchedMonthStart: null,
+        matchedMonthEnd: null,
+        rootPathCount: 0,
+        ...cleanupScopeSummary,
       },
       warnings,
       errors: [],
@@ -1793,6 +2861,10 @@ async function runCleanupModeNonInteractive(context, cliArgs, warnings = []) {
         selectedCategories: categoryKeys,
         selectedExternalRoots: externalResolved.roots,
         engineUsed: scan.engineUsed || 'node',
+        report: {
+          matched: matchedReport,
+          executed: null,
+        },
       },
     };
   }
@@ -1809,7 +2881,15 @@ async function runCleanupModeNonInteractive(context, cliArgs, warnings = []) {
     action: MODES.CLEANUP_MONTHLY,
     dryRun,
     summary: responseSummaryFromCleanupResult(result, {
+      hasWork: true,
+      noTarget: false,
       matchedTargets: targets.length,
+      matchedBytes,
+      engineUsed: scan.engineUsed || 'node',
+      matchedMonthStart: matchedReport.monthRange?.from || null,
+      matchedMonthEnd: matchedReport.monthRange?.to || null,
+      rootPathCount: matchedReport.rootStats.length,
+      ...cleanupScopeSummary,
     }),
     warnings,
     errors: result.errors.map((item) => toStructuredError(item)),
@@ -1820,6 +2900,10 @@ async function runCleanupModeNonInteractive(context, cliArgs, warnings = []) {
       selectedExternalRoots: externalResolved.roots,
       includeNonMonthDirs,
       engineUsed: scan.engineUsed || 'node',
+      report: {
+        matched: matchedReport,
+        executed: result.breakdown || null,
+      },
     },
   };
 }
@@ -1837,7 +2921,7 @@ async function runAnalysisModeNonInteractive(context, cliArgs, warnings = []) {
     returnMeta: true,
   });
   const externalResolved = resolveExternalStorageForAction(detectedExternalStorage, cliArgs, {
-    defaultSources: ['preset'],
+    defaultSources: ['all'],
   });
   warnings.push(...externalResolved.warnings);
 
@@ -1853,6 +2937,7 @@ async function runAnalysisModeNonInteractive(context, cliArgs, warnings = []) {
   if (result.nativeFallbackReason) {
     warnings.push(result.nativeFallbackReason);
   }
+  const analysisReport = buildCleanupTargetReport(result.targets, { topPathLimit: 20 });
 
   return {
     ok: true,
@@ -1861,7 +2946,8 @@ async function runAnalysisModeNonInteractive(context, cliArgs, warnings = []) {
     summary: {
       targetCount: result.targets.length,
       totalBytes: result.totalBytes,
-      accountCount: result.accountsSummary.length,
+      accountCount: accountResolved.selectedAccountIds.length,
+      matchedAccountCount: result.accountsSummary.length,
       categoryCount: result.categoriesSummary.length,
       monthBucketCount: result.monthsSummary.length,
     },
@@ -1875,6 +2961,9 @@ async function runAnalysisModeNonInteractive(context, cliArgs, warnings = []) {
       accountsSummary: result.accountsSummary,
       categoriesSummary: result.categoriesSummary,
       monthsSummary: result.monthsSummary,
+      report: {
+        matched: analysisReport,
+      },
     },
   };
 }
@@ -1892,7 +2981,7 @@ async function runSpaceGovernanceModeNonInteractive(context, cliArgs, warnings =
     returnMeta: true,
   });
   const externalResolved = resolveExternalStorageForAction(detectedExternalStorage, cliArgs, {
-    defaultSources: ['preset'],
+    defaultSources: ['all'],
   });
   warnings.push(...externalResolved.warnings);
 
@@ -1932,6 +3021,7 @@ async function runSpaceGovernanceModeNonInteractive(context, cliArgs, warnings =
   }
   const allowRecentActive = cliArgs.allowRecentActive === true;
   const dryRun = resolveDestructiveDryRun(cliArgs);
+  const matchedReport = buildGovernanceTargetReport(selectedTargets, { topPathLimit: 20 });
   const governanceRoot = inferDataRootFromProfilesRoot(config.rootDir);
   const governanceAllowedRoots = governanceRoot
     ? [governanceRoot, ...externalResolved.roots]
@@ -1944,10 +3034,14 @@ async function runSpaceGovernanceModeNonInteractive(context, cliArgs, warnings =
       dryRun,
       summary: {
         matchedTargets: 0,
+        matchedBytes: 0,
         reclaimedBytes: 0,
         successCount: 0,
         skippedCount: 0,
         failedCount: 0,
+        tierCount: 0,
+        targetTypeCount: 0,
+        rootPathCount: 0,
       },
       warnings,
       errors: [],
@@ -1956,6 +3050,10 @@ async function runSpaceGovernanceModeNonInteractive(context, cliArgs, warnings =
         selectedExternalRoots: externalResolved.roots,
         selectedTargetIds: [],
         engineUsed: scan.engineUsed || 'node',
+        report: {
+          matched: matchedReport,
+          executed: null,
+        },
       },
     };
   }
@@ -1984,7 +3082,11 @@ async function runSpaceGovernanceModeNonInteractive(context, cliArgs, warnings =
     dryRun,
     summary: responseSummaryFromCleanupResult(result, {
       matchedTargets: selectedTargets.length,
+      matchedBytes: matchedReport.totalBytes,
       allowRecentActive,
+      tierCount: matchedReport.byTier.length,
+      targetTypeCount: matchedReport.byTargetType.length,
+      rootPathCount: matchedReport.byRoot.length,
     }),
     warnings,
     errors: result.errors.map((item) => toStructuredError(item)),
@@ -1993,6 +3095,10 @@ async function runSpaceGovernanceModeNonInteractive(context, cliArgs, warnings =
       selectedExternalRoots: externalResolved.roots,
       selectedTargetIds: selectedTargets.map((item) => item.id),
       engineUsed: scan.engineUsed || 'node',
+      report: {
+        matched: matchedReport,
+        executed: result.breakdown || null,
+      },
     },
   };
 }
@@ -2037,6 +3143,7 @@ async function runRestoreModeNonInteractive(context, cliArgs, warnings = []) {
     extraGovernanceRoots: governanceAllowRoots,
     onConflict: async () => ({ action: conflictStrategy, applyToAll: true }),
   });
+  const matchedReport = buildRestoreBatchTargetReport(batch.entries, { topPathLimit: 20 });
 
   return {
     ok: result.failCount === 0,
@@ -2049,12 +3156,21 @@ async function runRestoreModeNonInteractive(context, cliArgs, warnings = []) {
       failedCount: result.failCount,
       restoredBytes: result.restoredBytes,
       conflictStrategy,
+      entryCount: batch.entries.length,
+      matchedBytes: matchedReport.totalBytes,
+      scopeCount: matchedReport.byScope.length,
+      categoryCount: matchedReport.byCategory.length,
+      rootPathCount: matchedReport.byRoot.length,
     },
     warnings,
     errors: result.errors.map((item) => toStructuredError(item)),
     data: {
       selectedExternalRoots: externalResolved.roots,
       governanceRoot,
+      report: {
+        matched: matchedReport,
+        executed: result.breakdown || null,
+      },
     },
   };
 }
@@ -2104,6 +3220,8 @@ async function runRecycleMaintainModeNonInteractive(context, cliArgs, warnings =
     summary: {
       status: result.status,
       candidateCount: result.candidateCount,
+      selectedByAge: result.selectedByAge,
+      selectedBySize: result.selectedBySize,
       deletedBatches: result.deletedBatches,
       deletedBytes: result.deletedBytes,
       failedBatches: result.failBatches,
@@ -2119,6 +3237,14 @@ async function runRecycleMaintainModeNonInteractive(context, cliArgs, warnings =
     })),
     data: {
       policy,
+      report: {
+        before: result.before,
+        after: result.after,
+        thresholdBytes: result.thresholdBytes,
+        overThreshold: result.overThreshold,
+        selectedCandidates: result.selectedCandidates || [],
+        operations: result.operations || [],
+      },
     },
   };
 }
@@ -2468,7 +3594,7 @@ async function runAnalysisMode(context) {
       guideTitle: '步骤 2/3 · 文件存储目录范围',
       guideRows: [
         { label: '默认', value: '默认/手动目录已预选' },
-        { label: '自动', value: '自动探测目录建议按需纳入' },
+        { label: '自动', value: '自动探测目录默认已纳入，可按需取消' },
         { label: '提示', value: '分析仅统计体积，不做移动或删除' },
       ],
     }
@@ -2535,7 +3661,7 @@ async function runSpaceGovernanceMode(context) {
     {
       guideTitle: '治理步骤 2/5 · 文件存储目录范围',
       guideRows: [
-        { label: '策略', value: '默认/手动目录预选，自动探测目录需确认' },
+        { label: '策略', value: '默认/手动/自动目录都已预选，可按需取消' },
         { label: '风险', value: '目录越多，命中范围越大，请结合预览确认' },
         { label: '目标', value: '仅纳入确认为企业微信缓存的路径' },
       ],
