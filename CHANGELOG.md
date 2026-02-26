@@ -8,21 +8,37 @@
 
 ### Added
 
-- 新增极端场景测试矩阵文档：`docs/TEST_MATRIX.md`。
-- 新增无交互契约测试：锁定关键动作的公共 JSON 字段与类型稳定性。
-- 新增 text/json 一致性测试：无目标场景下结论语义保持一致。
-- 新增符号链接逃逸防护测试：
-  - `executeCleanup` 的 `source_symlink_escape`
-  - `restoreBatch` 的 `source_symlink_escape`
+- 暂无。
 
 ### Changed
 
-- `README.md` 增加“测试矩阵”入口，明确新增动作与字段的补测要求。
-- `scripts/e2e-smoke.sh` 增强失败定位信息：输出上下文、落盘关键命令日志。
+- 暂无。
 
 ### Fixed
 
-- 修复 E2E 在 `doctor_json` / `recycle_maintain` 失败时日志不充分的问题，降低排障成本。
+- 暂无。
+
+## [1.2.1] - 2026-02-26
+
+### Added
+
+- 新增发布门禁脚本：`scripts/release-gate.sh` 与 `npm run release:gate`，统一串联格式、静态检查、覆盖率、shellcheck、smoke、打包预演。
+- 新增 Agent 报告脚本失败语义测试：`test/agent-report-scripts.test.js`，覆盖 6 个报告脚本的失败分支退出码与错误输出稳定性。
+- 新增回收区治理补测：
+  - 真实执行后同策略复核应无候选批次
+  - `recyclePath` 符号链接越界拦截
+- 新增无交互业务失败 JSON 契约补测：`recycle_maintain` 的 `partial_failed` 场景。
+
+### Changed
+
+- `README.md` 发布流程更新为 `v1.2.1`，并纳入一键门禁命令 `npm run release:gate`。
+- `native/manifest.json` 版本与下载地址切换到 `v1.2.1`。
+
+### Fixed
+
+- 修复回收区治理对符号链接路径的边界防护缺口：新增 `realpath` 级校验，防止通过符号链接越界删除。
+- 修复 `recycle_maintain` 非交互失败契约用例断言偏差，锁定“业务失败返回码 + JSON 可解析”的稳定行为。
+- 修复 Agent 报告脚本错误分支在 `set -u` 下的变量展开风险，确保失败时返回非 0 并保留可读错误信息。
 
 ## [1.2.0] - 2026-02-26
 

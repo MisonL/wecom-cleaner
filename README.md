@@ -159,10 +159,10 @@ GitHub 备选方式（无 npm 包依赖）：
 curl -fsSL https://raw.githubusercontent.com/MisonL/wecom-cleaner/main/scripts/install-skill.sh | bash
 ```
 
-若需安装指定版本标签（例如 `v1.1.0`）：
+若需安装指定版本标签（例如 `v1.2.1`）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MisonL/wecom-cleaner/main/scripts/install-skill.sh | bash -s -- --ref v1.1.0
+curl -fsSL https://raw.githubusercontent.com/MisonL/wecom-cleaner/main/scripts/install-skill.sh | bash -s -- --ref v1.2.1
 ```
 
 Agent 侧统一任务入口脚本（位于 `skills/wecom-cleaner-agent/scripts/`）：
@@ -385,17 +385,18 @@ npm run format:check
 发布前推荐全量门禁：
 
 ```bash
+npm run format:check
 npm run check
 npm run test:coverage:check
-npm run format:check
+npm run release:gate
 npm run e2e:smoke -- --keep
 npm run pack:tgz:dry-run
 ```
 
 当前基线（主分支）：
 
-- 单元测试：`78/78` 通过。
-- 覆盖率：`statements 88.28%`，`branches 74.44%`，`functions 94.89%`，`lines 88.28%`。
+- 单元测试：`91/91` 通过。
+- 覆盖率：`statements 88.49%`，`branches 75.01%`，`functions 95.02%`，`lines 88.49%`。
 - 全菜单 smoke：通过（含恢复冲突分支与 doctor JSON 分支）。
 
 ## 测试矩阵
@@ -429,26 +430,27 @@ npm run pack:tgz
 
 ```bash
 # 1) 发布前检查
+npm run format:check
 npm run check
 npm run test:coverage:check
-npm run format:check
+npm run release:gate
 npm run e2e:smoke
 npm run pack:tgz
 npm run pack:release-assets
 
 # 2) 推送主分支与标签
 git push origin main
-git tag v1.2.0
-git push origin v1.2.0
+git tag v1.2.1
+git push origin v1.2.1
 
 # 3) 发布 GitHub Release（附 npm 包 + 双架构核心附件）
-gh release create v1.2.0 \
-  --title "v1.2.0" \
-  --notes-file docs/releases/v1.2.0.md \
-  wecom-cleaner-1.2.0.tgz \
-  dist/release/wecom-cleaner-core-v1.2.0-darwin-x64 \
-  dist/release/wecom-cleaner-core-v1.2.0-darwin-arm64 \
-  dist/release/wecom-cleaner-core-v1.2.0-SHA256SUMS.txt
+gh release create v1.2.1 \
+  --title "v1.2.1" \
+  --notes-file docs/releases/v1.2.1.md \
+  wecom-cleaner-1.2.1.tgz \
+  dist/release/wecom-cleaner-core-v1.2.1-darwin-x64 \
+  dist/release/wecom-cleaner-core-v1.2.1-darwin-arm64 \
+  dist/release/wecom-cleaner-core-v1.2.1-SHA256SUMS.txt
 
 # 4) 发布 npm
 npm publish --access public
