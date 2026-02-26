@@ -6,9 +6,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- 新增无交互动作参数协议：`--cleanup-monthly`、`--analysis-only`、`--space-governance`、`--restore-batch`、`--recycle-maintain`、`--doctor`。
+- 新增 AI Agent 无交互规范文档：`docs/NON_INTERACTIVE_SPEC.md`。
+- 新增无交互 CLI 集成测试：覆盖默认 JSON 输出、缺少动作报错、`--yes` 真实执行门槛与 doctor 输出。
+
 ### Changed
 
 - 规范 `package.json` 的 `bin` 路径写法（`src/cli.js`），避免 `npm publish` 时出现自动清洗提示。
+- `wecom-cleaner` 启动行为调整为：不带参数进入交互模式，带参数进入无交互模式。
+- 无交互默认输出改为 JSON，支持 `--output json|text`；`--json` 作为兼容别名保留。
+- `doctor` 回收区建议命令从旧 `--mode recycle_maintain` 更新为 `--recycle-maintain`。
 
 ## [1.0.0] - 2026-02-26
 
@@ -36,4 +45,3 @@
 ### Security
 
 - 增强回收区治理与恢复路径的边界保护与审计可观测性。
-

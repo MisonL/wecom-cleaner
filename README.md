@@ -86,7 +86,7 @@
 
 6. 可观测性与并发安全
 
-- `doctor` 模式可输出人类可读报告，或通过 `--json` 输出结构化结果。
+- `doctor` 模式可输出人类可读报告，或通过 `--output json` 输出结构化结果。
 - `doctor` 模式为只读体检：不会自动创建状态目录/回收区，也不会触发 Zig 自动修复下载。
 - 多实例并发默认加锁，检测到陈旧锁可交互清理或通过 `--force` 自动清理。
 
@@ -130,30 +130,78 @@ npm run e2e:smoke
 
 ## 常用参数
 
+运行方式：
+
+- 不带参数：进入交互菜单（TUI）。
+- 带参数：进入无交互执行（默认输出 JSON，适合 AI Agent）。
+- 完整契约文档：[`docs/NON_INTERACTIVE_SPEC.md`](./docs/NON_INTERACTIVE_SPEC.md)。
+
+### 无交互动作参数（互斥，必须且只能一个）
+
+- `--cleanup-monthly`
+- `--analysis-only`
+- `--space-governance`
+- `--restore-batch <batchId>`
+- `--recycle-maintain`
+- `--doctor`
+
+### 无交互安全规则
+
+- 破坏性动作（清理/治理/恢复/回收区治理）默认 `dry-run`。
+- 显式真实执行需带 `--yes`。
+- 若传 `--dry-run false` 但未传 `--yes`，将直接退出（退出码 `3`）。
+
+### 常用无交互示例
+
 ```bash
-wecom-cleaner --root ~/Library/Containers/com.tencent.WeWorkMac/Data/Documents/Profiles
-wecom-cleaner --state-root ~/.wecom-cleaner-state
-wecom-cleaner --external-storage-root /Volumes/Data/MyWeComStorage
-wecom-cleaner --external-storage-auto-detect false
-wecom-cleaner --dry-run-default true
-wecom-cleaner --mode cleanup_monthly
-wecom-cleaner --mode space_governance
-wecom-cleaner --mode recycle_maintain
-wecom-cleaner --mode doctor
-wecom-cleaner --theme auto
-wecom-cleaner --json
-wecom-cleaner --force
+# 年月清理（默认 dry-run）
+wecom-cleaner --cleanup-monthly \
+  --accounts current \
+  --cutoff-month 2024-02 \
+  --categories files,images
+
+# 年月清理（真实执行）
+wecom-cleaner --cleanup-monthly \
+  --accounts all \
+  --months 2023-01,2023-02 \
+  --categories files \
+  --dry-run false \
+  --yes
+
+# 全量空间治理（仅建议项，真实执行）
+wecom-cleaner --space-governance \
+  --suggested-only true \
+  --tiers safe,caution \
+  --dry-run false \
+  --yes
+
+# 回收区治理（按策略执行）
+wecom-cleaner --recycle-maintain --dry-run false --yes
+
+# 批次恢复（冲突策略：重命名）
+wecom-cleaner --restore-batch 20260226-105009-ffa098 --conflict rename
+
+# 系统自检（默认 JSON 输出）
+wecom-cleaner --doctor
 ```
 
-### `--mode` 可选值
+### 输出与兼容参数
 
-- `cleanup_monthly`
-- `analysis_only`
-- `space_governance`
-- `recycle_maintain`
-- `restore`
-- `doctor`
-- `settings`
+- `--output json|text`：无交互输出格式，默认 `json`。
+- `--json`：兼容别名，等价于 `--output json`。
+- `--mode`：兼容参数，建议迁移到动作参数（如 `--cleanup-monthly`）。
+- `--save-config`：将本次全局配置参数写回 `config.json`。
+
+### 全局参数
+
+- `--root <path>`：Profile 根目录
+- `--state-root <path>`：状态目录
+- `--external-storage-root <path[,path...]>`：手动文件存储目录（配置层）
+- `--external-storage-auto-detect <true|false>`：外部存储自动探测总开关
+- `--external-roots <path[,path...]>`：本次动作临时覆盖的文件存储目录
+- `--external-roots-source <preset|configured|auto|all>`：按来源筛选探测目录（默认 `preset`）
+- `--theme <auto|light|dark>`：Logo 主题
+- `--force`：检测到陈旧锁时自动清理
 
 ### `--theme` 可选值
 
@@ -235,7 +283,7 @@ npm run pack:tgz:dry-run
 
 当前基线（`v1.0.0`）：
 
-- 单元测试：`47/47` 通过。
+- 单元测试：`53/53` 通过。
 - 覆盖率：`statements 85.65%`，`branches 70.99%`，`functions 91.39%`，`lines 85.65%`。
 - 全菜单 smoke：通过（含恢复冲突分支与 doctor JSON 分支）。
 
