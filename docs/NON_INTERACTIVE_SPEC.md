@@ -59,6 +59,7 @@ JSON 顶层字段：
 - `data`：动作明细数据
 - `meta`：元信息（版本、耗时、引擎、时间戳等）
 - `data.userFacingSummary`：统一的用户侧结果摘要（范围 + 结果 + 关键分布）
+  - `scopeNotes`：扫描边界说明（例如是否纳入“文件存储位置”目录、是否因命中为 0 跳过执行）
 - `data.taskPhases`：阶段协议明细（仅在 `--run-task` 时返回）
 - `data.taskCard`：阶段任务卡片（仅在 `--run-task` 时返回）
 - `data.scanDebug`：扫描诊断信息（仅在 `--scan-debug summary|full` 时返回）
@@ -182,12 +183,20 @@ JSON 顶层字段：
 - `hasUpdate`
 - `currentVersion` / `latestVersion`
 - `source`
+- `sourceChain`（来源链路说明：先 npm，必要时自动回退 GitHub）
 - `channel`
 - `skippedByUser`
 
 `check_update` 的 `data`：
 
 - `update`：更新检查详情（`checkedAt`、`checkReason`、`errors`、`upgradeMethods`）
+
+说明：
+
+- 当 npm 失败但 GitHub 回退成功时，动作整体仍为成功：
+  - `summary.source=github`
+  - `summary.sourceChain` 会说明“npm 失败后回退”
+  - 失败细节进入 `warnings`，不计入 `errors`
 
 `upgrade` 常见 `summary` 字段：
 

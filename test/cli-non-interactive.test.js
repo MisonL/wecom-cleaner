@@ -747,15 +747,25 @@ test('无交互 --check-update 在 npm 失败时回退 GitHub 并保留错误痕
   assert.equal(payload.ok, true);
   assert.equal(payload.summary.checked, true);
   assert.equal(payload.summary.source, 'github');
+  assert.match(String(payload.summary.sourceChain || ''), /回退|GitHub/);
   assert.equal(payload.summary.latestVersion, '9.9.9');
   assert.equal(payload.data?.update?.sourceUsed, 'github');
-  assert.equal(mockServer.state.npmHits >= 1, true);
-  assert.equal(mockServer.state.githubHits >= 1, true);
-  assert.equal(Array.isArray(payload.errors), true);
+  assert.equal(Array.isArray(payload.data?.userFacingSummary?.scopeNotes), true);
   assert.equal(
-    payload.errors.some((item) => String(item.message || '').includes('npm检查失败')),
+    payload.data.userFacingSummary.scopeNotes.some(
+      (item) => String(item).includes('回退') || String(item).includes('GitHub')
+    ),
     true
   );
+  assert.equal(mockServer.state.npmHits >= 1, true);
+  assert.equal(mockServer.state.githubHits >= 1, true);
+  assert.equal(Array.isArray(payload.warnings), true);
+  assert.equal(
+    payload.warnings.some((item) => String(item).includes('更新检查回退')),
+    true
+  );
+  assert.equal(Array.isArray(payload.errors), true);
+  assert.equal(payload.errors.length, 0);
 });
 
 test('CLI 支持 --version 并输出版本号', () => {

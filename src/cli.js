@@ -2244,6 +2244,97 @@ function summarizeDimensionRows(rows, { labelKey = 'label', countKey = 'targetCo
   }));
 }
 
+function summarizeRootSamplesForNote(roots, limit = 2) {
+  const list = uniqueStrings(Array.isArray(roots) ? roots : []);
+  if (list.length === 0) {
+    return '-';
+  }
+  const shown = list
+    .slice(0, limit)
+    .map((item) => trimToWidth(item, 68))
+    .join('；');
+  return list.length > limit ? `${shown}（其余 ${list.length - limit} 个省略）` : shown;
+}
+
+function buildActionScopeNotes(action, result) {
+  const summary = result?.summary || {};
+  const data = result?.data || {};
+  const notes = [];
+  const selectedExternalRoots = uniqueStrings(data.selectedExternalRoots || []);
+  const scanActions = new Set([
+    MODES.CLEANUP_MONTHLY,
+    MODES.ANALYSIS_ONLY,
+    MODES.SPACE_GOVERNANCE,
+    MODES.RESTORE,
+  ]);
+
+  if (scanActions.has(action)) {
+    if (selectedExternalRoots.length === 0) {
+      notes.push('本次未纳入企业微信“文件存储位置”目录，统计结果可能明显小于磁盘实际占用。');
+    } else {
+      notes.push(
+        `本次已纳入 ${selectedExternalRoots.length} 个文件存储目录（示例：${summarizeRootSamplesForNote(selectedExternalRoots)}）。`
+      );
+    }
+  }
+
+  if (action === MODES.CLEANUP_MONTHLY) {
+    if (summary.cutoffMonth) {
+      notes.push(`时间筛选使用“截至 ${summary.cutoffMonth}（含）”。`);
+    }
+    if (summary.noTarget) {
+      notes.push('当前筛选命中为 0，已按安全策略跳过真实删除。');
+    }
+  }
+
+  if (action === MODES.ANALYSIS_ONLY) {
+    if (Number(summary.targetCount || 0) === 0) {
+      notes.push('当前筛选范围未发现缓存目录，可检查账号、类别或文件存储路径设置。');
+    }
+  }
+
+  if (action === MODES.SPACE_GOVERNANCE && Number(summary.matchedTargets || 0) === 0) {
+    notes.push('当前治理筛选命中为 0，本次未执行任何删除。');
+  }
+
+  if (action === MODES.RESTORE) {
+    if (result?.dryRun) {
+      notes.push('本次为恢复预演，不会写回任何原路径。');
+    }
+  }
+
+  return uniqueStrings(notes);
+}
+
+function deriveUpdateSourceChain(summary = {}, updateData = {}) {
+  const source = String(summary.source || updateData.sourceUsed || 'none');
+  const errors = Array.isArray(updateData.errors) ? updateData.errors : [];
+  const hasNpmFallback = errors.some((item) => String(item).includes('npm检查失败'));
+  const hasGithubFallback = errors.some((item) => String(item).includes('github检查失败'));
+
+  if (source === 'npm') {
+    return '已通过 npmjs 获取版本信息。';
+  }
+  if (source === 'github') {
+    return hasNpmFallback ? 'npmjs 请求失败，已自动回退到 GitHub。' : '已通过 GitHub 获取版本信息。';
+  }
+  if (source === 'none') {
+    if (hasNpmFallback || hasGithubFallback) {
+      return 'npmjs 与 GitHub 均未获取成功。';
+    }
+    return '本次未获取到可用更新来源。';
+  }
+  return source;
+}
+
+function collectUpdateFallbackWarnings(updateData) {
+  if (!updateData || updateData.checked !== true) {
+    return [];
+  }
+  const errors = Array.isArray(updateData.errors) ? updateData.errors : [];
+  return errors.map((message) => `更新检查回退：${message}`);
+}
+
 function buildUserFacingSummary(action, result) {
   const summary = result?.summary || {};
   const report = result?.data?.report || {};
@@ -2251,6 +2342,7 @@ function buildUserFacingSummary(action, result) {
 
   if (action === MODES.CLEANUP_MONTHLY) {
     return {
+      scopeNotes: buildActionScopeNotes(action, result),
       scope: {
         accountCount: Number(summary.accountCount || 0),
         monthCount: Number(summary.monthCount || 0),
@@ -2280,6 +2372,7 @@ function buildUserFacingSummary(action, result) {
 
   if (action === MODES.ANALYSIS_ONLY) {
     return {
+      scopeNotes: buildActionScopeNotes(action, result),
       scope: {
         accountCount: Number(summary.accountCount || 0),
         matchedAccountCount: Number(summary.matchedAccountCount || 0),
@@ -2298,6 +2391,7 @@ function buildUserFacingSummary(action, result) {
 
   if (action === MODES.SPACE_GOVERNANCE) {
     return {
+      scopeNotes: buildActionScopeNotes(action, result),
       scope: {
         accountCount: Number(summary.accountCount || 0),
         tierCount: Number(summary.tierCount || 0),
@@ -2322,6 +2416,7 @@ function buildUserFacingSummary(action, result) {
 
   if (action === MODES.RESTORE) {
     return {
+      scopeNotes: buildActionScopeNotes(action, result),
       scope: {
         entryCount: Number(summary.entryCount || 0),
         conflictStrategy: summary.conflictStrategy || null,
@@ -2343,6 +2438,7 @@ function buildUserFacingSummary(action, result) {
 
   if (action === MODES.RECYCLE_MAINTAIN) {
     return {
+      scopeNotes: buildActionScopeNotes(action, result),
       scope: {
         candidateCount: Number(summary.candidateCount || 0),
         selectedByAge: Number(summary.selectedByAge || 0),
@@ -2361,6 +2457,7 @@ function buildUserFacingSummary(action, result) {
 
   if (action === MODES.DOCTOR) {
     return {
+      scopeNotes: buildActionScopeNotes(action, result),
       scope: {
         platform: result?.data?.runtime?.targetTag || null,
       },
@@ -2374,13 +2471,21 @@ function buildUserFacingSummary(action, result) {
   }
 
   if (action === MODES.CHECK_UPDATE) {
+    const update = result?.data?.update || {};
     return {
+      scopeNotes: [
+        deriveUpdateSourceChain(summary, update),
+        summary.hasUpdate
+          ? '检测到新版本后，仍需你手动确认才会执行升级。'
+          : '本次仅执行检查，不会改动本机安装。',
+      ],
       result: {
         checked: Boolean(summary.checked),
         hasUpdate: Boolean(summary.hasUpdate),
         currentVersion: summary.currentVersion || null,
         latestVersion: summary.latestVersion || null,
         source: summary.source || null,
+        sourceChain: summary.sourceChain || deriveUpdateSourceChain(summary, update),
         channel: summary.channel || null,
       },
     };
@@ -2388,6 +2493,7 @@ function buildUserFacingSummary(action, result) {
 
   if (action === MODES.UPGRADE) {
     return {
+      scopeNotes: buildActionScopeNotes(action, result),
       result: {
         executed: Boolean(summary.executed),
         method: summary.method || null,
@@ -2398,6 +2504,7 @@ function buildUserFacingSummary(action, result) {
   }
 
   return {
+    scopeNotes: buildActionScopeNotes(action, result),
     result: summary,
   };
 }
@@ -2600,6 +2707,21 @@ function printRuntimeAndRisk(payload) {
   ]);
 }
 
+function printScopeNotes(payload) {
+  const userFacing = payload?.data?.userFacingSummary || {};
+  const notes =
+    Array.isArray(userFacing.scopeNotes) && userFacing.scopeNotes.length > 0
+      ? uniqueStrings(userFacing.scopeNotes)
+      : buildActionScopeNotes(payload?.action, payload);
+  if (notes.length === 0) {
+    return;
+  }
+  printTextRows(
+    '扫描边界说明',
+    notes.map((item) => ({ label: '说明', value: item }))
+  );
+}
+
 function printCleanupTextResult(payload) {
   const summary = payload.summary || {};
   const data = payload.data || {};
@@ -2646,6 +2768,7 @@ function printCleanupTextResult(payload) {
       note: '是=会包含数字目录/临时目录等',
     },
   ]);
+  printScopeNotes(payload);
 
   printTextRows('结果统计', [
     { label: '命中目录', value: `${formatCount(summary.matchedTargets)} 项`, note: '本次范围内可处理目标数' },
@@ -2725,6 +2848,7 @@ function printAnalysisTextResult(payload) {
     { label: '文件存储目录', value: formatRootScope(data.selectedExternalRoots) },
     { label: '时间范围', value: range },
   ]);
+  printScopeNotes(payload);
 
   printTextRows('结果统计', [
     { label: '命中目录', value: `${formatCount(summary.targetCount)} 项` },
@@ -2794,6 +2918,7 @@ function printSpaceGovernanceTextResult(payload) {
       note: '否=会自动跳过近期活跃目标',
     },
   ]);
+  printScopeNotes(payload);
 
   printTextRows('结果统计', [
     { label: '命中目录', value: `${formatCount(summary.matchedTargets)} 项` },
@@ -2870,6 +2995,7 @@ function printRestoreTextResult(payload) {
     { label: '作用域数', value: `${formatCount(summary.scopeCount)} 类` },
     { label: '文件存储目录', value: formatRootScope(data.selectedExternalRoots) },
   ]);
+  printScopeNotes(payload);
 
   printTextRows('结果统计', [
     { label: '成功恢复', value: `${formatCount(summary.successCount)} 项` },
@@ -3031,6 +3157,7 @@ function printDoctorTextResult(payload) {
 function printCheckUpdateTextResult(payload) {
   const summary = payload.summary || {};
   const update = payload.data?.update || {};
+  const sourceChain = summary.sourceChain || deriveUpdateSourceChain(summary, update);
   const conclusion = summary.hasUpdate
     ? `检测到新版本 v${summary.latestVersion}，可选择 npm 或 GitHub 脚本升级。`
     : summary.checked
@@ -3047,10 +3174,24 @@ function printCheckUpdateTextResult(payload) {
     { label: '当前版本', value: summary.currentVersion || '-' },
     { label: '最新版本', value: summary.latestVersion || '-' },
     { label: '来源', value: summary.source || '-' },
+    { label: '来源链路', value: sourceChain },
     { label: '通道', value: channelLabel(summary.channel) },
     { label: '跳过提醒', value: formatYesNo(Boolean(summary.skippedByUser)) },
     { label: '检查时间', value: formatLocalDate(update.checkedAt || Date.now()) },
   ]);
+  if (summary.hasUpdate && !summary.skippedByUser) {
+    printTextRows('升级建议', [
+      {
+        label: '默认方式',
+        value: `wecom-cleaner --upgrade npm --upgrade-version ${summary.latestVersion} --upgrade-yes`,
+      },
+      {
+        label: '备选方式',
+        value: `wecom-cleaner --upgrade github-script --upgrade-version ${summary.latestVersion} --upgrade-yes`,
+      },
+    ]);
+  }
+  printScopeNotes(payload);
 
   printRuntimeAndRisk(payload);
 }
@@ -3079,6 +3220,13 @@ function printUpgradeTextResult(payload) {
     { label: '退出码', value: hasDisplayValue(summary.status) ? summary.status : '-' },
     { label: '命令', value: summary.command || upgrade.command || '-' },
   ]);
+  if (payload.ok && executed) {
+    printTextRows('下一步建议', [
+      { label: '建议', value: '升级已完成，建议重新打开 wecom-cleaner 继续任务。' },
+      { label: '说明', value: '本次升级仅更新程序与 Zig 核心，不会改动企业微信缓存数据。' },
+    ]);
+  }
+  printScopeNotes(payload);
 
   printRuntimeAndRisk(payload);
 }
@@ -3832,6 +3980,8 @@ async function runCheckUpdateModeNonInteractive(context, cliArgs, warnings = [])
   context.config.selfUpdate = applyUpdateCheckResult(normalizedSelfUpdate, checkResult, '');
   await persistSelfUpdateState(context);
   const updateData = buildUpdateData(checkResult, context.config.selfUpdate.skipVersion);
+  const fallbackWarnings = collectUpdateFallbackWarnings(updateData);
+  warnings.push(...fallbackWarnings);
 
   if (updateData.hasUpdate && !updateData.skippedByUser) {
     warnings.push(updateWarningMessage(updateData, context.config.selfUpdate.skipVersion));
@@ -3847,14 +3997,22 @@ async function runCheckUpdateModeNonInteractive(context, cliArgs, warnings = [])
       currentVersion: updateData.currentVersion || '-',
       latestVersion: updateData.latestVersion || '-',
       source: updateData.sourceUsed,
+      sourceChain: deriveUpdateSourceChain(
+        {
+          source: updateData.sourceUsed,
+        },
+        updateData
+      ),
       channel: updateData.channel,
       skippedByUser: updateData.skippedByUser,
     },
     warnings: uniqueStrings(warnings),
-    errors: updateData.errors.map((message) => ({
-      code: 'E_UPDATE_CHECK_FAILED',
-      message,
-    })),
+    errors: updateData.checked
+      ? []
+      : updateData.errors.map((message) => ({
+          code: 'E_UPDATE_CHECK_FAILED',
+          message,
+        })),
     data: {
       update: updateData,
     },
@@ -3873,6 +4031,7 @@ async function runUpgradeModeNonInteractive(context, cliArgs, warnings = []) {
   const channel = resolveUpdateChannel(cliArgs, context.config);
   let targetVersion = String(cliArgs.upgradeVersion || '').trim();
   let checkResult = null;
+  let checkData = null;
 
   if (!targetVersion) {
     checkResult = await checkLatestVersion({
@@ -3884,6 +4043,8 @@ async function runUpgradeModeNonInteractive(context, cliArgs, warnings = []) {
       timeoutMs: UPDATE_TIMEOUT_MS,
       reason: 'manual',
     });
+    checkData = buildUpdateData(checkResult, context.config.selfUpdate.skipVersion);
+    warnings.push(...collectUpdateFallbackWarnings(checkData));
 
     if (!checkResult.checked) {
       return {
@@ -3902,7 +4063,7 @@ async function runUpgradeModeNonInteractive(context, cliArgs, warnings = []) {
           message,
         })),
         data: {
-          update: buildUpdateData(checkResult, context.config.selfUpdate.skipVersion),
+          update: checkData,
         },
       };
     }
@@ -3920,7 +4081,7 @@ async function runUpgradeModeNonInteractive(context, cliArgs, warnings = []) {
         warnings: uniqueStrings(warnings),
         errors: [],
         data: {
-          update: buildUpdateData(checkResult, context.config.selfUpdate.skipVersion),
+          update: checkData,
         },
       };
     }
@@ -5291,16 +5452,25 @@ async function runCheckUpdateMode(context, cliArgs = {}) {
       currentVersion: checkResult.currentVersion || '-',
       latestVersion: checkResult.latestVersion || '-',
       source: checkResult.sourceUsed || 'none',
+      sourceChain: deriveUpdateSourceChain(
+        {
+          source: checkResult.sourceUsed || 'none',
+        },
+        checkResult
+      ),
       channel: checkResult.channel || channel,
       skippedByUser: shouldSkipVersion(checkResult, context.config.selfUpdate.skipVersion),
     },
-    warnings: [],
-    errors: Array.isArray(checkResult.errors)
-      ? checkResult.errors.map((message) => ({
-          code: 'E_UPDATE_CHECK_FAILED',
-          message,
-        }))
-      : [],
+    warnings: uniqueStrings([...collectUpdateFallbackWarnings(checkResult)]),
+    errors:
+      checkResult.checked && checkResult.sourceUsed !== 'none'
+        ? []
+        : Array.isArray(checkResult.errors)
+          ? checkResult.errors.map((message) => ({
+              code: 'E_UPDATE_CHECK_FAILED',
+              message,
+            }))
+          : [],
     data: {
       update: buildUpdateData(checkResult, context.config.selfUpdate.skipVersion),
     },

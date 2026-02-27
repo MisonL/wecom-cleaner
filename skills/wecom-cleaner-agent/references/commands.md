@@ -137,3 +137,8 @@ wecom-cleaner --upgrade github-script --upgrade-version 1.3.2 --upgrade-yes --ou
 3. 核心统计（命中、预计/实际释放、成功/跳过/失败、批次号）
 4. 分布明细（按类别/月份/路径）
 5. 安全状态（耗时、引擎、告警、错误）
+
+实现建议（统一体验）：
+
+- 优先消费 `data.userFacingSummary`，并优先展示其中 `scopeNotes`（扫描边界说明）。
+- 对 `check-update` 动作，优先展示 `summary.sourceChain`，明确“npm -> GitHub 回退”链路。
