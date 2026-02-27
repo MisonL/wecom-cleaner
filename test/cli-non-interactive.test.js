@@ -636,6 +636,8 @@ test('CLI 支持 --help 并返回无交互动作说明', () => {
   assert.match(output, /--doctor/);
   assert.match(output, /--check-update/);
   assert.match(output, /--upgrade <npm\|github-script>/);
+  assert.match(output, /--run-task preview\|execute\|preview-execute-verify/);
+  assert.match(output, /--scan-debug off\|summary\|full/);
 });
 
 test('CLI 支持 --version 并输出版本号', () => {
@@ -923,4 +925,180 @@ test('无交互 --output text 输出中文任务卡片（覆盖全部动作）',
   ]);
   assert.equal(doctorText.status, 0);
   assert.match(String(doctorText.stdout || ''), /检查统计/);
+});
+
+test('无交互 cleanup 支持 --run-task preview-execute-verify 三阶段协议', async (t) => {
+  const root = await makeTempDir('wecom-cli-ni-run-task-');
+  t.after(async () => removeDir(root));
+
+  const profilesRoot = await prepareFixture(root);
+  const stateRoot = path.join(root, 'state');
+
+  const result = runCli([
+    '--cleanup-monthly',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--accounts',
+    'all',
+    '--categories',
+    'files',
+    '--months',
+    '2024-01',
+    '--run-task',
+    'preview-execute-verify',
+    '--yes',
+    '--external-storage-auto-detect',
+    'false',
+  ]);
+  assert.equal(result.status, 0);
+
+  const payload = JSON.parse(String(result.stdout || '{}'));
+  assert.equal(payload.action, 'cleanup_monthly');
+  assert.equal(payload.summary.runTaskMode, 'preview-execute-verify');
+  assert.equal(payload.summary.taskDecision, 'executed_and_verified');
+  assert.equal(Array.isArray(payload.data?.taskPhases), true);
+  assert.equal(payload.data.taskPhases.length, 3);
+  assert.equal(payload.data.taskPhases[0].name, 'preview');
+  assert.equal(payload.data.taskPhases[1].name, 'execute');
+  assert.equal(payload.data.taskPhases[2].name, 'verify');
+  assert.equal(payload.data.taskPhases[1].status, 'completed');
+  assert.equal(payload.data.taskPhases[1].stats.successCount >= 1, true);
+  assert.equal(typeof payload.data?.taskCard?.conclusion, 'string');
+});
+
+test('无交互 cleanup 在 --run-task 三阶段下无命中时自动跳过执行', async (t) => {
+  const root = await makeTempDir('wecom-cli-ni-run-task-empty-');
+  t.after(async () => removeDir(root));
+
+  const profilesRoot = await prepareFixture(root);
+  const stateRoot = path.join(root, 'state');
+
+  const result = runCli([
+    '--cleanup-monthly',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--accounts',
+    'all',
+    '--categories',
+    'files',
+    '--months',
+    '2024-02',
+    '--run-task',
+    'preview-execute-verify',
+    '--yes',
+    '--external-storage-auto-detect',
+    'false',
+  ]);
+  assert.equal(result.status, 0);
+
+  const payload = JSON.parse(String(result.stdout || '{}'));
+  assert.equal(payload.summary.taskDecision, 'skipped_no_target');
+  assert.equal(Array.isArray(payload.data?.taskPhases), true);
+  assert.equal(payload.data.taskPhases[1].status, 'skipped');
+  assert.equal(payload.data.taskPhases[1].reason, 'no_target');
+});
+
+test('无交互 --run-task execute 缺少 --yes 时返回确认错误', async (t) => {
+  const root = await makeTempDir('wecom-cli-ni-run-task-confirm-');
+  t.after(async () => removeDir(root));
+
+  const profilesRoot = await prepareFixture(root);
+  const stateRoot = path.join(root, 'state');
+
+  const result = runCli([
+    '--cleanup-monthly',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--accounts',
+    'all',
+    '--categories',
+    'files',
+    '--months',
+    '2024-01',
+    '--run-task',
+    'execute',
+    '--external-storage-auto-detect',
+    'false',
+  ]);
+  assert.equal(result.status, 3);
+  assert.match(String(result.stderr || ''), /确认错误/);
+});
+
+test('非破坏性动作仅支持 --run-task preview', async (t) => {
+  const root = await makeTempDir('wecom-cli-ni-run-task-analysis-');
+  t.after(async () => removeDir(root));
+
+  const profilesRoot = await prepareFixture(root);
+  const stateRoot = path.join(root, 'state');
+
+  const result = runCli([
+    '--analysis-only',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--run-task',
+    'execute',
+  ]);
+  assert.equal(result.status, 2);
+  assert.match(String(result.stderr || ''), /仅支持 --run-task preview/);
+});
+
+test('无交互支持 --scan-debug summary/full 输出扫描诊断', async (t) => {
+  const root = await makeTempDir('wecom-cli-ni-scan-debug-');
+  t.after(async () => removeDir(root));
+
+  const profilesRoot = await prepareFixture(root);
+  const stateRoot = path.join(root, 'state');
+
+  const summaryResult = runCli([
+    '--cleanup-monthly',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--accounts',
+    'all',
+    '--categories',
+    'files',
+    '--months',
+    '2024-01',
+    '--scan-debug',
+    'summary',
+    '--external-storage-auto-detect',
+    'false',
+  ]);
+  assert.equal(summaryResult.status, 0);
+  const summaryPayload = JSON.parse(String(summaryResult.stdout || '{}'));
+  assert.equal(summaryPayload.data?.scanDebug?.level, 'summary');
+  assert.equal(typeof summaryPayload.data?.scanDebug?.summary?.matchedTargets, 'number');
+  assert.equal(summaryPayload.data?.scanDebug?.full, undefined);
+
+  const fullResult = runCli([
+    '--cleanup-monthly',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--accounts',
+    'all',
+    '--categories',
+    'files',
+    '--months',
+    '2024-01',
+    '--scan-debug',
+    'full',
+    '--external-storage-auto-detect',
+    'false',
+  ]);
+  assert.equal(fullResult.status, 0);
+  const fullPayload = JSON.parse(String(fullResult.stdout || '{}'));
+  assert.equal(fullPayload.data?.scanDebug?.level, 'full');
+  assert.equal(Array.isArray(fullPayload.data?.scanDebug?.full?.selectedAccounts), true);
 });

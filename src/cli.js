@@ -123,6 +123,20 @@ const INTERACTIVE_MODE_ALIASES = new Map([
 ]);
 const OUTPUT_JSON = 'json';
 const OUTPUT_TEXT = 'text';
+const RUN_TASK_PREVIEW = 'preview';
+const RUN_TASK_EXECUTE = 'execute';
+const RUN_TASK_PREVIEW_EXECUTE_VERIFY = 'preview-execute-verify';
+const RUN_TASK_MODES = new Set([RUN_TASK_PREVIEW, RUN_TASK_EXECUTE, RUN_TASK_PREVIEW_EXECUTE_VERIFY]);
+const SCAN_DEBUG_OFF = 'off';
+const SCAN_DEBUG_SUMMARY = 'summary';
+const SCAN_DEBUG_FULL = 'full';
+const SCAN_DEBUG_LEVELS = new Set([SCAN_DEBUG_OFF, SCAN_DEBUG_SUMMARY, SCAN_DEBUG_FULL]);
+const DESTRUCTIVE_ACTIONS = new Set([
+  MODES.CLEANUP_MONTHLY,
+  MODES.SPACE_GOVERNANCE,
+  MODES.RESTORE,
+  MODES.RECYCLE_MAINTAIN,
+]);
 const UPDATE_REPO_OWNER = 'MisonL';
 const UPDATE_REPO_NAME = 'wecom-cleaner';
 const UPDATE_TIMEOUT_MS = 2500;
@@ -1797,6 +1811,58 @@ function uniqueStrings(values = []) {
   return [...new Set(values.map((item) => String(item || '').trim()).filter(Boolean))];
 }
 
+function normalizeRunTaskMode(rawMode) {
+  const value = String(rawMode || '')
+    .trim()
+    .toLowerCase();
+  if (!value) {
+    return null;
+  }
+  if (!RUN_TASK_MODES.has(value)) {
+    throw new UsageError(`参数 --run-task 的值无效: ${rawMode}`);
+  }
+  return value;
+}
+
+function normalizeScanDebugLevel(rawLevel) {
+  const value = String(rawLevel || SCAN_DEBUG_OFF)
+    .trim()
+    .toLowerCase();
+  if (!value) {
+    return SCAN_DEBUG_OFF;
+  }
+  if (!SCAN_DEBUG_LEVELS.has(value)) {
+    throw new UsageError(`参数 --scan-debug 的值无效: ${rawLevel}`);
+  }
+  return value;
+}
+
+function isDestructiveAction(action) {
+  return DESTRUCTIVE_ACTIONS.has(action);
+}
+
+function shouldAttachScanDebug(cliArgs) {
+  return normalizeScanDebugLevel(cliArgs?.scanDebug) !== SCAN_DEBUG_OFF;
+}
+
+function attachScanDebugData(baseData, cliArgs, summaryPayload, fullPayload = {}) {
+  const level = normalizeScanDebugLevel(cliArgs?.scanDebug);
+  if (level === SCAN_DEBUG_OFF) {
+    return baseData || {};
+  }
+  const summary = summaryPayload && typeof summaryPayload === 'object' ? summaryPayload : {};
+  const full = fullPayload && typeof fullPayload === 'object' ? fullPayload : {};
+  return {
+    ...(baseData || {}),
+    scanDebug: {
+      level,
+      summary,
+      ...(level === SCAN_DEBUG_FULL ? { full } : {}),
+      generatedAt: Date.now(),
+    },
+  };
+}
+
 function normalizeActionOutputMode(cliArgs) {
   if (cliArgs.output === OUTPUT_TEXT || cliArgs.output === OUTPUT_JSON) {
     return cliArgs.output;
@@ -1870,6 +1936,8 @@ function printCliUsage(appMeta) {
     '  --output json|text',
     '  --dry-run true|false',
     '  --yes',
+    '  --run-task preview|execute|preview-execute-verify',
+    '  --scan-debug off|summary|full',
     '  --accounts all|current|id1,id2',
     '  --months YYYY-MM,YYYY-MM',
     '  --cutoff-month YYYY-MM',
@@ -1887,6 +1955,7 @@ function printCliUsage(appMeta) {
     '示例：',
     '  wecom-cleaner --doctor',
     '  wecom-cleaner --cleanup-monthly --accounts all --cutoff-month 2024-04',
+    '  wecom-cleaner --cleanup-monthly --cutoff-month 2024-04 --accounts all --run-task preview-execute-verify --yes',
     '  wecom-cleaner --cleanup-monthly --accounts all --cutoff-month 2024-04 --dry-run false --yes',
   ];
   console.log(lines.join('\n'));
@@ -3027,7 +3096,37 @@ function printGenericTextResult(payload) {
   printRuntimeAndRisk(payload);
 }
 
+function printTaskPhasesText(payload) {
+  const phases = Array.isArray(payload?.data?.taskPhases) ? payload.data.taskPhases : [];
+  if (phases.length === 0) {
+    return;
+  }
+  printTextRows(
+    '任务流程',
+    phases.map((phase) => {
+      const summaryText =
+        phase.status === 'completed'
+          ? `命中 ${formatCount(phase?.stats?.matchedTargets)} 项，成功 ${formatCount(phase?.stats?.successCount)} 项，失败 ${formatCount(phase?.stats?.failedCount)} 项，释放 ${formatBytesSafe(phase?.stats?.reclaimedBytes)}`
+          : `已跳过（${phase.reason || '无'}）`;
+      return {
+        label: phase.name,
+        value: `${phase.status}${phase.ok === false ? '（失败）' : ''}`,
+        note: summaryText,
+      };
+    })
+  );
+  const taskCard = payload?.data?.taskCard;
+  if (taskCard && typeof taskCard === 'object') {
+    printTextRows('流程结论', [
+      { label: '模式', value: taskCard.mode || '-' },
+      { label: '决策', value: taskCard.decision || '-' },
+      { label: '结论', value: taskCard.conclusion || '-' },
+    ]);
+  }
+}
+
 function printNonInteractiveTextResult(payload) {
+  printTaskPhasesText(payload);
   if (payload.action === MODES.CLEANUP_MONTHLY) {
     printCleanupTextResult(payload);
     return;
@@ -3124,6 +3223,32 @@ async function runCleanupModeNonInteractive(context, cliArgs, warnings = []) {
   const targets = scan.targets || [];
   const matchedBytes = targets.reduce((total, item) => total + Number(item?.sizeBytes || 0), 0);
   const matchedReport = buildCleanupTargetReport(targets, { topPathLimit: 20 });
+  const scanDebugSummary = {
+    action: MODES.CLEANUP_MONTHLY,
+    engineReady: context.nativeCorePath ? 'zig' : 'node',
+    engineUsed: scan.engineUsed || 'node',
+    nativeFallbackReason: scan.nativeFallbackReason || null,
+    selectedAccountCount: accountResolved.selectedAccountIds.length,
+    availableMonthCount: availableMonths.length,
+    selectedMonthCount: monthFilters.length,
+    selectedCategoryCount: categoryKeys.length,
+    selectedExternalRootCount: externalResolved.roots.length,
+    includeNonMonthDirs,
+    matchedTargets: targets.length,
+    matchedBytes,
+  };
+  const scanDebugFull = {
+    selectedAccounts: accountResolved.selectedAccountIds,
+    selectedMonths: monthFilters,
+    selectedCategories: categoryKeys,
+    availableMonths,
+    selectedExternalRoots: externalResolved.roots,
+    externalDetectionMeta: detectedExternalStorage.meta || null,
+    matchedTopPaths: matchedReport.topPaths || [],
+    matchedCategoryStats: matchedReport.categoryStats || [],
+    matchedMonthStats: matchedReport.monthStats || [],
+    matchedRootStats: matchedReport.rootStats || [],
+  };
   if (targets.length === 0) {
     return {
       ok: true,
@@ -3157,6 +3282,7 @@ async function runCleanupModeNonInteractive(context, cliArgs, warnings = []) {
           matched: matchedReport,
           executed: null,
         },
+        ...attachScanDebugData({}, cliArgs, scanDebugSummary, scanDebugFull),
       },
     };
   }
@@ -3196,6 +3322,7 @@ async function runCleanupModeNonInteractive(context, cliArgs, warnings = []) {
         matched: matchedReport,
         executed: result.breakdown || null,
       },
+      ...attachScanDebugData({}, cliArgs, scanDebugSummary, scanDebugFull),
     },
   };
 }
@@ -3230,6 +3357,29 @@ async function runAnalysisModeNonInteractive(context, cliArgs, warnings = []) {
     warnings.push(result.nativeFallbackReason);
   }
   const analysisReport = buildCleanupTargetReport(result.targets, { topPathLimit: 20 });
+  const scanDebugSummary = {
+    action: MODES.ANALYSIS_ONLY,
+    engineReady: context.nativeCorePath ? 'zig' : 'node',
+    engineUsed: result.engineUsed || 'node',
+    nativeFallbackReason: result.nativeFallbackReason || null,
+    selectedAccountCount: accountResolved.selectedAccountIds.length,
+    selectedCategoryCount: categoryKeys.length,
+    selectedExternalRootCount: externalResolved.roots.length,
+    matchedTargets: result.targets.length,
+    matchedBytes: result.totalBytes,
+    matchedAccountCount: result.accountsSummary.length,
+    monthBucketCount: result.monthsSummary.length,
+  };
+  const scanDebugFull = {
+    selectedAccounts: accountResolved.selectedAccountIds,
+    selectedCategories: categoryKeys,
+    selectedExternalRoots: externalResolved.roots,
+    externalDetectionMeta: detectedExternalStorage.meta || null,
+    accountsSummary: result.accountsSummary,
+    categoriesSummary: result.categoriesSummary,
+    monthsSummary: result.monthsSummary,
+    matchedTopPaths: analysisReport.topPaths || [],
+  };
 
   return {
     ok: true,
@@ -3256,6 +3406,7 @@ async function runAnalysisModeNonInteractive(context, cliArgs, warnings = []) {
       report: {
         matched: analysisReport,
       },
+      ...attachScanDebugData({}, cliArgs, scanDebugSummary, scanDebugFull),
     },
   };
 }
@@ -3314,6 +3465,33 @@ async function runSpaceGovernanceModeNonInteractive(context, cliArgs, warnings =
   const allowRecentActive = cliArgs.allowRecentActive === true;
   const dryRun = resolveDestructiveDryRun(cliArgs);
   const matchedReport = buildGovernanceTargetReport(selectedTargets, { topPathLimit: 20 });
+  const scanDebugSummary = {
+    action: MODES.SPACE_GOVERNANCE,
+    engineReady: context.nativeCorePath ? 'zig' : 'node',
+    engineUsed: scan.engineUsed || 'node',
+    nativeFallbackReason: scan.nativeFallbackReason || null,
+    selectedAccountCount: accountResolved.selectedAccountIds.length,
+    selectedExternalRootCount: externalResolved.roots.length,
+    scannedTargets: scan.targets.length,
+    selectableTargets: selectableTargets.length,
+    selectedTargets: selectedTargets.length,
+    selectedByCliTargets: selectedById.length,
+    allowRecentActive,
+    matchedBytes: matchedReport.totalBytes,
+  };
+  const scanDebugFull = {
+    selectedAccounts: accountResolved.selectedAccountIds,
+    selectedExternalRoots: externalResolved.roots,
+    externalDetectionMeta: detectedExternalStorage.meta || null,
+    tierFilters: tierFilterSet ? [...tierFilterSet] : [],
+    cliSelectedTargets: selectedById,
+    selectedTargetIds: selectedTargets.map((item) => item.id),
+    matchedByTier: matchedReport.byTier || [],
+    matchedByTargetType: matchedReport.byTargetType || [],
+    matchedByRoot: matchedReport.byRoot || [],
+    matchedTopPaths: matchedReport.topPaths || [],
+    scanByTier: scan.byTier || [],
+  };
   const governanceRoot = inferDataRootFromProfilesRoot(config.rootDir);
   const governanceAllowedRoots = governanceRoot
     ? [governanceRoot, ...externalResolved.roots]
@@ -3346,6 +3524,7 @@ async function runSpaceGovernanceModeNonInteractive(context, cliArgs, warnings =
           matched: matchedReport,
           executed: null,
         },
+        ...attachScanDebugData({}, cliArgs, scanDebugSummary, scanDebugFull),
       },
     };
   }
@@ -3391,6 +3570,7 @@ async function runSpaceGovernanceModeNonInteractive(context, cliArgs, warnings =
         matched: matchedReport,
         executed: result.breakdown || null,
       },
+      ...attachScanDebugData({}, cliArgs, scanDebugSummary, scanDebugFull),
     },
   };
 }
@@ -3436,6 +3616,25 @@ async function runRestoreModeNonInteractive(context, cliArgs, warnings = []) {
     onConflict: async () => ({ action: conflictStrategy, applyToAll: true }),
   });
   const matchedReport = buildRestoreBatchTargetReport(batch.entries, { topPathLimit: 20 });
+  const scanDebugSummary = {
+    action: MODES.RESTORE,
+    selectedExternalRootCount: externalResolved.roots.length,
+    governanceRoot: governanceRoot || null,
+    batchEntryCount: batch.entries.length,
+    matchedBytes: matchedReport.totalBytes,
+    dryRun,
+  };
+  const scanDebugFull = {
+    batchId: batch.batchId,
+    conflictStrategy,
+    selectedExternalRoots: externalResolved.roots,
+    governanceAllowRoots: governanceAllowRoots,
+    matchedByScope: matchedReport.byScope || [],
+    matchedByCategory: matchedReport.byCategory || [],
+    matchedByMonth: matchedReport.byMonth || [],
+    matchedByRoot: matchedReport.byRoot || [],
+    topEntries: matchedReport.topEntries || [],
+  };
 
   return {
     ok: result.failCount === 0,
@@ -3463,6 +3662,7 @@ async function runRestoreModeNonInteractive(context, cliArgs, warnings = []) {
         matched: matchedReport,
         executed: result.breakdown || null,
       },
+      ...attachScanDebugData({}, cliArgs, scanDebugSummary, scanDebugFull),
     },
   };
 }
@@ -3504,6 +3704,25 @@ async function runRecycleMaintainModeNonInteractive(context, cliArgs, warnings =
     };
     await saveConfig(config);
   }
+  const scanDebugSummary = {
+    action: MODES.RECYCLE_MAINTAIN,
+    dryRun,
+    candidateCount: result.candidateCount,
+    selectedByAge: result.selectedByAge,
+    selectedBySize: result.selectedBySize,
+    deletedBatches: result.deletedBatches,
+    deletedBytes: result.deletedBytes,
+    failedBatches: result.failBatches,
+  };
+  const scanDebugFull = {
+    policy,
+    before: result.before || null,
+    after: result.after || null,
+    thresholdBytes: result.thresholdBytes,
+    overThreshold: result.overThreshold,
+    selectedCandidates: result.selectedCandidates || [],
+    operations: result.operations || [],
+  };
 
   return {
     ok: result.failBatches === 0,
@@ -3537,6 +3756,7 @@ async function runRecycleMaintainModeNonInteractive(context, cliArgs, warnings =
         selectedCandidates: result.selectedCandidates || [],
         operations: result.operations || [],
       },
+      ...attachScanDebugData({}, cliArgs, scanDebugSummary, scanDebugFull),
     },
   };
 }
@@ -3927,6 +4147,351 @@ async function runNonInteractiveAction(action, context, cliArgs) {
     return runUpgradeModeNonInteractive(context, cliArgs, warnings);
   }
   throw new UsageError(`不支持的无交互动作: ${action}`);
+}
+
+function phaseMatchedTargets(action, result) {
+  const summary = result?.summary || {};
+  if (action === MODES.CLEANUP_MONTHLY || action === MODES.SPACE_GOVERNANCE) {
+    return Number(summary.matchedTargets || 0);
+  }
+  if (action === MODES.RESTORE) {
+    return Number(summary.entryCount || 0);
+  }
+  if (action === MODES.RECYCLE_MAINTAIN) {
+    return Number(summary.candidateCount || 0);
+  }
+  if (action === MODES.ANALYSIS_ONLY) {
+    return Number(summary.targetCount || 0);
+  }
+  return 0;
+}
+
+function phaseMatchedBytes(action, result) {
+  const summary = result?.summary || {};
+  if (action === MODES.CLEANUP_MONTHLY || action === MODES.SPACE_GOVERNANCE || action === MODES.RESTORE) {
+    return Number(summary.matchedBytes || 0);
+  }
+  if (action === MODES.ANALYSIS_ONLY) {
+    return Number(summary.totalBytes || 0);
+  }
+  if (action === MODES.RECYCLE_MAINTAIN) {
+    return Number(summary.deletedBytes || 0);
+  }
+  return 0;
+}
+
+function phaseReclaimedBytes(action, result) {
+  const summary = result?.summary || {};
+  if (action === MODES.RESTORE) {
+    return Number(summary.restoredBytes || 0);
+  }
+  if (action === MODES.RECYCLE_MAINTAIN) {
+    return Number(summary.deletedBytes || 0);
+  }
+  return Number(summary.reclaimedBytes || 0);
+}
+
+function buildTaskPhaseEntry(action, phaseName, result, durationMs) {
+  const summary = result?.summary || {};
+  const warnings = Array.isArray(result?.warnings) ? result.warnings : [];
+  const errors = Array.isArray(result?.errors) ? result.errors : [];
+  return {
+    name: phaseName,
+    status: 'completed',
+    ok: Boolean(result?.ok),
+    dryRun: result?.dryRun ?? null,
+    durationMs: Math.max(0, Number(durationMs || 0)),
+    summary,
+    warningCount: warnings.length,
+    errorCount: errors.length,
+    warnings,
+    errors,
+    stats: {
+      matchedTargets: phaseMatchedTargets(action, result),
+      matchedBytes: phaseMatchedBytes(action, result),
+      reclaimedBytes: phaseReclaimedBytes(action, result),
+      successCount: Number(summary.successCount || 0),
+      skippedCount: Number(summary.skippedCount || 0),
+      failedCount: Number(summary.failedCount || summary.failedBatches || 0),
+      batchId: summary.batchId || null,
+    },
+    userFacingSummary: buildUserFacingSummary(action, result),
+  };
+}
+
+function buildSkippedTaskPhase(phaseName, reason) {
+  return {
+    name: phaseName,
+    status: 'skipped',
+    reason,
+    ok: true,
+    dryRun: null,
+    durationMs: 0,
+    summary: {},
+    warningCount: 0,
+    errorCount: 0,
+    warnings: [],
+    errors: [],
+    stats: {
+      matchedTargets: 0,
+      matchedBytes: 0,
+      reclaimedBytes: 0,
+      successCount: 0,
+      skippedCount: 0,
+      failedCount: 0,
+      batchId: null,
+    },
+    userFacingSummary: {},
+  };
+}
+
+function buildTaskCardBreakdown(action, report) {
+  const matched = report?.matched || {};
+  if (action === MODES.CLEANUP_MONTHLY || action === MODES.ANALYSIS_ONLY) {
+    return {
+      byCategory: summarizeDimensionRows(matched.categoryStats, { labelKey: 'categoryLabel' }, 16),
+      byMonth: summarizeDimensionRows(matched.monthStats, { labelKey: 'monthKey' }, 16),
+      byRoot: summarizeDimensionRows(matched.rootStats, { labelKey: 'rootPath' }, 12),
+      topPaths: Array.isArray(matched.topPaths)
+        ? matched.topPaths.slice(0, 12).map((item) => ({
+            path: item.path || '-',
+            category: item.categoryLabel || item.categoryKey || '-',
+            month: item.monthKey || '非月份目录',
+            sizeBytes: Number(item.sizeBytes || 0),
+          }))
+        : [],
+    };
+  }
+  if (action === MODES.SPACE_GOVERNANCE) {
+    return {
+      byCategory: summarizeDimensionRows(matched.byTargetType, { labelKey: 'targetLabel' }, 16),
+      byMonth: [],
+      byRoot: summarizeDimensionRows(matched.byRoot, { labelKey: 'rootPath' }, 12),
+      byTier: summarizeDimensionRows(matched.byTier, { labelKey: 'tierLabel' }, 8),
+      topPaths: Array.isArray(matched.topPaths)
+        ? matched.topPaths.slice(0, 12).map((item) => ({
+            path: item.path || '-',
+            category: item.targetLabel || item.targetKey || '-',
+            month: '-',
+            sizeBytes: Number(item.sizeBytes || 0),
+          }))
+        : [],
+    };
+  }
+  if (action === MODES.RESTORE) {
+    return {
+      byCategory: summarizeDimensionRows(matched.byCategory, { labelKey: 'categoryLabel' }, 16),
+      byMonth: summarizeDimensionRows(matched.byMonth, { labelKey: 'monthKey' }, 16),
+      byRoot: summarizeDimensionRows(matched.byRoot, { labelKey: 'rootPath' }, 12),
+      topPaths: Array.isArray(matched.topEntries)
+        ? matched.topEntries.slice(0, 12).map((item) => ({
+            path: item.originalPath || '-',
+            category: item.categoryLabel || item.categoryKey || '-',
+            month: item.monthKey || '非月份目录',
+            sizeBytes: Number(item.sizeBytes || 0),
+          }))
+        : [],
+    };
+  }
+  if (action === MODES.RECYCLE_MAINTAIN) {
+    const operations = Array.isArray(report?.operations) ? report.operations : [];
+    const byStatus = operations.reduce((acc, item) => {
+      const key = String(item?.status || 'unknown');
+      acc.set(key, (acc.get(key) || 0) + 1);
+      return acc;
+    }, new Map());
+    return {
+      byCategory: [...byStatus.entries()].map(([label, count]) => ({
+        label,
+        count: Number(count || 0),
+        sizeBytes: 0,
+      })),
+      byMonth: [],
+      byRoot: [],
+      topPaths: [],
+    };
+  }
+  return {
+    byCategory: [],
+    byMonth: [],
+    byRoot: [],
+    topPaths: [],
+  };
+}
+
+function buildRunTaskCard(action, runTaskMode, taskDecision, phases, finalResult) {
+  const previewPhase = phases.find((item) => item.name === 'preview' && item.status === 'completed') || null;
+  const executePhase = phases.find((item) => item.name === 'execute' && item.status === 'completed') || null;
+  const verifyPhase = phases.find((item) => item.name === 'verify' && item.status === 'completed') || null;
+  const report = finalResult?.data?.report || {};
+  const breakdown = buildTaskCardBreakdown(action, report);
+
+  let conclusion = '任务已完成。';
+  if (taskDecision === 'skipped_no_target') {
+    conclusion = '预演命中为 0，已按安全策略跳过真实执行。';
+  } else if (taskDecision === 'preview_only') {
+    conclusion = '已完成预演，本次未执行真实操作。';
+  } else if (taskDecision === 'execute_only' && executePhase) {
+    conclusion = executePhase.ok ? '已完成真实执行。' : '已尝试真实执行，但存在失败项。';
+  } else if (taskDecision === 'executed_and_verified') {
+    conclusion =
+      verifyPhase && Number(verifyPhase.stats.matchedTargets || 0) === 0
+        ? '已完成真实执行并通过复核，范围内无剩余目标。'
+        : '已完成真实执行与复核。';
+  } else if (taskDecision === 'preview_failed') {
+    conclusion = '预演阶段失败，后续阶段未执行。';
+  }
+
+  return {
+    action,
+    actionLabel: actionDisplayName(action),
+    mode: runTaskMode,
+    decision: taskDecision,
+    conclusion,
+    phases: phases.map((item) => ({
+      name: item.name,
+      status: item.status,
+      reason: item.reason || null,
+      dryRun: item.dryRun,
+      ok: item.ok,
+      durationMs: item.durationMs,
+      matchedTargets: Number(item?.stats?.matchedTargets || 0),
+      matchedBytes: Number(item?.stats?.matchedBytes || 0),
+      reclaimedBytes: Number(item?.stats?.reclaimedBytes || 0),
+      successCount: Number(item?.stats?.successCount || 0),
+      skippedCount: Number(item?.stats?.skippedCount || 0),
+      failedCount: Number(item?.stats?.failedCount || 0),
+      batchId: item?.stats?.batchId || null,
+    })),
+    scope: {
+      accountCount: Number(finalResult?.summary?.accountCount || 0),
+      monthCount: Number(finalResult?.summary?.monthCount || 0),
+      categoryCount: Number(finalResult?.summary?.categoryCount || 0),
+      rootPathCount: Number(finalResult?.summary?.rootPathCount || 0),
+      cutoffMonth: finalResult?.summary?.cutoffMonth || null,
+      selectedAccounts: uniqueStrings(finalResult?.data?.selectedAccounts || []),
+      selectedMonths: uniqueStrings(finalResult?.data?.selectedMonths || []),
+      selectedCategories: uniqueStrings(finalResult?.data?.selectedCategories || []),
+      selectedExternalRoots: uniqueStrings(finalResult?.data?.selectedExternalRoots || []),
+    },
+    preview: previewPhase
+      ? {
+          matchedTargets: Number(previewPhase.stats.matchedTargets || 0),
+          matchedBytes: Number(previewPhase.stats.matchedBytes || 0),
+          reclaimedBytes: Number(previewPhase.stats.reclaimedBytes || 0),
+          failedCount: Number(previewPhase.stats.failedCount || 0),
+        }
+      : null,
+    execute: executePhase
+      ? {
+          successCount: Number(executePhase.stats.successCount || 0),
+          skippedCount: Number(executePhase.stats.skippedCount || 0),
+          failedCount: Number(executePhase.stats.failedCount || 0),
+          reclaimedBytes: Number(executePhase.stats.reclaimedBytes || 0),
+          batchId: executePhase.stats.batchId || null,
+        }
+      : null,
+    verify: verifyPhase
+      ? {
+          matchedTargets: Number(verifyPhase.stats.matchedTargets || 0),
+          matchedBytes: Number(verifyPhase.stats.matchedBytes || 0),
+          failedCount: Number(verifyPhase.stats.failedCount || 0),
+        }
+      : null,
+    breakdown,
+  };
+}
+
+function withRunTaskResult(baseResult, action, runTaskMode, taskDecision, phases) {
+  const output = baseResult && typeof baseResult === 'object' ? baseResult : {};
+  const data = output.data && typeof output.data === 'object' ? output.data : {};
+  const summary = output.summary && typeof output.summary === 'object' ? output.summary : {};
+  return {
+    ...output,
+    summary: {
+      ...summary,
+      runTaskMode,
+      taskDecision,
+      phaseCount: phases.length,
+    },
+    data: {
+      ...data,
+      taskPhases: phases,
+      taskCard: buildRunTaskCard(action, runTaskMode, taskDecision, phases, output),
+    },
+  };
+}
+
+async function runNonInteractiveTask(action, context, cliArgs) {
+  const runTaskMode = normalizeRunTaskMode(cliArgs.runTask);
+  if (!runTaskMode) {
+    return runNonInteractiveAction(action, context, cliArgs);
+  }
+
+  if (!isDestructiveAction(action) && runTaskMode !== RUN_TASK_PREVIEW) {
+    throw new UsageError(`动作 ${actionDisplayName(action)} 仅支持 --run-task preview`);
+  }
+  if (
+    isDestructiveAction(action) &&
+    (runTaskMode === RUN_TASK_EXECUTE || runTaskMode === RUN_TASK_PREVIEW_EXECUTE_VERIFY) &&
+    !cliArgs.yes
+  ) {
+    throw new ConfirmationRequiredError('检测到真实执行任务流程，但未提供 --yes 确认参数。');
+  }
+
+  const execPhase = async (phaseName, phaseArgs) => {
+    const startedAt = Date.now();
+    const result = await runNonInteractiveAction(action, context, phaseArgs);
+    return {
+      result,
+      phase: buildTaskPhaseEntry(action, phaseName, result, Date.now() - startedAt),
+    };
+  };
+
+  if (runTaskMode === RUN_TASK_PREVIEW) {
+    const previewArgs = isDestructiveAction(action)
+      ? { ...cliArgs, dryRun: true, yes: false, runTask: null }
+      : { ...cliArgs, runTask: null };
+    const preview = await execPhase('preview', previewArgs);
+    return withRunTaskResult(preview.result, action, runTaskMode, 'preview_only', [preview.phase]);
+  }
+
+  if (runTaskMode === RUN_TASK_EXECUTE) {
+    const executeArgs = isDestructiveAction(action)
+      ? { ...cliArgs, dryRun: false, yes: true, runTask: null }
+      : { ...cliArgs, runTask: null };
+    const execute = await execPhase('execute', executeArgs);
+    return withRunTaskResult(execute.result, action, runTaskMode, 'execute_only', [execute.phase]);
+  }
+
+  const previewArgs = { ...cliArgs, dryRun: true, yes: false, runTask: null };
+  const preview = await execPhase('preview', previewArgs);
+  if (!preview.result.ok) {
+    const phases = [
+      preview.phase,
+      buildSkippedTaskPhase('execute', 'preview_failed'),
+      buildSkippedTaskPhase('verify', 'preview_failed'),
+    ];
+    return withRunTaskResult(preview.result, action, runTaskMode, 'preview_failed', phases);
+  }
+
+  if (phaseMatchedTargets(action, preview.result) <= 0) {
+    const phases = [
+      preview.phase,
+      buildSkippedTaskPhase('execute', 'no_target'),
+      buildSkippedTaskPhase('verify', 'no_execute'),
+    ];
+    return withRunTaskResult(preview.result, action, runTaskMode, 'skipped_no_target', phases);
+  }
+
+  const executeArgs = { ...cliArgs, dryRun: false, yes: true, runTask: null };
+  const execute = await execPhase('execute', executeArgs);
+  const verify = await execPhase('verify', previewArgs);
+  return withRunTaskResult(execute.result, action, runTaskMode, 'executed_and_verified', [
+    preview.phase,
+    execute.phase,
+    verify.phase,
+  ]);
 }
 
 async function runCleanupMode(context) {
@@ -5320,7 +5885,7 @@ async function main() {
     }
 
     const startedAt = Date.now();
-    let result = await runNonInteractiveAction(action, context, cliArgs);
+    let result = await runNonInteractiveTask(action, context, cliArgs);
     if (action !== MODES.CHECK_UPDATE && action !== MODES.UPGRADE) {
       result = attachStartupUpdateToResult(result, startupUpdate, context.config.selfUpdate.skipVersion);
     }

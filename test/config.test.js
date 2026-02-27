@@ -43,6 +43,10 @@ test('parseCliArgs 可正确解析常用参数', () => {
     'pre',
     '--force',
     '--interactive',
+    '--run-task',
+    'preview',
+    '--scan-debug',
+    'full',
   ]);
 
   assert.equal(parsed.rootDir, '/tmp/profiles');
@@ -61,6 +65,8 @@ test('parseCliArgs 可正确解析常用参数', () => {
   assert.equal(parsed.upgradeChannel, 'pre');
   assert.equal(parsed.force, true);
   assert.equal(parsed.interactive, true);
+  assert.equal(parsed.runTask, 'preview');
+  assert.equal(parsed.scanDebug, 'full');
 });
 
 test('parseCliArgs 可解析无交互动作与动作参数', () => {
@@ -112,6 +118,8 @@ test('parseCliArgs 对非法参数会抛出 CliArgError', () => {
   assert.throws(() => parseCliArgs(['--months', '2024-01', '--cutoff-month', '2024-02']), /不能同时使用/);
   assert.throws(() => parseCliArgs(['--upgrade-channel', 'beta']), CliArgError);
   assert.throws(() => parseCliArgs(['--upgrade', 'script']), CliArgError);
+  assert.throws(() => parseCliArgs(['--run-task', 'dryrun']), CliArgError);
+  assert.throws(() => parseCliArgs(['--scan-debug', 'detail']), CliArgError);
 });
 
 test('parseCliArgs 可解析升级动作参数', () => {

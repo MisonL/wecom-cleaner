@@ -11,6 +11,8 @@ const ALLOWED_EXTERNAL_ROOT_SOURCES = new Set(['preset', 'configured', 'auto', '
 const ALLOWED_GOVERNANCE_TIERS = new Set(['safe', 'caution', 'protected']);
 const ALLOWED_UPGRADE_METHODS = new Set(['npm', 'github-script']);
 const ALLOWED_UPGRADE_CHANNELS = new Set(['stable', 'pre']);
+const ALLOWED_RUN_TASK_MODES = new Set(['preview', 'execute', 'preview-execute-verify']);
+const ALLOWED_SCAN_DEBUG_LEVELS = new Set(['off', 'summary', 'full']);
 const ACTION_FLAG_MAP = new Map([
   ['--cleanup-monthly', 'cleanup_monthly'],
   ['--analysis-only', 'analysis_only'],
@@ -196,6 +198,8 @@ export function parseCliArgs(argv) {
     upgradeVersion: null,
     upgradeChannel: null,
     upgradeYes: false,
+    runTask: null,
+    scanDebug: 'off',
   };
   const actionValues = [];
 
@@ -298,6 +302,16 @@ export function parseCliArgs(argv) {
     }
     if (token === '--upgrade-yes') {
       parsed.upgradeYes = true;
+      continue;
+    }
+    if (token === '--run-task') {
+      parsed.runTask = parseEnumValue(token, takeValue(token, i), ALLOWED_RUN_TASK_MODES);
+      i += 1;
+      continue;
+    }
+    if (token === '--scan-debug') {
+      parsed.scanDebug = parseEnumValue(token, takeValue(token, i), ALLOWED_SCAN_DEBUG_LEVELS);
+      i += 1;
       continue;
     }
     if (token === '--theme') {
