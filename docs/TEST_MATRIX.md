@@ -26,6 +26,7 @@
 - `doctor`
 - `check_update`
 - `upgrade`
+- `sync_skills`
 
 ### 维度 C：范围组合
 
@@ -102,13 +103,15 @@
 8. `doctor`：只读模式不创建状态目录
 9. `check_update`：npm 正常 / npm 失败回退 GitHub / 全部失败
 10. `upgrade`：未确认拒绝、已是最新不执行、执行失败可返回非 0
-11. Agent 报告脚本：成功、无目标、失败三态退出码与卡片完整性
+11. `sync_skills`：预演/真实同步、版本匹配状态收敛
+12. Agent 报告脚本：成功、无目标、失败三态退出码与卡片完整性
 
 ## 当前门禁（执行顺序）
 
 1. `npm run check`
-2. `npm run test:coverage:check`
-3. `shellcheck skills/wecom-cleaner-agent/scripts/*.sh scripts/upgrade.sh scripts/install-skill.sh scripts/release-gate.sh`
-4. `npm run e2e:smoke`
+2. `npm run check:skills-version`
+3. `npm run test:coverage:check`
+4. `shellcheck skills/wecom-cleaner-agent/scripts/*.sh scripts/upgrade.sh scripts/install-skill.sh scripts/release-gate.sh`
+5. `npm run e2e:smoke`
 
 说明：若新增动作/字段，需先补此文档矩阵与断言，再提交实现。

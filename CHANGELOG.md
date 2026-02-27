@@ -8,15 +8,23 @@
 
 ### Added
 
-- 暂无。
+- 新增 skills 版本元数据：`skills/wecom-cleaner-agent/version.json`，将 `skillVersion` 与 `requiredAppVersion` 绑定到主程序版本。
+- 新增无交互动作 `--sync-skills`，支持独立同步 Agent skills（`npm` / `github-script`）。
+- 新增 skills 版本门禁脚本：`scripts/check-skills-version.js`，并接入 `npm run check:skills-version` 与 `release:gate`。
+- 新增 `wecom-cleaner-skill status` / `wecom-cleaner-skill sync` 子命令，用于检测与修复版本匹配。
 
 ### Changed
 
-- 暂无。
+- `--check-update` 输出增加 skills 匹配状态与版本字段（`skillsStatus`、`skillsMatched` 等）。
+- `--upgrade` 默认联动同步 skills，并在结果中返回同步状态、命令与前后匹配状态。
+- 交互模式头部新增 skills 状态徽章；“检查更新与升级”流程支持直接触发 skills 同步。
+- release 资产打包新增 skills 独立附件（`wecom-cleaner-skill-vX.Y.Z.tar.gz`）及 SHA256。
+- 升级脚本 `scripts/upgrade.sh` 默认在升级后同步 skills，可用 `--sync-skills false` 关闭。
+- Agent skills 文档与报告脚本已适配新字段与同步能力。
 
 ### Fixed
 
-- 暂无。
+- 修复“主程序升级后 skills 未同步导致能力不一致”的链路缺口，收敛为可检测、可提示、可一键修复。
 
 ## [1.3.2] - 2026-02-27
 

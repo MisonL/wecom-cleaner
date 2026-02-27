@@ -22,6 +22,7 @@
 - `--doctor`
 - `--check-update`
 - `--upgrade <npm|github-script>`
+- `--sync-skills`
 
 若缺少动作或动作冲突，退出码为 `2`。
 
@@ -186,10 +187,13 @@ JSON 顶层字段：
 - `sourceChain`（来源链路说明：先 npm，必要时自动回退 GitHub）
 - `channel`
 - `skippedByUser`
+- `skillsStatus` / `skillsMatched`
+- `skillsInstalledVersion` / `skillsBoundAppVersion`
 
 `check_update` 的 `data`：
 
 - `update`：更新检查详情（`checkedAt`、`checkReason`、`errors`、`upgradeMethods`）
+- `skills`：skills 版本绑定详情（状态、目录、建议）
 
 说明：
 
@@ -205,11 +209,31 @@ JSON 顶层字段：
 - `targetVersion`
 - `status`
 - `command`
+- `skillSyncEnabled`
+- `skillSyncMethod`
+- `skillSyncStatus`
+- `skillSyncTargetVersion`
+- `skillsStatusBefore` / `skillsStatusAfter`
 
 `upgrade` 的 `data`：
 
 - `upgrade`：升级执行结果（stdout/stderr/exit status）
 - `update`：升级前检查结果（若有）
+- `skills`：升级前后 skills 绑定状态
+- `skillSync`：skills 同步执行结果
+
+`sync_skills` 常见 `summary` 字段：
+
+- `method`：同步方式（`npm` / `github-script`）
+- `dryRun`：是否预演
+- `status`：`dry_run` / `synced` / `failed` / `mismatch_after_sync`
+- `skillsStatusBefore` / `skillsStatusAfter`
+- `skillsMatchedAfter`
+
+`sync_skills` 的 `data`：
+
+- `before` / `after`：同步前后 skills 绑定详情
+- `skillSync`：执行命令与退出码
 
 ## 5. 退出码
 
@@ -233,6 +257,9 @@ JSON 顶层字段：
 - `--upgrade-channel <stable|pre>`：更新通道（稳定版/预发布）
 - `--upgrade-version <x.y.z>`：升级到指定版本
 - `--upgrade-yes`：确认执行升级（无此参数将拒绝执行升级）
+- `--upgrade-sync-skills <true|false>`：升级后是否联动同步 skills（默认 `true`）
+- `--skill-sync-method <npm|github-script>`：skills 同步方式
+- `--skill-sync-ref <x.y.z>`：skills 同步版本标签
 - `--run-task preview|execute|preview-execute-verify`：无交互阶段协议
 - `--scan-debug off|summary|full`：扫描诊断输出等级
 
@@ -305,6 +332,18 @@ JSON 顶层字段：
 
 - `npm`：执行 `npm i -g @mison/wecom-cleaner@<version>`
 - `github-script`：执行 GitHub 托管脚本 `scripts/upgrade.sh`
+- 默认会联动同步 skills，可通过 `--upgrade-sync-skills false` 关闭。
+
+### 7.9 `--sync-skills`
+
+- `--skill-sync-method <npm|github-script>`（可选，默认 `npm`）
+- `--skill-sync-ref <x.y.z>`（可选）
+- `--dry-run <true|false>`（可选，默认 `false`）
+
+说明：
+
+- 用于单独修复/升级 Agent skills 版本绑定。
+- `npm` 方式优先使用本地随包 skills；`github-script` 方式按指定版本标签下载。
 
 ## 8. 兼容参数
 

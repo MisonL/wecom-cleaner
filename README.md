@@ -96,10 +96,12 @@
 
 - 启动后按“早/午/晚”三时段检查更新（默认开启）。
 - 版本源优先 npmjs，失败自动回退 GitHub Release。
+- 检查更新会同时校验 Agent skills 是否与主程序版本匹配。
 - 交互模式发现新版本时可直接选择升级方式：
   - npm 升级（默认）
   - GitHub 脚本升级
-- 无交互模式仅提示不阻断任务执行。
+- 程序升级完成后默认联动同步 skills，避免“程序已升级但 skills 仍旧版”。
+- 无交互模式可用 `--sync-skills` 单独修复 skills 版本绑定。
 
 ## 能力边界
 
@@ -154,12 +156,16 @@ npx --yes --package=@mison/wecom-cleaner wecom-cleaner-skill install
 - `--target <dir>`：自定义安装目录（默认 `$CODEX_HOME/skills` 或 `~/.codex/skills`）
 - `--force`：覆盖已存在技能目录
 - `--dry-run`：仅预演，不落盘
+- `status` 子命令：检查 skills 与主程序版本是否匹配
+- `sync` 子命令：等价 `install --force`，用于升级 skills
 
 示例：
 
 ```bash
 npx --yes --package=@mison/wecom-cleaner wecom-cleaner-skill install --force
 npx --yes --package=@mison/wecom-cleaner wecom-cleaner-skill install --target ~/.codex/skills
+npx --yes --package=@mison/wecom-cleaner wecom-cleaner-skill status --json
+npx --yes --package=@mison/wecom-cleaner wecom-cleaner-skill sync
 ```
 
 GitHub 备选方式（无 npm 包依赖）：
@@ -204,6 +210,7 @@ Agent 侧统一任务入口脚本（位于 `skills/wecom-cleaner-agent/scripts/`
 - `--doctor`
 - `--check-update`
 - `--upgrade <npm|github-script>`
+- `--sync-skills`
 
 ### 无交互安全规则
 
@@ -255,6 +262,9 @@ wecom-cleaner --upgrade npm --upgrade-yes
 
 # 执行升级（GitHub 托管脚本方式）
 wecom-cleaner --upgrade github-script --upgrade-version 1.3.2 --upgrade-yes
+
+# 单独同步 skills（修复版本不匹配）
+wecom-cleaner --sync-skills --skill-sync-method npm --dry-run false
 ```
 
 ### 输出与兼容参数
@@ -270,6 +280,9 @@ wecom-cleaner --upgrade github-script --upgrade-version 1.3.2 --upgrade-yes
 - `--upgrade-channel stable|pre`：升级检查通道（稳定版/预发布）。
 - `--upgrade-version <x.y.z>`：指定升级目标版本。
 - `--upgrade-yes`：确认执行升级动作（无此参数将拒绝执行升级）。
+- `--upgrade-sync-skills true|false`：升级后是否联动同步 skills（默认 `true`）。
+- `--skill-sync-method npm|github-script`：skills 同步方式（默认 `npm`）。
+- `--skill-sync-ref <x.y.z>`：skills 同步版本标签（通常与程序版本一致）。
 
 ### 各动作关键统计字段（JSON）
 
@@ -343,7 +356,10 @@ wecom-cleaner --upgrade github-script --upgrade-version 1.3.2 --upgrade-yes
 - `summary.currentVersion` / `latestVersion`
 - `summary.source`：`npm` 或 `github`
 - `summary.channel`：`stable` 或 `pre`
+- `summary.skillsStatus` / `summary.skillsMatched`
+- `summary.skillsInstalledVersion` / `summary.skillsBoundAppVersion`
 - `data.update`：检查详情（含 `errors`、`checkReason`、`checkedAt`）
+- `data.skills`：skills 绑定详情（状态、目录、建议）
 
 #### `upgrade`
 
@@ -352,6 +368,17 @@ wecom-cleaner --upgrade github-script --upgrade-version 1.3.2 --upgrade-yes
 - `summary.targetVersion`：目标版本
 - `summary.status`：升级命令退出码
 - `data.upgrade.command`：实际执行命令
+- `summary.skillSyncStatus` / `summary.skillSyncMethod` / `summary.skillSyncTargetVersion`
+- `summary.skillsStatusBefore` / `summary.skillsStatusAfter`
+- `data.skillSync`：skills 同步命令结果
+
+#### `sync-skills`
+
+- `summary.method`：skills 同步方式（`npm` / `github-script`）
+- `summary.status`：`dry_run` / `synced` / `failed` / `mismatch_after_sync`
+- `summary.skillsStatusBefore` / `summary.skillsStatusAfter`
+- `data.before` / `data.after`：同步前后 skills 绑定详情
+- `data.skillSync`：执行命令与退出码
 
 ### 全局参数
 
