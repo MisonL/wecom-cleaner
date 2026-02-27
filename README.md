@@ -510,32 +510,15 @@ npm run pack:tgz
 ### 正式发布（GitHub Release + npm）
 
 ```bash
-# 1) 发布前检查
-npm run format:check
-npm run check
-npm run test:coverage:check
-npm run release:gate
-npm run e2e:smoke
-npm run pack:tgz
-npm run pack:release-assets
+# 推荐：一键发布（以后统一用这个）
+npm run release:ship
 
-# 2) 推送主分支与标签
-VERSION="1.3.3"
-git push origin main
-git tag "v${VERSION}"
-git push origin "v${VERSION}"
+# 仅预演（不真正发布）
+npm run release:ship:dry-run
 
-# 3) 发布 GitHub Release（附 npm 包 + 双架构核心附件）
-gh release create "v${VERSION}" \
-  --title "v${VERSION}" \
-  --notes-file "docs/releases/v${VERSION}.md" \
-  "wecom-cleaner-${VERSION}.tgz" \
-  "dist/release/wecom-cleaner-core-v${VERSION}-darwin-x64" \
-  "dist/release/wecom-cleaner-core-v${VERSION}-darwin-arm64" \
-  "dist/release/wecom-cleaner-core-v${VERSION}-SHA256SUMS.txt"
-
-# 4) 发布 npm
-npm publish --access public
+# 可选：跳过 npm 或 GitHub 发布（例如仅补传附件）
+npm run release:ship -- --skip-npm
+npm run release:ship -- --skip-github
 ```
 
 建议发布前确认登录状态：

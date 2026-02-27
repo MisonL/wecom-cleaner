@@ -45,6 +45,8 @@
     "check:skills-version": "node scripts/check-skills-version.js",
     "e2e:smoke": "bash scripts/e2e-smoke.sh",
     "release:gate": "bash scripts/release-gate.sh",
+    "release:ship": "bash scripts/release.sh",
+    "release:ship:dry-run": "bash scripts/release.sh --dry-run",
     "prepack": "npm run build:native:release && npm run check",
     "pack:tgz": "node scripts/pack-tgz.js",
     "pack:tgz:dry-run": "node scripts/pack-tgz.js --dry-run",

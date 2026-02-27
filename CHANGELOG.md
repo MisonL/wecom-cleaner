@@ -6,7 +6,16 @@
 
 ## [Unreleased]
 
-- 暂无（下一次迭代待补充）。
+### Added
+
+- 新增一键发布脚本 `scripts/release.sh`，统一执行“门禁、打包、推送标签、npm 发布、GitHub Release 上传”。
+- 新增 npm 命令：
+  - `npm run release:ship`
+  - `npm run release:ship:dry-run`
+
+### Changed
+
+- 发布门禁的 shellcheck 范围新增 `scripts/release.sh`。
 
 ## [1.3.3] - 2026-02-27
 
