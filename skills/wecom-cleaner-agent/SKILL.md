@@ -32,6 +32,7 @@ description: 用于执行和编排 wecom-cleaner 的无交互 Agent 技能。当
 - 系统自检：`scripts/doctor_report.sh`
 - 检查更新：`scripts/check_update_report.sh`
 - 程序升级：`scripts/upgrade_report.sh`
+- skills 同步：回退到 `wecom-cleaner --sync-skills --output json`
 
 调用顺序：
 

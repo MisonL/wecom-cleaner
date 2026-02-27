@@ -72,6 +72,8 @@ account_count="$(jq -r '.data.metrics.accountCount // 0' "$REPORT_JSON")"
 external_count="$(jq -r '.data.metrics.externalStorageCount // 0' "$REPORT_JSON")"
 recycle_batches="$(jq -r '.data.metrics.recycleBatchCount // 0' "$REPORT_JSON")"
 recycle_bytes="$(jq -r '.data.metrics.recycleBytes // 0' "$REPORT_JSON")"
+skills_status="$(jq -r '.data.metrics.skillsStatus // "unknown"' "$REPORT_JSON")"
+skills_matched="$(jq -r '.data.metrics.skillsMatched // false' "$REPORT_JSON")"
 runtime_os="$(jq -r '.data.runtime.os // "-"' "$REPORT_JSON")"
 runtime_arch="$(jq -r '.data.runtime.arch // "-"' "$REPORT_JSON")"
 duration_ms="$(jq -r '.meta.durationMs // 0' "$REPORT_JSON")"
@@ -107,6 +109,7 @@ printf -- '- 运行平台：%s / %s\n' "$runtime_os" "$runtime_arch"
 printf -- '- 识别账号：%s 个\n' "$account_count"
 printf -- '- 外部存储目录：%s 个\n' "$external_count"
 printf -- '- 回收区批次：%s 个，约 %s\n' "$recycle_batches" "$(human_bytes "$recycle_bytes")"
+printf -- '- Skills 绑定：%s（%s）\n' "$skills_status" "$( [[ "$skills_matched" == "true" ]] && printf '已匹配' || printf '未匹配' )"
 
 printf '\n故障项（需要优先处理）\n'
 fail_rows=0

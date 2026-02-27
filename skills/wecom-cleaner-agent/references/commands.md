@@ -66,6 +66,19 @@ bash scripts/upgrade_report.sh --method npm --execute true
 bash scripts/upgrade_report.sh --method github-script --version 1.3.2 --execute true
 ```
 
+### 1.9 同步 Agent Skills
+
+```bash
+# 预演同步（不落盘）
+wecom-cleaner --sync-skills --dry-run true --output json
+
+# 真实同步（默认 npm）
+wecom-cleaner --sync-skills --skill-sync-method npm --dry-run false --output json
+
+# 按 GitHub 版本标签同步
+wecom-cleaner --sync-skills --skill-sync-method github-script --skill-sync-ref 1.3.2 --dry-run false --output json
+```
+
 ## 2. 常用全局参数
 
 以上脚本都支持透传关键参数（按动作有所不同）：
@@ -119,6 +132,9 @@ wecom-cleaner --check-update --output json
 # 程序升级（必须带 --upgrade-yes）
 wecom-cleaner --upgrade npm --upgrade-yes --output json
 wecom-cleaner --upgrade github-script --upgrade-version 1.3.2 --upgrade-yes --output json
+
+# 同步 skills（独立动作）
+wecom-cleaner --sync-skills --skill-sync-method npm --output json
 ```
 
 ## 4. 退出码约定

@@ -162,6 +162,7 @@ if [[ "$EXECUTE" != "true" ]]; then
   printf -- '- 计划执行命令：%s\n' "${plan_cmd[*]}"
   printf '\n说明\n'
   printf -- '- 如需真实执行，请追加参数：--execute true\n'
+  printf -- '- 真实升级默认会联动同步 skills，避免 Agent 能力与主程序版本不一致。\n'
   printf -- '- 升级会更新本机安装，不会触碰聊天缓存数据。\n'
   exit 0
 fi
@@ -193,6 +194,12 @@ summary_method="$(jq -r '.summary.method // "-"' "$EXEC_JSON")"
 summary_target="$(jq -r '.summary.targetVersion // "-"' "$EXEC_JSON")"
 summary_status="$(jq -r '.summary.status // "-"' "$EXEC_JSON")"
 summary_command="$(jq -r '.summary.command // "-"' "$EXEC_JSON")"
+skill_sync_method="$(jq -r '.summary.skillSyncMethod // "-"' "$EXEC_JSON")"
+skill_sync_status="$(jq -r '.summary.skillSyncStatus // "-"' "$EXEC_JSON")"
+skill_sync_target="$(jq -r '.summary.skillSyncTargetVersion // "-"' "$EXEC_JSON")"
+skill_sync_command="$(jq -r '.data.skillSync.command // "-"' "$EXEC_JSON")"
+skills_status_before="$(jq -r '.summary.skillsStatusBefore // "-"' "$EXEC_JSON")"
+skills_status_after="$(jq -r '.summary.skillsStatusAfter // "-"' "$EXEC_JSON")"
 duration_ms="$(jq -r '.meta.durationMs // 0' "$EXEC_JSON")"
 warnings_count="$(jq -r '(.warnings // []) | length' "$EXEC_JSON")"
 errors_count="$(jq -r '(.errors // []) | length' "$EXEC_JSON")"
@@ -216,6 +223,14 @@ printf -- '- 是否执行升级：%s\n' "$( [[ "$summary_executed" == "true" ]] 
 printf -- '- 命令退出码：%s\n' "$summary_status"
 printf -- '- 执行命令：%s\n' "$summary_command"
 printf -- '- 升级后版本：%s\n' "$installed_version"
+
+printf '\nSkills 同步\n'
+printf -- '- 同步方式：%s\n' "$skill_sync_method"
+printf -- '- 同步状态：%s\n' "$skill_sync_status"
+printf -- '- 目标版本：%s\n' "$skill_sync_target"
+printf -- '- 同步命令：%s\n' "$skill_sync_command"
+printf -- '- 同步前状态：%s\n' "$skills_status_before"
+printf -- '- 同步后状态：%s\n' "$skills_status_after"
 
 if [[ "$errors_count" -gt 0 ]]; then
   printf '\n错误摘要\n'

@@ -85,6 +85,11 @@ latest_version="$(jq -r '.summary.latestVersion // "-"' "$REPORT_JSON")"
 source_used="$(jq -r '.summary.source // "none"' "$REPORT_JSON")"
 channel_used="$(jq -r '.summary.channel // "stable"' "$REPORT_JSON")"
 skipped_by_user="$(jq -r '.summary.skippedByUser // false' "$REPORT_JSON")"
+skills_status="$(jq -r '.summary.skillsStatus // (.data.skills.status // "unknown")' "$REPORT_JSON")"
+skills_matched="$(jq -r '.summary.skillsMatched // (.data.skills.matched // false)' "$REPORT_JSON")"
+skills_version="$(jq -r '.summary.skillsInstalledVersion // (.data.skills.installedSkillVersion // "-")' "$REPORT_JSON")"
+skills_bound_version="$(jq -r '.summary.skillsBoundAppVersion // (.data.skills.installedRequiredAppVersion // "-")' "$REPORT_JSON")"
+skills_target_dir="$(jq -r '.data.skills.targetSkillDir // "-"' "$REPORT_JSON")"
 duration_ms="$(jq -r '.meta.durationMs // 0' "$REPORT_JSON")"
 warnings_count="$(jq -r '(.warnings // []) | length' "$REPORT_JSON")"
 errors_count="$(jq -r '(.errors // []) | length' "$REPORT_JSON")"
@@ -124,10 +129,19 @@ printf -- '- 检查通道：%s\n' "$channel_label"
 printf -- '- 信息来源：%s（先 npm，失败再回退 GitHub）\n' "$source_label"
 printf -- '- 用户跳过提醒：%s\n' "$( [[ "$skipped_by_user" == "true" ]] && printf '是' || printf '否' )"
 
+printf '\nSkills 版本状态\n'
+printf -- '- 匹配状态：%s（%s）\n' "$( [[ "$skills_matched" == "true" ]] && printf '已匹配' || printf '未匹配' )" "$skills_status"
+printf -- '- skills 版本：%s\n' "$skills_version"
+printf -- '- skills 绑定程序版本：%s\n' "$skills_bound_version"
+printf -- '- skills 目录：%s\n' "$skills_target_dir"
+
 if [[ "$has_update" == "true" && "$skipped_by_user" != "true" ]]; then
   printf '\n建议下一步（需你确认后执行）\n'
   printf -- '- 默认升级方式（npm）：wecom-cleaner --upgrade npm --upgrade-version %s --upgrade-yes\n' "$latest_version"
   printf -- '- 备选方式（GitHub 脚本）：wecom-cleaner --upgrade github-script --upgrade-version %s --upgrade-yes\n' "$latest_version"
+fi
+if [[ "$skills_matched" != "true" ]]; then
+  printf -- '- 同步 skills（推荐）：wecom-cleaner --sync-skills --skill-sync-method npm\n'
 fi
 
 printf '\n运行状态\n'
@@ -139,3 +153,4 @@ printf '\n指标释义\n'
 printf -- '- 当前版本：你本机 wecom-cleaner 版本。\n'
 printf -- '- 最新版本：按所选通道可获取的最新可用版本。\n'
 printf -- '- 用户跳过提醒：表示该版本是否被标记为“暂不提醒”。\n'
+printf -- '- Skills 匹配状态：表示 Agent skills 是否与当前程序版本绑定一致。\n'
