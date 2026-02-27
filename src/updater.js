@@ -410,6 +410,11 @@ export function githubUpgradeScriptUrl({ owner, repo, version }) {
   return `https://raw.githubusercontent.com/${owner}/${repo}/${ref}/scripts/upgrade.sh`;
 }
 
+export function githubSkillInstallScriptUrl({ owner, repo, version }) {
+  const ref = buildVersionRef(version) || 'main';
+  return `https://raw.githubusercontent.com/${owner}/${repo}/${ref}/scripts/install-skill.sh`;
+}
+
 function defaultRunCommand(command, args) {
   const result = spawnSync(command, args, {
     encoding: 'utf-8',
@@ -421,6 +426,14 @@ function defaultRunCommand(command, args) {
     stderr: String(result.stderr || ''),
     error: result.error || null,
   };
+}
+
+function shellEscapeArg(rawValue) {
+  const value = String(rawValue || '');
+  if (!value) {
+    return "''";
+  }
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 export function runUpgrade({
@@ -460,6 +473,62 @@ export function runUpgrade({
   return {
     method: chosen,
     targetVersion: normalizedVersion || 'latest',
+    command: commandText,
+    ok: result.status === 0 && !result.error,
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    error: result.error ? String(result.error.message || result.error) : '',
+  };
+}
+
+export function runSkillsUpgrade({
+  method,
+  targetVersion,
+  targetRoot = '',
+  githubOwner,
+  githubRepo,
+  runCommand = defaultRunCommand,
+}) {
+  const chosen = method === 'github-script' ? 'github-script' : 'npm';
+  const normalizedVersion = normalizeVersion(targetVersion);
+  const normalizedTargetRoot = String(targetRoot || '').trim();
+
+  if (chosen === 'npm') {
+    const args = ['install', '--force'];
+    if (normalizedTargetRoot) {
+      args.push('--target', normalizedTargetRoot);
+    }
+    const result = runCommand('wecom-cleaner-skill', args);
+    return {
+      method: chosen,
+      targetVersion: normalizedVersion || 'current',
+      command: `wecom-cleaner-skill ${args.join(' ')}`,
+      ok: result.status === 0 && !result.error,
+      status: result.status,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      error: result.error ? String(result.error.message || result.error) : '',
+    };
+  }
+
+  const scriptUrl = githubSkillInstallScriptUrl({
+    owner: githubOwner,
+    repo: githubRepo,
+    version: normalizedVersion || 'main',
+  });
+  const cmdParts = ['--force'];
+  if (normalizedTargetRoot) {
+    cmdParts.push('--target', shellEscapeArg(normalizedTargetRoot));
+  }
+  if (normalizedVersion) {
+    cmdParts.push('--ref', shellEscapeArg(`v${normalizedVersion}`));
+  }
+  const commandText = `curl -fsSL ${scriptUrl} | bash -s -- ${cmdParts.join(' ')}`;
+  const result = runCommand('bash', ['-lc', commandText]);
+  return {
+    method: chosen,
+    targetVersion: normalizedVersion || 'current',
     command: commandText,
     ok: result.status === 0 && !result.error,
     status: result.status,

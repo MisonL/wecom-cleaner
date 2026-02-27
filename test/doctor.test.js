@@ -70,6 +70,15 @@ process.exit(0);
 test('runDoctor 在健康场景下返回 pass', async (t) => {
   const root = await makeTempDir('wecom-doctor-pass-');
   t.after(async () => removeDir(root));
+  const oldCodexHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = path.join(root, 'codex-home');
+  t.after(() => {
+    if (oldCodexHome === undefined) {
+      delete process.env.CODEX_HOME;
+      return;
+    }
+    process.env.CODEX_HOME = oldCodexHome;
+  });
 
   const target = resolveRuntimeTarget();
   const projectRoot = path.join(root, 'project');
@@ -90,6 +99,16 @@ test('runDoctor 在健康场景下返回 pass', async (t) => {
   await ensureFile(path.join(externalRoot, 'WXWork Files', 'Caches', 'Files', '2024-01', 'a.bin'), 'a');
   await ensureDir(recycleRoot);
   await ensureFile(indexPath, '');
+  await ensureFile(path.join(process.env.CODEX_HOME, 'skills', 'wecom-cleaner-agent', 'SKILL.md'), '# skill');
+  await ensureFile(
+    path.join(process.env.CODEX_HOME, 'skills', 'wecom-cleaner-agent', 'version.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      skillName: 'wecom-cleaner-agent',
+      skillVersion: '1.0.0',
+      requiredAppVersion: '1.0.0',
+    })
+  );
 
   const bundledPath = path.join(projectRoot, 'native', 'bin', target.targetTag, target.binaryName);
   const cachedPath = path.join(stateRoot, 'native-cache', target.targetTag, target.binaryName);

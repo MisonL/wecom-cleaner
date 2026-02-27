@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "skillName": "wecom-cleaner-agent",
+  "skillVersion": "1.3.2",
+  "requiredAppVersion": "1.3.2"
+}

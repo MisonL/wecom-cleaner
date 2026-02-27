@@ -11,6 +11,7 @@ const ALLOWED_EXTERNAL_ROOT_SOURCES = new Set(['preset', 'configured', 'auto', '
 const ALLOWED_GOVERNANCE_TIERS = new Set(['safe', 'caution', 'protected']);
 const ALLOWED_UPGRADE_METHODS = new Set(['npm', 'github-script']);
 const ALLOWED_UPGRADE_CHANNELS = new Set(['stable', 'pre']);
+const ALLOWED_SKILL_SYNC_METHODS = new Set(['npm', 'github-script']);
 const ALLOWED_RUN_TASK_MODES = new Set(['preview', 'execute', 'preview-execute-verify']);
 const ALLOWED_SCAN_DEBUG_LEVELS = new Set(['off', 'summary', 'full']);
 const ACTION_FLAG_MAP = new Map([
@@ -20,6 +21,7 @@ const ACTION_FLAG_MAP = new Map([
   ['--recycle-maintain', 'recycle_maintain'],
   ['--doctor', 'doctor'],
   ['--check-update', 'check_update'],
+  ['--sync-skills', 'sync_skills'],
 ]);
 const MODE_TO_ACTION_MAP = new Map([
   ['cleanup_monthly', 'cleanup_monthly'],
@@ -30,6 +32,7 @@ const MODE_TO_ACTION_MAP = new Map([
   ['doctor', 'doctor'],
   ['check_update', 'check_update'],
   ['upgrade', 'upgrade'],
+  ['sync_skills', 'sync_skills'],
 ]);
 
 export class CliArgError extends Error {
@@ -198,6 +201,9 @@ export function parseCliArgs(argv) {
     upgradeVersion: null,
     upgradeChannel: null,
     upgradeYes: false,
+    upgradeSyncSkills: null,
+    skillSyncMethod: null,
+    skillSyncRef: null,
     runTask: null,
     scanDebug: 'off',
   };
@@ -302,6 +308,21 @@ export function parseCliArgs(argv) {
     }
     if (token === '--upgrade-yes') {
       parsed.upgradeYes = true;
+      continue;
+    }
+    if (token === '--upgrade-sync-skills') {
+      parsed.upgradeSyncSkills = parseBooleanFlag(token, takeValue(token, i));
+      i += 1;
+      continue;
+    }
+    if (token === '--skill-sync-method') {
+      parsed.skillSyncMethod = parseEnumValue(token, takeValue(token, i), ALLOWED_SKILL_SYNC_METHODS);
+      i += 1;
+      continue;
+    }
+    if (token === '--skill-sync-ref') {
+      parsed.skillSyncRef = takeValue(token, i);
+      i += 1;
       continue;
     }
     if (token === '--run-task') {

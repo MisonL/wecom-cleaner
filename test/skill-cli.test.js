@@ -59,6 +59,17 @@ test('skill-cli install --dry-run 不写入目标目录', async (t) => {
   assert.equal(exists, false);
 });
 
+test('skill-cli status 在未安装时返回失败并给出建议', async (t) => {
+  const root = await makeTempDir('wecom-skill-cli-status-empty-');
+  t.after(async () => removeDir(root));
+
+  const targetRoot = path.join(root, 'skills');
+  const result = runSkillCli(['status', '--target', targetRoot]);
+  assert.equal(result.status, 1);
+  assert.match(String(result.stdout || ''), /未安装/);
+  assert.match(String(result.stdout || ''), /建议/);
+});
+
 test('skill-cli install 支持冲突报错与 --force 覆盖', async (t) => {
   const root = await makeTempDir('wecom-skill-cli-install-');
   t.after(async () => removeDir(root));
@@ -78,6 +89,21 @@ test('skill-cli install 支持冲突报错与 --force 覆盖', async (t) => {
 
   const content = await fs.readFile(targetSkill, 'utf-8');
   assert.match(content, /^---/);
+});
+
+test('skill-cli sync 可覆盖安装且 status --json 返回匹配状态', async (t) => {
+  const root = await makeTempDir('wecom-skill-cli-sync-');
+  t.after(async () => removeDir(root));
+
+  const targetRoot = path.join(root, 'skills');
+  const syncResult = runSkillCli(['sync', '--target', targetRoot]);
+  assert.equal(syncResult.status, 0);
+  assert.match(String(syncResult.stdout || ''), /安装成功/);
+
+  const statusResult = runSkillCli(['status', '--target', targetRoot, '--json']);
+  const payload = JSON.parse(String(statusResult.stdout || '{}'));
+  assert.equal(payload.status, 'matched');
+  assert.equal(payload.matched, true);
 });
 
 test('skill-cli 对无效命令或参数返回失败', () => {

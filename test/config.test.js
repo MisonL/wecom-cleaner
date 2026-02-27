@@ -131,6 +131,12 @@ test('parseCliArgs 可解析升级动作参数', () => {
     '--upgrade-channel',
     'stable',
     '--upgrade-yes',
+    '--upgrade-sync-skills',
+    'false',
+    '--skill-sync-method',
+    'npm',
+    '--skill-sync-ref',
+    '1.3.2',
   ]);
   assert.equal(parsed.action, 'upgrade');
   assert.equal(parsed.actionFlagCount, 1);
@@ -138,12 +144,23 @@ test('parseCliArgs 可解析升级动作参数', () => {
   assert.equal(parsed.upgradeVersion, '1.3.0');
   assert.equal(parsed.upgradeChannel, 'stable');
   assert.equal(parsed.upgradeYes, true);
+  assert.equal(parsed.upgradeSyncSkills, false);
+  assert.equal(parsed.skillSyncMethod, 'npm');
+  assert.equal(parsed.skillSyncRef, '1.3.2');
 });
 
 test('parseCliArgs 可解析检查更新动作', () => {
   const parsed = parseCliArgs(['--check-update']);
   assert.equal(parsed.action, 'check_update');
   assert.equal(parsed.actionFlagCount, 1);
+});
+
+test('parseCliArgs 可解析同步 skills 动作', () => {
+  const parsed = parseCliArgs(['--sync-skills', '--skill-sync-method', 'github-script', '--dry-run', 'true']);
+  assert.equal(parsed.action, 'sync_skills');
+  assert.equal(parsed.actionFlagCount, 1);
+  assert.equal(parsed.skillSyncMethod, 'github-script');
+  assert.equal(parsed.dryRun, true);
 });
 
 test('loadConfig/saveConfig/aliases 读写链路正常', async (t) => {

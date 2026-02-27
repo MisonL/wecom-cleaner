@@ -40,10 +40,12 @@ import {
   normalizeSelfUpdateConfig,
   normalizeUpgradeChannel,
   runUpgrade,
+  runSkillsUpgrade,
   shouldCheckForUpdate,
   shouldSkipVersion,
   updateWarningMessage,
 } from './updater.js';
+import { inspectSkillBinding, installSkill, skillBindingStatusLabel } from './skill-installer.js';
 import {
   compareMonthKey,
   expandHome,
@@ -104,6 +106,7 @@ const NON_INTERACTIVE_ACTIONS = new Set([
   MODES.DOCTOR,
   MODES.CHECK_UPDATE,
   MODES.UPGRADE,
+  MODES.SYNC_SKILLS,
 ]);
 const INTERACTIVE_MODE_ALIASES = new Map([
   ['start', MODES.START],
@@ -119,6 +122,8 @@ const INTERACTIVE_MODE_ALIASES = new Map([
   ['doctor', MODES.DOCTOR],
   ['check_update', MODES.CHECK_UPDATE],
   ['check-update', MODES.CHECK_UPDATE],
+  ['sync_skills', MODES.SYNC_SKILLS],
+  ['sync-skills', MODES.SYNC_SKILLS],
   ['settings', MODES.SETTINGS],
 ]);
 const OUTPUT_JSON = 'json';
@@ -347,6 +352,50 @@ function resolveEngineStatus({ nativeCorePath, lastRunEngineUsed }) {
     detail: '已检测到 Zig 核心，开始扫描后会自动启用',
     tone: 'info',
     fullText: 'Zig加速:已就绪(开始扫描后自动使用)',
+  };
+}
+
+function resolveSkillStatus(skillSummary) {
+  const summary = skillSummary && typeof skillSummary === 'object' ? skillSummary : null;
+  if (!summary) {
+    return {
+      badge: 'Skills未知',
+      detail: '未获取到 skills 版本状态',
+      tone: 'muted',
+    };
+  }
+  if (summary.matched) {
+    return {
+      badge: 'Skills匹配',
+      detail: `skills v${summary.installedSkillVersion || '-'} 已匹配主程序 v${summary.expectedAppVersion || '-'}`,
+      tone: 'ok',
+    };
+  }
+  if (summary.status === 'not_installed') {
+    return {
+      badge: 'Skills未装',
+      detail: '未检测到 Agent Skills，建议执行“同步 Agent Skills”',
+      tone: 'warn',
+    };
+  }
+  if (summary.status === 'legacy_unversioned') {
+    return {
+      badge: 'Skills旧版',
+      detail: '检测到旧版 skills（缺少版本信息），建议同步升级',
+      tone: 'warn',
+    };
+  }
+  if (summary.status === 'mismatch') {
+    return {
+      badge: 'Skills待同步',
+      detail: `skills 绑定 ${summary.installedRequiredAppVersion || '-'}，当前程序 ${summary.expectedAppVersion || '-'}`,
+      tone: 'warn',
+    };
+  }
+  return {
+    badge: 'Skills异常',
+    detail: 'skills 目录状态异常，建议执行同步修复',
+    tone: 'warn',
   };
 }
 
@@ -895,12 +944,14 @@ function printHeader({
   externalStorageRoots = [],
   externalStorageMeta = null,
   profileRootHealth = null,
+  skillSummary = null,
 }) {
   console.clear();
   const normalizedThemeMode = normalizeThemeMode(config.theme);
   const resolvedThemeMode = resolveThemeMode(config.theme);
   const palette = resolveInfoPalette(resolvedThemeMode);
   const engineStatus = resolveEngineStatus({ nativeCorePath, lastRunEngineUsed });
+  const skillStatus = resolveSkillStatus(skillSummary);
   const adaptiveHeaderText = normalizedThemeMode === THEME_AUTO;
   const printLine = (label, value, options = {}) => {
     const lines = renderHeaderInfoLines(label, value, resolvedThemeMode, {
@@ -917,10 +968,12 @@ function printHeader({
   const stateBadges = [
     renderBadge(`账号 ${accountCount}`, 'info', palette),
     renderBadge(engineStatus.badge, engineStatus.tone, palette),
+    renderBadge(skillStatus.badge, skillStatus.tone, palette),
     renderBadge(formatThemeStatus(config.theme, resolvedThemeMode), 'muted', palette),
   ];
   console.log(`${INFO_LEFT_PADDING}${stateBadges.join(' ')}`);
   printLine('引擎说明', engineStatus.detail, { muted: true });
+  printLine('skills说明', skillStatus.detail, { muted: true });
   console.log(renderHeaderDivider(resolvedThemeMode, { adaptiveText: adaptiveHeaderText }));
 
   printLine('应用', `${APP_NAME} v${appMeta.version} (${PACKAGE_NAME})`);
@@ -1895,6 +1948,9 @@ function actionFlagName(action) {
   if (action === MODES.UPGRADE) {
     return '--upgrade <npm|github-script>';
   }
+  if (action === MODES.SYNC_SKILLS) {
+    return '--sync-skills';
+  }
   return `--${String(action || '').replace(/_/g, '-')}`;
 }
 
@@ -1906,7 +1962,7 @@ function resolveActionFromCli(cliArgs, hasAnyArgs) {
     throw new UsageError(
       [
         '无交互模式必须指定一个动作参数：',
-        '--cleanup-monthly | --analysis-only | --space-governance | --restore-batch <batchId> | --recycle-maintain | --doctor | --check-update | --upgrade <npm|github-script>',
+        '--cleanup-monthly | --analysis-only | --space-governance | --restore-batch <batchId> | --recycle-maintain | --doctor | --check-update | --upgrade <npm|github-script> | --sync-skills',
       ].join('\n')
     );
   }
@@ -1931,6 +1987,7 @@ function printCliUsage(appMeta) {
     '  --doctor',
     '  --check-update',
     '  --upgrade <npm|github-script>',
+    '  --sync-skills',
     '',
     '常用选项：',
     '  --output json|text',
@@ -1945,6 +2002,9 @@ function printCliUsage(appMeta) {
     '  --upgrade-version x.y.z',
     '  --upgrade-channel stable|pre',
     '  --upgrade-yes',
+    '  --upgrade-sync-skills true|false',
+    '  --skill-sync-method npm|github-script',
+    '  --skill-sync-ref x.y.z',
     '  --root <path>',
     '  --state-root <path>',
     '',
@@ -1957,6 +2017,7 @@ function printCliUsage(appMeta) {
     '  wecom-cleaner --cleanup-monthly --accounts all --cutoff-month 2024-04',
     '  wecom-cleaner --cleanup-monthly --cutoff-month 2024-04 --accounts all --run-task preview-execute-verify --yes',
     '  wecom-cleaner --cleanup-monthly --accounts all --cutoff-month 2024-04 --dry-run false --yes',
+    '  wecom-cleaner --sync-skills --skill-sync-method npm',
   ];
   console.log(lines.join('\n'));
 }
@@ -2303,6 +2364,12 @@ function buildActionScopeNotes(action, result) {
     }
   }
 
+  if (action === MODES.SYNC_SKILLS) {
+    const method = result?.summary?.method || 'npm';
+    notes.push(`本次仅处理 Agent Skills 目录，不会扫描或清理企业微信缓存。`);
+    notes.push(`同步方式：${skillSyncMethodLabel(method)}。`);
+  }
+
   return uniqueStrings(notes);
 }
 
@@ -2333,6 +2400,79 @@ function collectUpdateFallbackWarnings(updateData) {
   }
   const errors = Array.isArray(updateData.errors) ? updateData.errors : [];
   return errors.map((message) => `更新检查回退：${message}`);
+}
+
+function normalizeSkillSyncMethod(rawMethod) {
+  const value = String(rawMethod || '')
+    .trim()
+    .toLowerCase();
+  if (value === 'github-script') {
+    return 'github-script';
+  }
+  return 'npm';
+}
+
+function skillSyncMethodLabel(method) {
+  return normalizeSkillSyncMethod(method) === 'github-script' ? 'GitHub 脚本' : 'npm';
+}
+
+function summarizeSkillBinding(skillBinding) {
+  const binding = skillBinding && typeof skillBinding === 'object' ? skillBinding : {};
+  return {
+    status: String(binding.status || 'unknown'),
+    statusLabel: skillBindingStatusLabel(binding.status),
+    matched: Boolean(binding.matched),
+    installed: Boolean(binding.installed),
+    expectedAppVersion: binding.expectedAppVersion || '',
+    installedSkillVersion: binding.installedManifest?.skillVersion || null,
+    installedRequiredAppVersion: binding.installedManifest?.requiredAppVersion || null,
+    recommendation: binding.recommendation || '',
+    targetSkillDir: binding.targetSkillDir || '',
+  };
+}
+
+function collectSkillBindingWarnings(skillBinding) {
+  const summary = summarizeSkillBinding(skillBinding);
+  if (summary.matched) {
+    return [];
+  }
+  const warnings = [];
+  if (summary.status === 'not_installed') {
+    warnings.push('未检测到 Agent Skills，请执行 wecom-cleaner-skill install 安装。');
+  } else if (summary.status === 'legacy_unversioned') {
+    warnings.push('检测到旧版 skills（缺少版本文件），建议执行 wecom-cleaner-skill install --force。');
+  } else if (summary.status === 'mismatch') {
+    warnings.push(
+      `skills 与主程序版本不匹配：skills 绑定 ${summary.installedRequiredAppVersion || '-'}，当前程序 ${summary.expectedAppVersion || '-'}。`
+    );
+  } else if (summary.status === 'invalid_skill_dir') {
+    warnings.push('skills 安装目录异常，请执行 wecom-cleaner-skill install --force 修复。');
+  } else {
+    warnings.push(`skills 状态异常：${summary.statusLabel}。`);
+  }
+  if (summary.recommendation) {
+    warnings.push(summary.recommendation);
+  }
+  return uniqueStrings(warnings);
+}
+
+async function inspectSkillBindingSafe(context, appVersion = '') {
+  try {
+    return await inspectSkillBinding({
+      appVersion: appVersion || context?.appMeta?.version || '',
+      targetRoot: process.env.WECOM_CLEANER_SKILLS_ROOT || '',
+    });
+  } catch (error) {
+    return {
+      status: 'invalid_skill_dir',
+      matched: false,
+      installed: false,
+      expectedAppVersion: appVersion || context?.appMeta?.version || '',
+      installedManifest: null,
+      recommendation: `skills 检测失败：${error instanceof Error ? error.message : String(error)}`,
+      targetSkillDir: '',
+    };
+  }
 }
 
 function buildUserFacingSummary(action, result) {
@@ -2472,13 +2612,18 @@ function buildUserFacingSummary(action, result) {
 
   if (action === MODES.CHECK_UPDATE) {
     const update = result?.data?.update || {};
+    const skills = summarizeSkillBinding(result?.data?.skills || {});
+    const scopeNotes = [
+      deriveUpdateSourceChain(summary, update),
+      summary.hasUpdate
+        ? '检测到新版本后，仍需你手动确认才会执行升级。'
+        : '本次仅执行检查，不会改动本机安装。',
+    ];
+    if (!skills.matched) {
+      scopeNotes.push(`skills 状态：${skills.statusLabel}，建议同步后再让 Agent 执行任务。`);
+    }
     return {
-      scopeNotes: [
-        deriveUpdateSourceChain(summary, update),
-        summary.hasUpdate
-          ? '检测到新版本后，仍需你手动确认才会执行升级。'
-          : '本次仅执行检查，不会改动本机安装。',
-      ],
+      scopeNotes: uniqueStrings(scopeNotes),
       result: {
         checked: Boolean(summary.checked),
         hasUpdate: Boolean(summary.hasUpdate),
@@ -2487,11 +2632,16 @@ function buildUserFacingSummary(action, result) {
         source: summary.source || null,
         sourceChain: summary.sourceChain || deriveUpdateSourceChain(summary, update),
         channel: summary.channel || null,
+        skillsStatus: skills.status,
+        skillsMatched: skills.matched,
+        skillsInstalledVersion: skills.installedSkillVersion,
+        skillsBoundAppVersion: skills.installedRequiredAppVersion,
       },
     };
   }
 
   if (action === MODES.UPGRADE) {
+    const skillSync = result?.data?.skillSync || {};
     return {
       scopeNotes: buildActionScopeNotes(action, result),
       result: {
@@ -2499,6 +2649,23 @@ function buildUserFacingSummary(action, result) {
         method: summary.method || null,
         targetVersion: summary.targetVersion || null,
         status: hasDisplayValue(summary.status) ? Number(summary.status) : null,
+        skillSyncStatus: summary.skillSyncStatus || null,
+        skillSyncMethod: summary.skillSyncMethod || null,
+        skillSyncTargetVersion: summary.skillSyncTargetVersion || null,
+        skillSyncCommand: skillSync.command || null,
+      },
+    };
+  }
+
+  if (action === MODES.SYNC_SKILLS) {
+    return {
+      scopeNotes: buildActionScopeNotes(action, result),
+      result: {
+        method: summary.method || null,
+        dryRun: Boolean(summary.dryRun),
+        status: summary.status || null,
+        skillsStatusBefore: summary.skillsStatusBefore || null,
+        skillsStatusAfter: summary.skillsStatusAfter || null,
       },
     };
   }
@@ -2518,6 +2685,7 @@ const ACTION_DISPLAY_NAMES = new Map([
   [MODES.DOCTOR, '系统自检'],
   [MODES.CHECK_UPDATE, '检查更新'],
   [MODES.UPGRADE, '程序升级'],
+  [MODES.SYNC_SKILLS, '同步 Agent Skills'],
 ]);
 
 const CONFLICT_STRATEGY_DISPLAY = new Map([
@@ -3157,6 +3325,7 @@ function printDoctorTextResult(payload) {
 function printCheckUpdateTextResult(payload) {
   const summary = payload.summary || {};
   const update = payload.data?.update || {};
+  const skills = summarizeSkillBinding(payload.data?.skills || {});
   const sourceChain = summary.sourceChain || deriveUpdateSourceChain(summary, update);
   const conclusion = summary.hasUpdate
     ? `检测到新版本 v${summary.latestVersion}，可选择 npm 或 GitHub 脚本升级。`
@@ -3179,6 +3348,19 @@ function printCheckUpdateTextResult(payload) {
     { label: '跳过提醒', value: formatYesNo(Boolean(summary.skippedByUser)) },
     { label: '检查时间', value: formatLocalDate(update.checkedAt || Date.now()) },
   ]);
+  printTextRows('Skills 状态', [
+    { label: '匹配状态', value: skills.statusLabel },
+    { label: '主程序版本', value: skills.expectedAppVersion || '-' },
+    { label: 'skills 版本', value: skills.installedSkillVersion || '-' },
+    { label: 'skills 绑定版本', value: skills.installedRequiredAppVersion || '-' },
+    { label: '安装目录', value: skills.targetSkillDir || '-' },
+  ]);
+  if (!skills.matched) {
+    printTextRows('Skills 建议', [
+      { label: '建议命令', value: 'wecom-cleaner --sync-skills --skill-sync-method npm' },
+      { label: '补充', value: skills.recommendation || '同步后再让 Agent 继续执行任务。' },
+    ]);
+  }
   if (summary.hasUpdate && !summary.skippedByUser) {
     printTextRows('升级建议', [
       {
@@ -3199,14 +3381,19 @@ function printCheckUpdateTextResult(payload) {
 function printUpgradeTextResult(payload) {
   const summary = payload.summary || {};
   const upgrade = payload.data?.upgrade || {};
+  const skillSync = payload.data?.skillSync || {};
   const executed = Boolean(summary.executed);
+  const appUpgradeSucceeded = executed && Number(summary.status || 1) === 0;
+  const onlySkillSyncFailed = appUpgradeSucceeded && !payload.ok;
   const conclusion = !executed
     ? summary.reason === 'already_latest'
       ? '当前已是最新版本，无需执行升级。'
       : '升级前置检查失败，未执行升级。'
     : payload.ok
       ? '升级已执行成功，建议重启程序后继续使用。'
-      : '升级执行失败，请按错误提示排查。';
+      : onlySkillSyncFailed
+        ? '程序升级成功，但 skills 同步失败，请先修复后再让 Agent 继续执行任务。'
+        : '升级执行失败，请按错误提示排查。';
 
   printTextRows('任务结论', [
     { label: '动作', value: actionDisplayName(payload.action) },
@@ -3220,6 +3407,12 @@ function printUpgradeTextResult(payload) {
     { label: '退出码', value: hasDisplayValue(summary.status) ? summary.status : '-' },
     { label: '命令', value: summary.command || upgrade.command || '-' },
   ]);
+  printTextRows('Skills 同步', [
+    { label: '同步方式', value: summary.skillSyncMethod || '-' },
+    { label: '同步状态', value: summary.skillSyncStatus || '-' },
+    { label: '目标版本', value: summary.skillSyncTargetVersion || '-' },
+    { label: '执行命令', value: skillSync.command || '-' },
+  ]);
   if (payload.ok && executed) {
     printTextRows('下一步建议', [
       { label: '建议', value: '升级已完成，建议重新打开 wecom-cleaner 继续任务。' },
@@ -3228,6 +3421,47 @@ function printUpgradeTextResult(payload) {
   }
   printScopeNotes(payload);
 
+  printRuntimeAndRisk(payload);
+}
+
+function printSyncSkillsTextResult(payload) {
+  const summary = payload.summary || {};
+  const before = payload.data?.before || {};
+  const after = payload.data?.after || {};
+  const syncResult = payload.data?.skillSync || {};
+
+  const conclusion = payload.ok
+    ? summary.dryRun
+      ? '已完成 skills 同步预演，未写入目标目录。'
+      : 'skills 已同步完成。'
+    : 'skills 同步失败，请按错误信息排查。';
+
+  printTextRows('任务结论', [
+    { label: '动作', value: actionDisplayName(payload.action) },
+    { label: '结论', value: conclusion },
+    { label: '同步方式', value: skillSyncMethodLabel(summary.method || 'npm') },
+    { label: '执行模式', value: summary.dryRun ? '预演（dry-run）' : '真实同步' },
+  ]);
+
+  printTextRows('同步前后', [
+    { label: '同步前状态', value: before.statusLabel || '-' },
+    { label: '同步后状态', value: after.statusLabel || '-' },
+    { label: '主程序版本', value: after.expectedAppVersion || before.expectedAppVersion || '-' },
+    { label: 'skills 版本', value: after.installedSkillVersion || before.installedSkillVersion || '-' },
+    {
+      label: 'skills 绑定版本',
+      value: after.installedRequiredAppVersion || before.installedRequiredAppVersion || '-',
+    },
+    { label: '安装目录', value: after.targetSkillDir || before.targetSkillDir || '-' },
+  ]);
+
+  printTextRows('执行明细', [
+    { label: '状态', value: summary.status || '-' },
+    { label: '命令', value: syncResult.command || '-' },
+    { label: '退出码', value: hasDisplayValue(syncResult.status) ? syncResult.status : '-' },
+  ]);
+
+  printScopeNotes(payload);
   printRuntimeAndRisk(payload);
 }
 
@@ -3305,6 +3539,10 @@ function printNonInteractiveTextResult(payload) {
   }
   if (payload.action === MODES.UPGRADE) {
     printUpgradeTextResult(payload);
+    return;
+  }
+  if (payload.action === MODES.SYNC_SKILLS) {
+    printSyncSkillsTextResult(payload);
     return;
   }
   printGenericTextResult(payload);
@@ -3962,6 +4200,164 @@ async function persistSelfUpdateState(context) {
   await saveConfig(context.config).catch(() => {});
 }
 
+function shouldSyncSkillsOnUpgrade(cliArgs) {
+  if (typeof cliArgs?.upgradeSyncSkills === 'boolean') {
+    return cliArgs.upgradeSyncSkills;
+  }
+  return true;
+}
+
+function buildLocalSkillInstallCommand(targetRoot = '') {
+  const base = ['wecom-cleaner-skill', 'install', '--force'];
+  if (targetRoot) {
+    base.push('--target', targetRoot);
+  }
+  return base.join(' ');
+}
+
+async function executeSkillSync({
+  context,
+  method = 'npm',
+  targetRoot = '',
+  expectedAppVersion = '',
+  requestedVersion = '',
+  dryRun = false,
+  useExternalCommand = false,
+}) {
+  const normalizedMethod = normalizeSkillSyncMethod(method);
+  const expectedVersion = String(expectedAppVersion || context?.appMeta?.version || '').trim();
+  const normalizedTargetRoot = String(targetRoot || process.env.WECOM_CLEANER_SKILLS_ROOT || '').trim();
+  const beforeBinding = await inspectSkillBindingSafe(context, expectedVersion);
+  let syncResult = null;
+
+  if (dryRun) {
+    syncResult = runSkillsUpgrade({
+      method: normalizedMethod,
+      targetVersion: requestedVersion || expectedVersion,
+      targetRoot: normalizedTargetRoot,
+      githubOwner: UPDATE_REPO_OWNER,
+      githubRepo: UPDATE_REPO_NAME,
+      runCommand: () => ({
+        status: 0,
+        stdout: '',
+        stderr: '',
+        error: null,
+      }),
+    });
+    syncResult.ok = true;
+  } else if (!useExternalCommand && normalizedMethod === 'npm') {
+    try {
+      await installSkill({
+        targetRoot: normalizedTargetRoot,
+        force: true,
+        dryRun: false,
+        appVersion: expectedVersion,
+      });
+      syncResult = {
+        method: 'npm',
+        targetVersion: requestedVersion || expectedVersion || 'current',
+        command: buildLocalSkillInstallCommand(normalizedTargetRoot),
+        ok: true,
+        status: 0,
+        stdout: '',
+        stderr: '',
+        error: '',
+      };
+    } catch (error) {
+      syncResult = {
+        method: 'npm',
+        targetVersion: requestedVersion || expectedVersion || 'current',
+        command: buildLocalSkillInstallCommand(normalizedTargetRoot),
+        ok: false,
+        status: 1,
+        stdout: '',
+        stderr: '',
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  } else {
+    syncResult = runSkillsUpgrade({
+      method: normalizedMethod,
+      targetVersion: requestedVersion || expectedVersion,
+      targetRoot: normalizedTargetRoot,
+      githubOwner: UPDATE_REPO_OWNER,
+      githubRepo: UPDATE_REPO_NAME,
+    });
+  }
+
+  const afterBinding = dryRun ? beforeBinding : await inspectSkillBindingSafe(context, expectedVersion);
+  const before = summarizeSkillBinding(beforeBinding);
+  const after = summarizeSkillBinding(afterBinding);
+  let ok = Boolean(syncResult.ok);
+  let status = dryRun ? 'dry_run' : ok ? 'synced' : 'failed';
+
+  if (!dryRun && ok && !after.matched) {
+    ok = false;
+    status = 'mismatch_after_sync';
+    if (!syncResult.error) {
+      syncResult.error = 'skills 同步命令执行成功，但版本仍未匹配';
+    }
+  }
+
+  return {
+    ok,
+    status,
+    method: normalizedMethod,
+    dryRun,
+    before,
+    after,
+    skillSync: syncResult,
+  };
+}
+
+async function runSyncSkillsModeNonInteractive(context, cliArgs, warnings = []) {
+  const method = normalizeSkillSyncMethod(cliArgs.skillSyncMethod || 'npm');
+  const dryRun = cliArgs.dryRun !== null ? Boolean(cliArgs.dryRun) : false;
+  const requestedVersion = String(cliArgs.skillSyncRef || '').trim();
+
+  const syncResult = await executeSkillSync({
+    context,
+    method,
+    dryRun,
+    requestedVersion,
+    expectedAppVersion: context.appMeta?.version || '',
+    useExternalCommand: method === 'github-script',
+  });
+
+  warnings.push(...collectSkillBindingWarnings(syncResult.after));
+  if (!syncResult.ok && syncResult.skillSync?.error) {
+    warnings.push(`skills 同步失败：${syncResult.skillSync.error}`);
+  }
+
+  return {
+    ok: syncResult.ok,
+    action: MODES.SYNC_SKILLS,
+    dryRun,
+    summary: {
+      method,
+      dryRun,
+      status: syncResult.status,
+      skillsStatusBefore: syncResult.before.status,
+      skillsStatusAfter: syncResult.after.status,
+      skillsMatchedAfter: syncResult.after.matched,
+    },
+    warnings: uniqueStrings(warnings),
+    errors: syncResult.ok
+      ? []
+      : [
+          {
+            code: 'E_SKILL_SYNC_FAILED',
+            message: syncResult.skillSync?.error || 'skills_sync_failed',
+          },
+        ],
+    data: {
+      before: syncResult.before,
+      after: syncResult.after,
+      skillSync: syncResult.skillSync,
+    },
+  };
+}
+
 async function runCheckUpdateModeNonInteractive(context, cliArgs, warnings = []) {
   const channel = resolveUpdateChannel(cliArgs, context.config);
   const checkResult = await checkLatestVersion({
@@ -3982,6 +4378,9 @@ async function runCheckUpdateModeNonInteractive(context, cliArgs, warnings = [])
   const updateData = buildUpdateData(checkResult, context.config.selfUpdate.skipVersion);
   const fallbackWarnings = collectUpdateFallbackWarnings(updateData);
   warnings.push(...fallbackWarnings);
+  const skillBinding = await inspectSkillBindingSafe(context, context.appMeta?.version || '');
+  const skills = summarizeSkillBinding(skillBinding);
+  warnings.push(...collectSkillBindingWarnings(skillBinding));
 
   if (updateData.hasUpdate && !updateData.skippedByUser) {
     warnings.push(updateWarningMessage(updateData, context.config.selfUpdate.skipVersion));
@@ -4005,6 +4404,10 @@ async function runCheckUpdateModeNonInteractive(context, cliArgs, warnings = [])
       ),
       channel: updateData.channel,
       skippedByUser: updateData.skippedByUser,
+      skillsStatus: skills.status,
+      skillsMatched: skills.matched,
+      skillsInstalledVersion: skills.installedSkillVersion || '-',
+      skillsBoundAppVersion: skills.installedRequiredAppVersion || '-',
     },
     warnings: uniqueStrings(warnings),
     errors: updateData.checked
@@ -4015,6 +4418,7 @@ async function runCheckUpdateModeNonInteractive(context, cliArgs, warnings = [])
         })),
     data: {
       update: updateData,
+      skills,
     },
   };
 }
@@ -4028,10 +4432,16 @@ async function runUpgradeModeNonInteractive(context, cliArgs, warnings = []) {
     throw new ConfirmationRequiredError('检测到升级请求，但未提供 --upgrade-yes 确认参数。');
   }
 
+  const syncSkillsEnabled = shouldSyncSkillsOnUpgrade(cliArgs);
+  const skillSyncMethod = normalizeSkillSyncMethod(cliArgs.skillSyncMethod || method);
   const channel = resolveUpdateChannel(cliArgs, context.config);
   let targetVersion = String(cliArgs.upgradeVersion || '').trim();
+  const requestedSkillRef = String(cliArgs.skillSyncRef || '').trim();
   let checkResult = null;
   let checkData = null;
+  const beforeSkills = summarizeSkillBinding(
+    await inspectSkillBindingSafe(context, context.appMeta?.version || '')
+  );
 
   if (!targetVersion) {
     checkResult = await checkLatestVersion({
@@ -4056,6 +4466,11 @@ async function runUpgradeModeNonInteractive(context, cliArgs, warnings = []) {
           method,
           targetVersion: '-',
           reason: 'check_failed',
+          skillSyncEnabled: syncSkillsEnabled,
+          skillSyncMethod,
+          skillSyncStatus: 'skipped_check_failed',
+          skillsStatusBefore: beforeSkills.status,
+          skillsStatusAfter: beforeSkills.status,
         },
         warnings: uniqueStrings(warnings),
         errors: (checkResult.errors || []).map((message) => ({
@@ -4064,12 +4479,38 @@ async function runUpgradeModeNonInteractive(context, cliArgs, warnings = []) {
         })),
         data: {
           update: checkData,
+          skills: {
+            before: beforeSkills,
+            after: beforeSkills,
+          },
+          skillSync: null,
         },
       };
     }
     if (!checkResult.hasUpdate) {
+      let syncResult = null;
+      let afterSkills = beforeSkills;
+      if (syncSkillsEnabled && !beforeSkills.matched) {
+        syncResult = await executeSkillSync({
+          context,
+          method: skillSyncMethod,
+          dryRun: false,
+          requestedVersion: requestedSkillRef || checkResult.currentVersion || '',
+          expectedAppVersion: checkResult.currentVersion || context.appMeta?.version || '',
+          useExternalCommand: skillSyncMethod === 'github-script',
+        });
+        afterSkills = syncResult.after;
+        warnings.push(...collectSkillBindingWarnings(syncResult.after));
+        if (!syncResult.ok && syncResult.skillSync?.error) {
+          warnings.push(`skills 同步失败：${syncResult.skillSync.error}`);
+        }
+      } else if (!syncSkillsEnabled && !beforeSkills.matched) {
+        warnings.push('当前已是最新版本，但 skills 未匹配；可执行 wecom-cleaner --sync-skills 处理。');
+      }
+
+      const payloadOk = syncResult ? syncResult.ok : true;
       return {
-        ok: true,
+        ok: payloadOk,
         action: MODES.UPGRADE,
         dryRun: null,
         summary: {
@@ -4077,11 +4518,34 @@ async function runUpgradeModeNonInteractive(context, cliArgs, warnings = []) {
           method,
           targetVersion: checkResult.currentVersion || '-',
           reason: 'already_latest',
+          skillSyncEnabled: syncSkillsEnabled,
+          skillSyncMethod,
+          skillSyncStatus: syncResult
+            ? syncResult.status
+            : syncSkillsEnabled
+              ? 'skipped_already_matched'
+              : 'disabled',
+          skillSyncTargetVersion: requestedSkillRef || checkResult.currentVersion || '-',
+          skillsStatusBefore: beforeSkills.status,
+          skillsStatusAfter: afterSkills.status,
         },
         warnings: uniqueStrings(warnings),
-        errors: [],
+        errors:
+          syncResult && !syncResult.ok
+            ? [
+                {
+                  code: 'E_SKILL_SYNC_FAILED',
+                  message: syncResult.skillSync?.error || 'skills_sync_failed',
+                },
+              ]
+            : [],
         data: {
           update: checkData,
+          skills: {
+            before: beforeSkills,
+            after: afterSkills,
+          },
+          skillSync: syncResult?.skillSync || null,
         },
       };
     }
@@ -4106,8 +4570,31 @@ async function runUpgradeModeNonInteractive(context, cliArgs, warnings = []) {
     await persistSelfUpdateState(context);
   }
 
+  let syncResult = null;
+  let afterSkills = summarizeSkillBinding(
+    await inspectSkillBindingSafe(context, upgrade.ok ? targetVersion : context.appMeta?.version || '')
+  );
+  if (upgrade.ok && syncSkillsEnabled) {
+    syncResult = await executeSkillSync({
+      context,
+      method: skillSyncMethod,
+      dryRun: false,
+      requestedVersion: requestedSkillRef || targetVersion || '',
+      expectedAppVersion: targetVersion || context.appMeta?.version || '',
+      useExternalCommand: true,
+    });
+    afterSkills = syncResult.after;
+    warnings.push(...collectSkillBindingWarnings(syncResult.after));
+    if (!syncResult.ok && syncResult.skillSync?.error) {
+      warnings.push(`skills 同步失败：${syncResult.skillSync.error}`);
+    }
+  } else if (upgrade.ok && !syncSkillsEnabled && !afterSkills.matched) {
+    warnings.push('程序升级已完成，但 skills 同步已关闭；建议执行 wecom-cleaner --sync-skills。');
+  }
+
+  const payloadOk = upgrade.ok && (syncResult ? syncResult.ok : true);
   return {
-    ok: upgrade.ok,
+    ok: payloadOk,
     action: MODES.UPGRADE,
     dryRun: null,
     summary: {
@@ -4116,19 +4603,44 @@ async function runUpgradeModeNonInteractive(context, cliArgs, warnings = []) {
       targetVersion: upgrade.targetVersion || targetVersion || '-',
       command: upgrade.command,
       status: upgrade.status,
+      skillSyncEnabled: syncSkillsEnabled,
+      skillSyncMethod,
+      skillSyncStatus: syncResult
+        ? syncResult.status
+        : syncSkillsEnabled
+          ? 'skipped_upgrade_failed'
+          : 'disabled',
+      skillSyncTargetVersion: requestedSkillRef || targetVersion || '-',
+      skillsStatusBefore: beforeSkills.status,
+      skillsStatusAfter: afterSkills.status,
     },
     warnings: uniqueStrings(warnings),
-    errors: upgrade.ok
-      ? []
-      : [
-          {
-            code: 'E_UPGRADE_FAILED',
-            message: upgrade.error || upgrade.stderr || 'upgrade_failed',
-          },
-        ],
+    errors: [
+      ...(upgrade.ok
+        ? []
+        : [
+            {
+              code: 'E_UPGRADE_FAILED',
+              message: upgrade.error || upgrade.stderr || 'upgrade_failed',
+            },
+          ]),
+      ...(!syncResult || syncResult.ok
+        ? []
+        : [
+            {
+              code: 'E_SKILL_SYNC_FAILED',
+              message: syncResult.skillSync?.error || 'skills_sync_failed',
+            },
+          ]),
+    ],
     data: {
       update: checkResult ? buildUpdateData(checkResult, context.config.selfUpdate.skipVersion) : null,
       upgrade,
+      skills: {
+        before: beforeSkills,
+        after: afterSkills,
+      },
+      skillSync: syncResult?.skillSync || null,
     },
   };
 }
@@ -4163,7 +4675,7 @@ async function maybeRunStartupUpdateCheck(context, cliArgs, action, interactiveM
   if (!selfUpdate.enabled) {
     return null;
   }
-  if (action === MODES.CHECK_UPDATE || action === MODES.UPGRADE) {
+  if (action === MODES.CHECK_UPDATE || action === MODES.UPGRADE || action === MODES.SYNC_SKILLS) {
     return null;
   }
   if (!interactiveMode && action === MODES.DOCTOR) {
@@ -4268,11 +4780,34 @@ async function maybePromptInteractiveUpgrade(context, startupUpdate) {
     lastKnownSource: choice,
   });
   await persistSelfUpdateState(context);
+  const syncResult = await executeSkillSync({
+    context,
+    method: normalizeSkillSyncMethod(choice),
+    dryRun: false,
+    expectedAppVersion: startupUpdate.latestVersion || '',
+    requestedVersion: startupUpdate.latestVersion || '',
+    useExternalCommand: true,
+  });
   printTextRows('升级结果', [
     { label: '状态', value: '成功' },
     { label: '方式', value: choice },
     { label: '版本', value: `v${startupUpdate.latestVersion}` },
   ]);
+  printTextRows('Skills 同步', [
+    { label: '方式', value: skillSyncMethodLabel(syncResult.method) },
+    { label: '状态', value: syncResult.ok ? '成功' : '失败' },
+    { label: '匹配状态', value: syncResult.after.statusLabel || '-' },
+    { label: '命令', value: syncResult.skillSync?.command || '-' },
+  ]);
+  if (!syncResult.ok) {
+    printTextRows('Skills 提示', [
+      {
+        label: '建议',
+        value: syncResult.after.recommendation || '请执行 wecom-cleaner --sync-skills 重试。',
+      },
+      { label: '错误', value: syncResult.skillSync?.error || 'skills_sync_failed' },
+    ]);
+  }
   console.log('升级已完成，建议重新启动 wecom-cleaner 后继续。');
   return true;
 }
@@ -4306,6 +4841,9 @@ async function runNonInteractiveAction(action, context, cliArgs) {
   }
   if (action === MODES.UPGRADE) {
     return runUpgradeModeNonInteractive(context, cliArgs, warnings);
+  }
+  if (action === MODES.SYNC_SKILLS) {
+    return runSyncSkillsModeNonInteractive(context, cliArgs, warnings);
   }
   throw new UsageError(`不支持的无交互动作: ${action}`);
 }
@@ -4587,6 +5125,10 @@ async function runNonInteractiveTask(action, context, cliArgs) {
   const runTaskMode = normalizeRunTaskMode(cliArgs.runTask);
   if (!runTaskMode) {
     return runNonInteractiveAction(action, context, cliArgs);
+  }
+
+  if (action === MODES.SYNC_SKILLS) {
+    throw new UsageError('动作 同步 Agent Skills 不支持 --run-task，请直接使用 --dry-run true|false。');
   }
 
   if (!isDestructiveAction(action) && runTaskMode !== RUN_TASK_PREVIEW) {
@@ -5422,6 +5964,8 @@ async function runDoctorMode(context, options = {}) {
 async function runCheckUpdateMode(context, cliArgs = {}) {
   const channel = resolveUpdateChannel(cliArgs, context.config);
   const startedAt = Date.now();
+  const skillBinding = await inspectSkillBindingSafe(context, context.appMeta?.version || '');
+  const skills = summarizeSkillBinding(skillBinding);
   const checkResult = await checkLatestVersion({
     currentVersion: context.appMeta?.version || '0.0.0',
     packageName: PACKAGE_NAME,
@@ -5460,8 +6004,15 @@ async function runCheckUpdateMode(context, cliArgs = {}) {
       ),
       channel: checkResult.channel || channel,
       skippedByUser: shouldSkipVersion(checkResult, context.config.selfUpdate.skipVersion),
+      skillsStatus: skills.status,
+      skillsMatched: skills.matched,
+      skillsInstalledVersion: skills.installedSkillVersion || '-',
+      skillsBoundAppVersion: skills.installedRequiredAppVersion || '-',
     },
-    warnings: uniqueStrings([...collectUpdateFallbackWarnings(checkResult)]),
+    warnings: uniqueStrings([
+      ...collectUpdateFallbackWarnings(checkResult),
+      ...collectSkillBindingWarnings(skillBinding),
+    ]),
     errors:
       checkResult.checked && checkResult.sourceUsed !== 'none'
         ? []
@@ -5473,6 +6024,7 @@ async function runCheckUpdateMode(context, cliArgs = {}) {
           : [],
     data: {
       update: buildUpdateData(checkResult, context.config.selfUpdate.skipVersion),
+      skills,
     },
     meta: {
       app: APP_NAME,
@@ -5494,6 +6046,75 @@ async function runCheckUpdateMode(context, cliArgs = {}) {
   if (upgraded) {
     return;
   }
+
+  if (!skills.matched) {
+    const syncNow = await askConfirm({
+      message: '检测到 skills 与当前程序版本不匹配，是否现在同步？',
+      default: true,
+    });
+    if (syncNow) {
+      await runSyncSkillsMode(context, {
+        skillSyncMethod: normalizeSkillSyncMethod(cliArgs.skillSyncMethod || 'npm'),
+      });
+    }
+  }
+}
+
+async function runSyncSkillsMode(context, cliArgs = {}) {
+  const method =
+    typeof cliArgs.skillSyncMethod === 'string' && cliArgs.skillSyncMethod.trim()
+      ? normalizeSkillSyncMethod(cliArgs.skillSyncMethod)
+      : await askSelect({
+          message: '请选择 skills 同步方式',
+          default: 'npm',
+          choices: [
+            { name: 'npm（默认，使用本地随包 skills）', value: 'npm' },
+            { name: 'GitHub 脚本（按版本下载）', value: 'github-script' },
+          ],
+        });
+
+  const dryRun =
+    typeof cliArgs.dryRun === 'boolean'
+      ? cliArgs.dryRun
+      : await askConfirm({
+          message: '先进行 skills 同步预演？',
+          default: true,
+        });
+
+  if (!dryRun) {
+    const confirmed = await askConfirm({
+      message: '将写入 Codex skills 目录，确认继续？',
+      default: true,
+    });
+    if (!confirmed) {
+      console.log('已取消 skills 同步。');
+      return;
+    }
+  }
+
+  const startedAt = Date.now();
+  const result = await runSyncSkillsModeNonInteractive(
+    context,
+    {
+      ...cliArgs,
+      skillSyncMethod: method,
+      dryRun,
+    },
+    []
+  );
+  const payload = {
+    ...result,
+    meta: {
+      app: APP_NAME,
+      package: PACKAGE_NAME,
+      version: context.appMeta?.version || '0.0.0',
+      timestamp: Date.now(),
+      durationMs: Date.now() - startedAt,
+      output: OUTPUT_TEXT,
+      engine: context.lastRunEngineUsed || (context.nativeCorePath ? 'zig_ready' : 'node'),
+    },
+  };
+  printSyncSkillsTextResult(payload);
 }
 
 async function runRecycleMaintainMode(context, options = {}) {
@@ -5860,6 +6481,10 @@ async function runMode(mode, context, options = {}) {
     await runCheckUpdateMode(context, options.cliArgs || {});
     return;
   }
+  if (mode === MODES.SYNC_SKILLS) {
+    await runSyncSkillsMode(context, options.cliArgs || {});
+    return;
+  }
   if (mode === MODES.RECYCLE_MAINTAIN) {
     await runRecycleMaintainMode(context, options);
     return;
@@ -5920,6 +6545,9 @@ async function acquireExecutionLock(stateRoot, mode, options = {}) {
 async function runInteractiveLoop(context) {
   while (true) {
     const accounts = await discoverAccounts(context.config.rootDir, context.aliases);
+    const skillSummary = summarizeSkillBinding(
+      await inspectSkillBindingSafe(context, context.appMeta?.version || '')
+    );
     const detectedExternalStorage = await detectExternalStorageRoots({
       configuredRoots: context.config.externalStorageRoots,
       profilesRoot: context.config.rootDir,
@@ -5938,6 +6566,7 @@ async function runInteractiveLoop(context) {
       externalStorageRoots: detectedExternalStorageRoots,
       externalStorageMeta: detectedExternalStorage.meta,
       profileRootHealth,
+      skillSummary,
     });
 
     const mode = await askSelect({
@@ -5951,6 +6580,7 @@ async function runInteractiveLoop(context) {
         { name: '回收区治理（保留策略）', value: MODES.RECYCLE_MAINTAIN },
         { name: '系统自检（doctor）', value: MODES.DOCTOR },
         { name: '检查更新与升级', value: MODES.CHECK_UPDATE },
+        { name: '同步 Agent Skills', value: MODES.SYNC_SKILLS },
         { name: '交互配置', value: MODES.SETTINGS },
         { name: '退出', value: 'exit' },
       ],

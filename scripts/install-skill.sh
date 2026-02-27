@@ -93,6 +93,17 @@ fi
 
 cp -R "${SOURCE_DIR}" "${TARGET_DIR}"
 
+SKILL_VERSION_FILE="${TARGET_DIR}/version.json"
+SKILL_VERSION=""
+REQUIRED_APP_VERSION=""
+if [[ -f "${SKILL_VERSION_FILE}" ]]; then
+  SKILL_VERSION="$(sed -n 's/.*"skillVersion"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${SKILL_VERSION_FILE}" | head -n 1)"
+  REQUIRED_APP_VERSION="$(sed -n 's/.*"requiredAppVersion"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${SKILL_VERSION_FILE}" | head -n 1)"
+fi
+
 echo "安装完成"
 echo "技能: ${SKILL_NAME}"
 echo "目标: ${TARGET_DIR}"
+if [[ -n "${SKILL_VERSION}" || -n "${REQUIRED_APP_VERSION}" ]]; then
+  echo "版本: ${SKILL_VERSION:--}（绑定程序版本: ${REQUIRED_APP_VERSION:--}）"
+fi

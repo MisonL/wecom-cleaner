@@ -5,7 +5,9 @@ import {
   checkLatestVersion,
   compareVersion,
   defaultSelfUpdateConfig,
+  githubSkillInstallScriptUrl,
   normalizeSelfUpdateConfig,
+  runSkillsUpgrade,
   resolveCheckSlot,
   runUpgrade,
   shouldCheckForUpdate,
@@ -181,4 +183,43 @@ test('runUpgrade 可构造 npm 与 github-script 命令', () => {
   assert.equal(calls.length, 2);
   assert.equal(calls[1][0], 'bash');
   assert.match(githubResult.command, /raw\.githubusercontent\.com/);
+});
+
+test('runSkillsUpgrade 可构造 npm 与 github-script 命令', () => {
+  const calls = [];
+  const runCommand = (cmd, args) => {
+    calls.push([cmd, args]);
+    return { status: 0, stdout: 'ok', stderr: '', error: null };
+  };
+
+  const npmResult = runSkillsUpgrade({
+    method: 'npm',
+    targetVersion: '1.3.2',
+    targetRoot: '/tmp/skills',
+    githubOwner: 'MisonL',
+    githubRepo: 'wecom-cleaner',
+    runCommand,
+  });
+  assert.equal(npmResult.ok, true);
+  assert.match(npmResult.command, /wecom-cleaner-skill install --force/);
+
+  const githubResult = runSkillsUpgrade({
+    method: 'github-script',
+    targetVersion: '1.3.2',
+    githubOwner: 'MisonL',
+    githubRepo: 'wecom-cleaner',
+    runCommand,
+  });
+  assert.equal(githubResult.ok, true);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1][0], 'bash');
+  assert.match(githubResult.command, /install-skill\.sh/);
+  assert.equal(
+    githubSkillInstallScriptUrl({
+      owner: 'MisonL',
+      repo: 'wecom-cleaner',
+      version: '1.3.2',
+    }),
+    'https://raw.githubusercontent.com/MisonL/wecom-cleaner/v1.3.2/scripts/install-skill.sh'
+  );
 });

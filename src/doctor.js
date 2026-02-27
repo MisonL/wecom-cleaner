@@ -3,6 +3,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { collectRecycleStats, normalizeRecycleRetention } from './recycle-maintenance.js';
 import { detectExternalStorageRoots, discoverAccounts } from './scanner.js';
+import { inspectSkillBinding, skillBindingStatusLabel } from './skill-installer.js';
 import { normalizeSelfUpdateConfig } from './updater.js';
 
 const STATUS_PASS = 'pass';
@@ -291,6 +292,43 @@ export async function runDoctor({ config, aliases, projectRoot, appVersion }) {
     )
   );
 
+  let skillBinding = null;
+  try {
+    skillBinding = await inspectSkillBinding({
+      appVersion: appVersion || '',
+      targetRoot: process.env.WECOM_CLEANER_SKILLS_ROOT || '',
+    });
+  } catch (error) {
+    skillBinding = {
+      status: 'invalid_skill_dir',
+      matched: false,
+      installed: false,
+      expectedAppVersion: String(appVersion || ''),
+      installedManifest: null,
+      recommendation: `技能检测失败：${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  const skillDetail = (() => {
+    if (!skillBinding) {
+      return '未获取到技能状态';
+    }
+    const installedVersion = skillBinding.installedManifest?.skillVersion || '-';
+    const requiredAppVersion = skillBinding.installedManifest?.requiredAppVersion || '-';
+    return `${skillBindingStatusLabel(skillBinding.status)}，技能版本 ${installedVersion}，绑定程序版本 ${requiredAppVersion}`;
+  })();
+  checks.push(
+    buildCheck(
+      'skills_binding',
+      'Agent Skills 版本绑定',
+      skillBinding?.matched ? STATUS_PASS : STATUS_WARN,
+      skillDetail,
+      skillBinding?.matched
+        ? ''
+        : skillBinding?.recommendation ||
+            '建议执行 wecom-cleaner-skill install --force 重新同步 skills 版本。'
+    )
+  );
+
   const target = resolveRuntimeTarget();
   const manifest = await readManifest(projectRoot);
   const manifestTarget = manifest.parsed?.targets?.[target.targetTag] || null;
@@ -384,6 +422,9 @@ export async function runDoctor({ config, aliases, projectRoot, appVersion }) {
       recycleBytes: recycleStats.totalBytes,
       recycleThresholdBytes: thresholdBytes,
       recycleOverThreshold,
+      skillsStatus: skillBinding?.status || 'unknown',
+      skillsMatched: Boolean(skillBinding?.matched),
+      skillsInstalled: Boolean(skillBinding?.installed),
     },
     recommendations,
   };

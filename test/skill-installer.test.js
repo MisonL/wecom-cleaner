@@ -4,9 +4,13 @@ import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import {
   SKILL_NAME,
+  SKILL_VERSION_FILE,
   installSkill,
+  inspectSkillBinding,
+  readSkillManifestFromDir,
   resolveDefaultSkillsRoot,
   resolveTargetSkillsRoot,
+  skillBindingStatusLabel,
 } from '../src/skill-installer.js';
 import { ensureFile, makeTempDir, removeDir } from './helpers/temp.js';
 
@@ -96,4 +100,78 @@ test('installSkill 在 dry-run 模式只返回计划不写入文件', async (t) 
     .then(() => true)
     .catch(() => false);
   assert.equal(targetRootExists, false);
+});
+
+test('readSkillManifestFromDir 可读取并规范版本文件', async (t) => {
+  const workspace = await makeTempDir('wecom-skill-manifest-');
+  t.after(async () => removeDir(workspace));
+
+  const sourceSkillDir = path.join(workspace, 'source', SKILL_NAME);
+  await ensureFile(path.join(sourceSkillDir, 'SKILL.md'), '# demo');
+  await ensureFile(
+    path.join(sourceSkillDir, SKILL_VERSION_FILE),
+    JSON.stringify({
+      schemaVersion: 1,
+      skillName: SKILL_NAME,
+      skillVersion: 'v1.3.2',
+      requiredAppVersion: '1.3.2',
+    })
+  );
+
+  const manifestState = await readSkillManifestFromDir(sourceSkillDir, { appVersion: '1.3.2' });
+  assert.equal(manifestState.exists, true);
+  assert.equal(manifestState.manifest.skillVersion, '1.3.2');
+  assert.equal(manifestState.manifest.requiredAppVersion, '1.3.2');
+});
+
+test('inspectSkillBinding 可识别未安装/旧版/匹配状态', async (t) => {
+  const workspace = await makeTempDir('wecom-skill-inspect-');
+  t.after(async () => removeDir(workspace));
+
+  const sourceSkillDir = path.join(workspace, 'source', SKILL_NAME);
+  const targetRoot = path.join(workspace, 'target', 'skills');
+  const targetSkillDir = path.join(targetRoot, SKILL_NAME);
+  await ensureFile(path.join(sourceSkillDir, 'SKILL.md'), '# demo');
+  await ensureFile(
+    path.join(sourceSkillDir, SKILL_VERSION_FILE),
+    JSON.stringify({
+      schemaVersion: 1,
+      skillName: SKILL_NAME,
+      skillVersion: '1.3.2',
+      requiredAppVersion: '1.3.2',
+    })
+  );
+
+  const notInstalled = await inspectSkillBinding({
+    sourceSkillDir,
+    targetRoot,
+    appVersion: '1.3.2',
+  });
+  assert.equal(notInstalled.status, 'not_installed');
+  assert.equal(skillBindingStatusLabel(notInstalled.status), '未安装');
+
+  await ensureFile(path.join(targetSkillDir, 'SKILL.md'), '# legacy');
+  const legacy = await inspectSkillBinding({
+    sourceSkillDir,
+    targetRoot,
+    appVersion: '1.3.2',
+  });
+  assert.equal(legacy.status, 'legacy_unversioned');
+
+  await ensureFile(
+    path.join(targetSkillDir, SKILL_VERSION_FILE),
+    JSON.stringify({
+      schemaVersion: 1,
+      skillName: SKILL_NAME,
+      skillVersion: '1.3.2',
+      requiredAppVersion: '1.3.2',
+    })
+  );
+  const matched = await inspectSkillBinding({
+    sourceSkillDir,
+    targetRoot,
+    appVersion: '1.3.2',
+  });
+  assert.equal(matched.status, 'matched');
+  assert.equal(matched.matched, true);
 });

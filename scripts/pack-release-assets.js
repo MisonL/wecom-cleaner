@@ -67,7 +67,22 @@ async function main() {
     }
   }
 
-  const checksumName = `wecom-cleaner-core-${versionTag}-SHA256SUMS.txt`;
+  const skillDir = path.join(cwd, 'skills', 'wecom-cleaner-agent');
+  const skillDirStat = await fs.stat(skillDir).catch(() => null);
+  if (!skillDirStat?.isDirectory()) {
+    throw new Error(`缺少 skills 目录: ${path.relative(cwd, skillDir)}`);
+  }
+
+  const skillAssetName = `wecom-cleaner-skill-${versionTag}.tar.gz`;
+  copiedAssets.push(skillAssetName);
+  if (!isDryRun) {
+    const skillAssetPath = path.join(releaseDir, skillAssetName);
+    runCommand('tar', ['-czf', skillAssetPath, '-C', path.join(cwd, 'skills'), 'wecom-cleaner-agent'], cwd);
+    const skillBuffer = await fs.readFile(skillAssetPath);
+    checksumRows.push(`${toSha256(skillBuffer)}  ${skillAssetName}`);
+  }
+
+  const checksumName = `wecom-cleaner-${versionTag}-SHA256SUMS.txt`;
   if (!isDryRun) {
     await fs.writeFile(path.join(releaseDir, checksumName), `${checksumRows.join('\n')}\n`, 'utf-8');
   }

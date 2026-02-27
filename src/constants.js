@@ -108,6 +108,7 @@ export const MODES = {
   RECYCLE_MAINTAIN: 'recycle_maintain',
   CHECK_UPDATE: 'check_update',
   UPGRADE: 'upgrade',
+  SYNC_SKILLS: 'sync_skills',
   SETTINGS: 'settings',
 };
 

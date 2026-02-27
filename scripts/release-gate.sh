@@ -19,6 +19,7 @@ run_step() {
 
 run_step "format:check" "npm run format:check"
 run_step "check" "npm run check"
+run_step "check:skills-version" "npm run check:skills-version"
 run_step "test:coverage:check" "npm run test:coverage:check"
 run_step "shellcheck(skills)" "shellcheck skills/wecom-cleaner-agent/scripts/*.sh scripts/upgrade.sh scripts/install-skill.sh scripts/release-gate.sh"
 run_step "e2e:smoke" "npm run e2e:smoke"

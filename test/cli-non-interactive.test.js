@@ -726,6 +726,7 @@ test('CLI 支持 --help 并返回无交互动作说明', () => {
   assert.match(output, /--doctor/);
   assert.match(output, /--check-update/);
   assert.match(output, /--upgrade <npm\|github-script>/);
+  assert.match(output, /--sync-skills/);
   assert.match(output, /--run-task preview\|execute\|preview-execute-verify/);
   assert.match(output, /--scan-debug off\|summary\|full/);
 });
@@ -750,6 +751,9 @@ test('无交互 --check-update 在 npm 失败时回退 GitHub 并保留错误痕
   assert.match(String(payload.summary.sourceChain || ''), /回退|GitHub/);
   assert.equal(payload.summary.latestVersion, '9.9.9');
   assert.equal(payload.data?.update?.sourceUsed, 'github');
+  assert.equal(typeof payload.summary.skillsStatus, 'string');
+  assert.equal(typeof payload.summary.skillsMatched, 'boolean');
+  assert.equal(typeof payload.data?.skills?.status, 'string');
   assert.equal(Array.isArray(payload.data?.userFacingSummary?.scopeNotes), true);
   assert.equal(
     payload.data.userFacingSummary.scopeNotes.some(
@@ -778,6 +782,30 @@ test('无交互 --upgrade 未确认时返回确认错误', () => {
   const result = runCli(['--upgrade', 'npm', '--upgrade-version', '1.2.1']);
   assert.equal(result.status, 3);
   assert.match(String(result.stderr || ''), /确认错误/);
+});
+
+test('无交互 --sync-skills 支持预演与真实同步', async (t) => {
+  const root = await makeTempDir('wecom-cli-sync-skills-');
+  t.after(async () => removeDir(root));
+
+  const codexHome = path.join(root, 'codex-home');
+  const dryRun = runCli(['--sync-skills', '--dry-run', 'true'], {
+    CODEX_HOME: codexHome,
+  });
+  assert.equal(dryRun.status, 0);
+  const dryPayload = JSON.parse(String(dryRun.stdout || '{}'));
+  assert.equal(dryPayload.action, 'sync_skills');
+  assert.equal(dryPayload.dryRun, true);
+  assert.equal(dryPayload.summary.status, 'dry_run');
+
+  const execute = runCli(['--sync-skills', '--dry-run', 'false'], {
+    CODEX_HOME: codexHome,
+  });
+  assert.equal(execute.status, 0);
+  const execPayload = JSON.parse(String(execute.stdout || '{}'));
+  assert.equal(execPayload.action, 'sync_skills');
+  assert.equal(execPayload.ok, true);
+  assert.equal(execPayload.summary.skillsMatchedAfter, true);
 });
 
 test('无交互 analysis 返回用户报告统计结构', async (t) => {
