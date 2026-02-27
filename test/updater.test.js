@@ -153,7 +153,7 @@ test('applyUpdateCheckResult 与跳过版本提示', () => {
   assert.match(updateWarningMessage(check, ''), /检测到新版本/);
 });
 
-test('runUpgrade 可构造 npm 与 github-script 命令', () => {
+test('runUpgrade 可构造 npm 与 github-script 命令，并透传 skills 同步开关', () => {
   const calls = [];
   const runCommand = (cmd, args) => {
     calls.push([cmd, args]);
@@ -175,6 +175,7 @@ test('runUpgrade 可构造 npm 与 github-script 命令', () => {
     method: 'github-script',
     packageName: '@mison/wecom-cleaner',
     targetVersion: '1.3.0',
+    syncSkills: false,
     githubOwner: 'MisonL',
     githubRepo: 'wecom-cleaner',
     runCommand,
@@ -183,6 +184,7 @@ test('runUpgrade 可构造 npm 与 github-script 命令', () => {
   assert.equal(calls.length, 2);
   assert.equal(calls[1][0], 'bash');
   assert.match(githubResult.command, /raw\.githubusercontent\.com/);
+  assert.match(githubResult.command, /--sync-skills false/);
 });
 
 test('runSkillsUpgrade 可构造 npm 与 github-script 命令', () => {

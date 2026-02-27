@@ -440,6 +440,7 @@ export function runUpgrade({
   method,
   packageName,
   targetVersion,
+  syncSkills = true,
   githubOwner,
   githubRepo,
   runCommand = defaultRunCommand,
@@ -468,7 +469,8 @@ export function runUpgrade({
     version: normalizedVersion || 'main',
   });
   const versionArg = normalizedVersion ? ` --version ${normalizedVersion}` : '';
-  const commandText = `curl -fsSL ${scriptUrl} | bash -s --${versionArg}`;
+  const syncSkillsArg = ` --sync-skills ${syncSkills ? 'true' : 'false'}`;
+  const commandText = `curl -fsSL ${scriptUrl} | bash -s --${versionArg}${syncSkillsArg}`;
   const result = runCommand('bash', ['-lc', commandText]);
   return {
     method: chosen,

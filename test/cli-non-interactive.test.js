@@ -155,6 +155,27 @@ function runCliAsync(args, env = {}) {
   });
 }
 
+async function createMockCurlBin(root) {
+  const binDir = path.join(root, 'fake-bin');
+  await fs.mkdir(binDir, { recursive: true });
+  const curlPath = path.join(binDir, 'curl');
+  await fs.writeFile(
+    curlPath,
+    `#!/usr/bin/env bash
+set -euo pipefail
+cat <<'MOCK_SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+echo "mock-upgrade-script args: $*" >&2
+exit 0
+MOCK_SCRIPT
+`,
+    'utf-8'
+  );
+  await fs.chmod(curlPath, 0o755);
+  return binDir;
+}
+
 function assertCommonPayloadEnvelope(payload, action, expectedDryRun) {
   assert.equal(typeof payload, 'object');
   assert.equal(payload.action, action);
@@ -782,6 +803,42 @@ test('无交互 --upgrade 未确认时返回确认错误', () => {
   const result = runCli(['--upgrade', 'npm', '--upgrade-version', '1.2.1']);
   assert.equal(result.status, 3);
   assert.match(String(result.stderr || ''), /确认错误/);
+});
+
+test('无交互 --upgrade github-script 关闭 skills 同步时透传参数', async (t) => {
+  const root = await makeTempDir('wecom-cli-upgrade-sync-flag-');
+  t.after(async () => removeDir(root));
+
+  const fakeBin = await createMockCurlBin(root);
+  const codexHome = path.join(root, 'codex-home');
+  const stateRoot = path.join(root, 'state');
+
+  const result = runCli(
+    [
+      '--upgrade',
+      'github-script',
+      '--upgrade-version',
+      '9.9.9',
+      '--upgrade-yes',
+      '--upgrade-sync-skills',
+      'false',
+      '--state-root',
+      stateRoot,
+    ],
+    {
+      CODEX_HOME: codexHome,
+      PATH: `${fakeBin}:${process.env.PATH || ''}`,
+    }
+  );
+
+  assert.equal(result.status, 0);
+  const payload = JSON.parse(String(result.stdout || '{}'));
+  assert.equal(payload.action, 'upgrade');
+  assert.equal(payload.ok, true);
+  assert.equal(payload.summary.method, 'github-script');
+  assert.equal(payload.summary.skillSyncEnabled, false);
+  assert.equal(payload.summary.skillSyncStatus, 'disabled');
+  assert.match(String(payload.summary.command || ''), /--sync-skills false/);
 });
 
 test('无交互 --sync-skills 支持预演与真实同步', async (t) => {

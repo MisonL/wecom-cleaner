@@ -68,6 +68,12 @@ test('skill-cli status 在未安装时返回失败并给出建议', async (t) =>
   assert.equal(result.status, 1);
   assert.match(String(result.stdout || ''), /未安装/);
   assert.match(String(result.stdout || ''), /建议/);
+
+  const jsonResult = runSkillCli(['status', '--target', targetRoot, '--json']);
+  assert.equal(jsonResult.status, 1);
+  const payload = JSON.parse(String(jsonResult.stdout || '{}'));
+  assert.equal(payload.matched, false);
+  assert.equal(payload.status, 'not_installed');
 });
 
 test('skill-cli install 支持冲突报错与 --force 覆盖', async (t) => {

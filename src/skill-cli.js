@@ -145,6 +145,7 @@ async function main() {
       });
       if (args.json) {
         console.log(JSON.stringify(status, null, 2));
+        process.exitCode = status.matched ? 0 : 1;
         return;
       }
       printStatusText(status);

@@ -4556,6 +4556,7 @@ async function runUpgradeModeNonInteractive(context, cliArgs, warnings = []) {
     method,
     packageName: PACKAGE_NAME,
     targetVersion,
+    syncSkills: syncSkillsEnabled,
     githubOwner: UPDATE_REPO_OWNER,
     githubRepo: UPDATE_REPO_NAME,
   });
@@ -4760,6 +4761,7 @@ async function maybePromptInteractiveUpgrade(context, startupUpdate) {
     method: choice,
     packageName: PACKAGE_NAME,
     targetVersion: startupUpdate.latestVersion,
+    syncSkills: true,
     githubOwner: UPDATE_REPO_OWNER,
     githubRepo: UPDATE_REPO_NAME,
   });
