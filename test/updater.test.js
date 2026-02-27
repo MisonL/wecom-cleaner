@@ -153,7 +153,7 @@ test('applyUpdateCheckResult 与跳过版本提示', () => {
   assert.match(updateWarningMessage(check, ''), /检测到新版本/);
 });
 
-test('runUpgrade 可构造 npm 与 github-script 命令，并透传 skills 同步开关', () => {
+test('runUpgrade 可兼容旧版 github 升级脚本参数协议', () => {
   const calls = [];
   const runCommand = (cmd, args) => {
     calls.push([cmd, args]);
@@ -171,20 +171,34 @@ test('runUpgrade 可构造 npm 与 github-script 命令，并透传 skills 同�
   assert.equal(npmResult.ok, true);
   assert.match(npmResult.command, /npm i -g/);
 
-  const githubResult = runUpgrade({
+  const githubLegacyResult = runUpgrade({
     method: 'github-script',
     packageName: '@mison/wecom-cleaner',
-    targetVersion: '1.3.0',
+    targetVersion: '1.3.2',
     syncSkills: false,
     githubOwner: 'MisonL',
     githubRepo: 'wecom-cleaner',
     runCommand,
   });
-  assert.equal(githubResult.ok, true);
+  assert.equal(githubLegacyResult.ok, true);
   assert.equal(calls.length, 2);
   assert.equal(calls[1][0], 'bash');
-  assert.match(githubResult.command, /raw\.githubusercontent\.com/);
-  assert.match(githubResult.command, /--sync-skills false/);
+  assert.match(githubLegacyResult.command, /raw\.githubusercontent\.com/);
+  assert.equal(String(githubLegacyResult.command || '').includes('--sync-skills'), false);
+
+  const githubModernResult = runUpgrade({
+    method: 'github-script',
+    packageName: '@mison/wecom-cleaner',
+    targetVersion: '1.3.3',
+    syncSkills: false,
+    githubOwner: 'MisonL',
+    githubRepo: 'wecom-cleaner',
+    runCommand,
+  });
+  assert.equal(githubModernResult.ok, true);
+  assert.equal(calls.length, 3);
+  assert.equal(calls[2][0], 'bash');
+  assert.match(githubModernResult.command, /--sync-skills false/);
 });
 
 test('runSkillsUpgrade 可构造 npm 与 github-script 命令', () => {

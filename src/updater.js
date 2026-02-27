@@ -436,6 +436,16 @@ function shellEscapeArg(rawValue) {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
+const UPGRADE_SCRIPT_SYNC_SKILLS_MIN_VERSION = '1.3.3';
+
+function upgradeScriptSupportsSyncSkills(version) {
+  const normalized = normalizeVersion(version);
+  if (!normalized) {
+    return true;
+  }
+  return compareVersion(normalized, UPGRADE_SCRIPT_SYNC_SKILLS_MIN_VERSION) >= 0;
+}
+
 export function runUpgrade({
   method,
   packageName,
@@ -469,7 +479,9 @@ export function runUpgrade({
     version: normalizedVersion || 'main',
   });
   const versionArg = normalizedVersion ? ` --version ${normalizedVersion}` : '';
-  const syncSkillsArg = ` --sync-skills ${syncSkills ? 'true' : 'false'}`;
+  const syncSkillsArg = upgradeScriptSupportsSyncSkills(normalizedVersion)
+    ? ` --sync-skills ${syncSkills ? 'true' : 'false'}`
+    : '';
   const commandText = `curl -fsSL ${scriptUrl} | bash -s --${versionArg}${syncSkillsArg}`;
   const result = runCommand('bash', ['-lc', commandText]);
   return {

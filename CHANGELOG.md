@@ -31,6 +31,7 @@
 - 修复“主程序升级后 skills 未同步导致能力不一致”的链路缺口，收敛为可检测、可提示、可一键修复。
 - 修复 `--upgrade-sync-skills false` 在 `--upgrade github-script` 场景未生效的问题：升级脚本调用现已透传 `--sync-skills true|false`，行为与参数一致。
 - 修复 `wecom-cleaner-skill status --json` 在未安装或版本不匹配时错误返回 `0` 的问题，JSON 模式退出码已与文本模式一致。
+- 修复 `github-script` 升级对旧版 `upgrade.sh` 的兼容性回归：当目标版本脚本不支持 `--sync-skills` 时自动回退旧参数协议，确保按版本升级/回退可用。
 
 ## [1.3.2] - 2026-02-27
 
