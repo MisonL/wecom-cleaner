@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+- 暂无（下一次迭代待补充）。
+
+## [1.3.3] - Unreleased
+
 ### Added
 
 - 新增 skills 版本元数据：`skills/wecom-cleaner-agent/version.json`，将 `skillVersion` 与 `requiredAppVersion` 绑定到主程序版本。
