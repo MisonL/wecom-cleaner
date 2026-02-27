@@ -168,10 +168,10 @@ GitHub 备选方式（无 npm 包依赖）：
 curl -fsSL https://raw.githubusercontent.com/MisonL/wecom-cleaner/main/scripts/install-skill.sh | bash
 ```
 
-若需安装指定版本标签（例如 `v1.3.0`）：
+若需安装指定版本标签（例如 `v1.3.2`）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MisonL/wecom-cleaner/main/scripts/install-skill.sh | bash -s -- --ref v1.3.0
+curl -fsSL https://raw.githubusercontent.com/MisonL/wecom-cleaner/main/scripts/install-skill.sh | bash -s -- --ref v1.3.2
 ```
 
 Agent 侧统一任务入口脚本（位于 `skills/wecom-cleaner-agent/scripts/`）：
@@ -254,7 +254,7 @@ wecom-cleaner --check-update --output text
 wecom-cleaner --upgrade npm --upgrade-yes
 
 # 执行升级（GitHub 托管脚本方式）
-wecom-cleaner --upgrade github-script --upgrade-version 1.3.1 --upgrade-yes
+wecom-cleaner --upgrade github-script --upgrade-version 1.3.2 --upgrade-yes
 ```
 
 ### 输出与兼容参数
@@ -493,7 +493,7 @@ npm run pack:tgz
 npm run pack:release-assets
 
 # 2) 推送主分支与标签
-VERSION="1.3.1"
+VERSION="1.3.2"
 git push origin main
 git tag "v${VERSION}"
 git push origin "v${VERSION}"

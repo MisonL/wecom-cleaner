@@ -3,6 +3,11 @@
 ## 1. 首选入口：任务卡片脚本（统一体验）
 
 所有动作优先使用 `skills/wecom-cleaner-agent/scripts/` 下脚本，直接输出用户可读报告。
+其中破坏性动作脚本（年月清理/全量治理/恢复/回收区治理）已统一内置 `--run-task` 阶段协议：
+
+- `--execute false` 等价于 `preview`
+- `--execute true` 等价于 `preview-execute-verify --yes`
+- 当命中目标为 `0` 时会自动跳过真实执行，且保留一致的任务卡片输出与退出码语义
 
 ### 1.1 年月清理
 
@@ -58,7 +63,7 @@ bash scripts/upgrade_report.sh --method npm --execute false
 
 # 明确授权后执行真实升级
 bash scripts/upgrade_report.sh --method npm --execute true
-bash scripts/upgrade_report.sh --method github-script --version 1.3.0 --execute true
+bash scripts/upgrade_report.sh --method github-script --version 1.3.2 --execute true
 ```
 
 ## 2. 常用全局参数
@@ -113,7 +118,7 @@ wecom-cleaner --check-update --output json
 
 # 程序升级（必须带 --upgrade-yes）
 wecom-cleaner --upgrade npm --upgrade-yes --output json
-wecom-cleaner --upgrade github-script --upgrade-version 1.3.0 --upgrade-yes --output json
+wecom-cleaner --upgrade github-script --upgrade-version 1.3.2 --upgrade-yes --output json
 ```
 
 ## 4. 退出码约定

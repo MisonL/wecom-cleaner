@@ -15,7 +15,7 @@ usage() {
   - 不指定 --version 时默认安装 latest。
 
 示例：
-  curl -fsSL https://raw.githubusercontent.com/MisonL/wecom-cleaner/main/scripts/upgrade.sh | bash -s -- --version 1.3.0
+  curl -fsSL https://raw.githubusercontent.com/MisonL/wecom-cleaner/main/scripts/upgrade.sh | bash -s -- --version 1.3.2
 USAGE
 }
 

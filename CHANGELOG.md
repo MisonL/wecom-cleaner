@@ -18,6 +18,28 @@
 
 - 暂无。
 
+## [1.3.2] - 2026-02-27
+
+### Added
+
+- 新增 Zig 版本元信息文件 `native/zig/src/version.zig`，用于构建期注入当前包版本。
+
+### Changed
+
+- `native/zig/build.sh` 改为从 `package.json` 自动写入 Zig 版本常量，避免核心 `--ping` 版本号手工维护。
+- 4 个破坏性 Agent 报告脚本统一切换到 `--run-task` 单入口：
+  - `cleanup_monthly_report.sh`
+  - `space_governance_report.sh`
+  - `restore_batch_report.sh`
+  - `recycle_maintain_report.sh`
+- 文档与命令示例更新到 `v1.3.2`（README、技能命令参考、实施计划、升级脚本示例）。
+
+### Fixed
+
+- 修复上述 4 个报告脚本错误分支在 `set -u` 下的变量展开隐患，失败场景可稳定返回非 0，避免上游误判成功。
+- 修复 Zig 核心 `--ping` 版本可能滞后的问题，确保与当前包版本一致。
+- 更新 `native/manifest.json` 到 `v1.3.2` 并同步双架构核心 SHA256。
+
 ## [1.3.1] - 2026-02-27
 
 ### Added
