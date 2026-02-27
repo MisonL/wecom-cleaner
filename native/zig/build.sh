@@ -2,6 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+PACKAGE_VERSION="$(node -p "JSON.parse(require('fs').readFileSync('${ROOT_DIR}/package.json', 'utf8')).version")"
+VERSION_ZIG_PATH="${ROOT_DIR}/native/zig/src/version.zig"
+printf 'pub const APP_VERSION = "%s";\n' "${PACKAGE_VERSION}" > "${VERSION_ZIG_PATH}"
 
 HOST_OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 HOST_ARCH="$(uname -m)"

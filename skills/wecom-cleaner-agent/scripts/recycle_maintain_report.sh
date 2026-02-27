@@ -107,19 +107,21 @@ local_time() {
   date -r "$((ts / 1000))" '+%Y-%m-%d %H:%M'
 }
 
-PREVIEW_JSON="$(mktemp -t wecom-recycle-preview.XXXX.json)"
-EXEC_JSON="$(mktemp -t wecom-recycle-exec.XXXX.json)"
-VERIFY_JSON="$(mktemp -t wecom-recycle-verify.XXXX.json)"
-PREVIEW_ERR="$(mktemp -t wecom-recycle-preview.XXXX.err)"
-EXEC_ERR="$(mktemp -t wecom-recycle-exec.XXXX.err)"
-VERIFY_ERR="$(mktemp -t wecom-recycle-verify.XXXX.err)"
-trap 'rm -f "$PREVIEW_JSON" "$EXEC_JSON" "$VERIFY_JSON" "$PREVIEW_ERR" "$EXEC_ERR" "$VERIFY_ERR"' EXIT
+RESULT_JSON="$(mktemp -t wecom-recycle-task.XXXX.json)"
+RESULT_ERR="$(mktemp -t wecom-recycle-task.XXXX.err)"
+PREVIEW_JSON="$RESULT_JSON"
+EXEC_JSON="$RESULT_JSON"
+RUN_TASK_MODE="preview"
+if [[ "$EXECUTE" == "true" ]]; then
+  RUN_TASK_MODE="preview-execute-verify"
+fi
+trap 'rm -f "$RESULT_JSON" "$RESULT_ERR"' EXIT
 
 run_cmd_to_file() {
-  local dry_run="$1"
+  local task_mode="$1"
   local output_file="$2"
   local err_file="$3"
-  local cmd_parts=(--recycle-maintain --output json --dry-run "$dry_run")
+  local cmd_parts=(--recycle-maintain --output json --run-task "$task_mode")
   if [[ -n "$RETENTION_ENABLED" ]]; then
     cmd_parts+=(--retention-enabled "$RETENTION_ENABLED")
   fi
@@ -138,34 +140,32 @@ run_cmd_to_file() {
   if [[ -n "$STATE_ROOT" ]]; then
     cmd_parts+=(--state-root "$STATE_ROOT")
   fi
-  if [[ "$dry_run" == "false" ]]; then
+  if [[ "$task_mode" == "preview-execute-verify" ]]; then
     cmd_parts+=(--yes)
   fi
   if ! wecom-cleaner "${cmd_parts[@]}" >"$output_file" 2>"$err_file"; then
+    local err_head
     err_head="$(head -n 3 "$err_file" 2>/dev/null || true)"
-    echo "执行失败（dry-run=${dry_run}）：${err_head:-未知错误}" >&2
+    echo "执行失败（run-task=${task_mode}）：${err_head:-未知错误}" >&2
     return 1
   fi
 }
 
-run_cmd_to_file true "$PREVIEW_JSON" "$PREVIEW_ERR"
+run_cmd_to_file "$RUN_TASK_MODE" "$RESULT_JSON" "$RESULT_ERR"
 
-candidate_count="$(jq -r '.summary.candidateCount // 0' "$PREVIEW_JSON")"
-deleted_batches_preview="$(jq -r '.summary.deletedBatches // 0' "$PREVIEW_JSON")"
-deleted_bytes_preview="$(jq -r '.summary.deletedBytes // 0' "$PREVIEW_JSON")"
-failed_batches_preview="$(jq -r '.summary.failedBatches // 0' "$PREVIEW_JSON")"
-selected_by_age="$(jq -r '.summary.selectedByAge // 0' "$PREVIEW_JSON")"
-selected_by_size="$(jq -r '.summary.selectedBySize // 0' "$PREVIEW_JSON")"
-before_batches="$(jq -r '.data.report.before.totalBatches // 0' "$PREVIEW_JSON")"
-before_bytes="$(jq -r '.data.report.before.totalBytes // 0' "$PREVIEW_JSON")"
-after_batches_preview="$(jq -r '.summary.remainingBatches // 0' "$PREVIEW_JSON")"
-after_bytes_preview="$(jq -r '.summary.remainingBytes // 0' "$PREVIEW_JSON")"
-threshold_bytes="$(jq -r '.data.report.thresholdBytes // 0' "$PREVIEW_JSON")"
-over_threshold="$(jq -r '.data.report.overThreshold // false' "$PREVIEW_JSON")"
-engine="$(jq -r '.meta.engine // "unknown"' "$PREVIEW_JSON")"
-duration_preview="$(jq -r '.meta.durationMs // 0' "$PREVIEW_JSON")"
-warnings_preview="$(jq -r '(.warnings // []) | length' "$PREVIEW_JSON")"
-errors_preview="$(jq -r '(.errors // []) | length' "$PREVIEW_JSON")"
+candidate_count="$(jq -r '((.data.taskPhases // [] | map(select(.name=="preview"))[0].stats.matchedTargets) // .summary.candidateCount // 0) | tonumber? // 0' "$RESULT_JSON")"
+deleted_batches_preview="$(jq -r '((.data.taskPhases // [] | map(select(.name=="preview"))[0].summary.deletedBatches) // .summary.deletedBatches // 0) | tonumber? // 0' "$RESULT_JSON")"
+deleted_bytes_preview="$(jq -r '((.data.taskPhases // [] | map(select(.name=="preview"))[0].summary.deletedBytes) // .summary.deletedBytes // 0) | tonumber? // 0' "$RESULT_JSON")"
+failed_batches_preview="$(jq -r '((.data.taskPhases // [] | map(select(.name=="preview"))[0].summary.failedBatches) // .summary.failedBatches // 0) | tonumber? // 0' "$RESULT_JSON")"
+selected_by_age="$(jq -r '((.data.taskPhases // [] | map(select(.name=="preview"))[0].summary.selectedByAge) // .summary.selectedByAge // 0) | tonumber? // 0' "$RESULT_JSON")"
+selected_by_size="$(jq -r '((.data.taskPhases // [] | map(select(.name=="preview"))[0].summary.selectedBySize) // .summary.selectedBySize // 0) | tonumber? // 0' "$RESULT_JSON")"
+before_batches="$(jq -r '.data.report.before.totalBatches // 0' "$RESULT_JSON")"
+before_bytes="$(jq -r '.data.report.before.totalBytes // 0' "$RESULT_JSON")"
+after_batches_preview="$(jq -r '((.data.taskPhases // [] | map(select(.name=="preview"))[0].summary.remainingBatches) // .summary.remainingBatches // 0) | tonumber? // 0' "$RESULT_JSON")"
+after_bytes_preview="$(jq -r '((.data.taskPhases // [] | map(select(.name=="preview"))[0].summary.remainingBytes) // .summary.remainingBytes // 0) | tonumber? // 0' "$RESULT_JSON")"
+threshold_bytes="$(jq -r '.data.report.thresholdBytes // 0' "$RESULT_JSON")"
+over_threshold="$(jq -r '.data.report.overThreshold // false' "$RESULT_JSON")"
+engine="$(jq -r '.data.engineUsed // .meta.engine // "unknown"' "$RESULT_JSON")"
 
 executed="false"
 deleted_batches_exec=0
@@ -173,36 +173,22 @@ deleted_bytes_exec=0
 failed_batches_exec=0
 after_batches_exec="$after_batches_preview"
 after_bytes_exec="$after_bytes_preview"
-duration_exec=0
-duration_verify=0
-warnings_exec=0
-warnings_verify=0
-errors_exec=0
-errors_verify=0
 candidate_count_verify="$candidate_count"
 
-if [[ "$candidate_count" -gt 0 && "$EXECUTE" == "true" ]]; then
-  run_cmd_to_file false "$EXEC_JSON" "$EXEC_ERR"
+execute_phase_status="$(jq -r '.data.taskPhases // [] | map(select(.name=="execute"))[0].status // "missing"' "$RESULT_JSON")"
+if [[ "$execute_phase_status" == "completed" ]]; then
   executed="true"
-  deleted_batches_exec="$(jq -r '.summary.deletedBatches // 0' "$EXEC_JSON")"
-  deleted_bytes_exec="$(jq -r '.summary.deletedBytes // 0' "$EXEC_JSON")"
-  failed_batches_exec="$(jq -r '.summary.failedBatches // 0' "$EXEC_JSON")"
-  after_batches_exec="$(jq -r '.summary.remainingBatches // 0' "$EXEC_JSON")"
-  after_bytes_exec="$(jq -r '.summary.remainingBytes // 0' "$EXEC_JSON")"
-  duration_exec="$(jq -r '.meta.durationMs // 0' "$EXEC_JSON")"
-  warnings_exec="$(jq -r '(.warnings // []) | length' "$EXEC_JSON")"
-  errors_exec="$(jq -r '(.errors // []) | length' "$EXEC_JSON")"
-
-  run_cmd_to_file true "$VERIFY_JSON" "$VERIFY_ERR"
-  candidate_count_verify="$(jq -r '.summary.candidateCount // 0' "$VERIFY_JSON")"
-  duration_verify="$(jq -r '.meta.durationMs // 0' "$VERIFY_JSON")"
-  warnings_verify="$(jq -r '(.warnings // []) | length' "$VERIFY_JSON")"
-  errors_verify="$(jq -r '(.errors // []) | length' "$VERIFY_JSON")"
+  deleted_batches_exec="$(jq -r '((.data.taskPhases // [] | map(select(.name=="execute" and .status=="completed"))[0].summary.deletedBatches) // .summary.deletedBatches // 0) | tonumber? // 0' "$RESULT_JSON")"
+  deleted_bytes_exec="$(jq -r '((.data.taskPhases // [] | map(select(.name=="execute" and .status=="completed"))[0].summary.deletedBytes) // .summary.deletedBytes // 0) | tonumber? // 0' "$RESULT_JSON")"
+  failed_batches_exec="$(jq -r '((.data.taskPhases // [] | map(select(.name=="execute" and .status=="completed"))[0].summary.failedBatches) // .summary.failedBatches // 0) | tonumber? // 0' "$RESULT_JSON")"
+  after_batches_exec="$(jq -r '((.data.taskPhases // [] | map(select(.name=="execute" and .status=="completed"))[0].summary.remainingBatches) // .summary.remainingBatches // 0) | tonumber? // 0' "$RESULT_JSON")"
+  after_bytes_exec="$(jq -r '((.data.taskPhases // [] | map(select(.name=="execute" and .status=="completed"))[0].summary.remainingBytes) // .summary.remainingBytes // 0) | tonumber? // 0' "$RESULT_JSON")"
 fi
+candidate_count_verify="$(jq -r '((.data.taskPhases // [] | map(select(.name=="verify" and .status=="completed"))[0].stats.matchedTargets) // ((.data.taskPhases // [] | map(select(.name=="preview" and .status=="completed"))[0].stats.matchedTargets) // .summary.candidateCount // 0)) | tonumber? // 0' "$RESULT_JSON")"
 
-duration_total=$((duration_preview + duration_exec + duration_verify))
-warnings_total=$((warnings_preview + warnings_exec + warnings_verify))
-errors_total=$((errors_preview + errors_exec + errors_verify))
+duration_total="$(jq -r 'if ((.data.taskPhases // []) | length) > 0 then ([.data.taskPhases[] | (.durationMs // 0 | tonumber? // 0)] | add) else (.meta.durationMs // 0 | tonumber? // 0) end' "$RESULT_JSON")"
+warnings_total="$(jq -r 'if ((.data.taskPhases // []) | length) > 0 then ([.data.taskPhases[] | (.warningCount // 0 | tonumber? // 0)] | add) else ((.warnings // []) | length) end' "$RESULT_JSON")"
+errors_total="$(jq -r 'if ((.data.taskPhases // []) | length) > 0 then ([.data.taskPhases[] | (.errorCount // 0 | tonumber? // 0)] | add) else ((.errors // []) | length) end' "$RESULT_JSON")"
 
 printf '\n=== 回收区治理结果（给用户）===\n'
 if [[ "$executed" == "true" ]]; then

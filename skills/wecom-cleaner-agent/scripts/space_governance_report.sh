@@ -135,16 +135,18 @@ elif [[ "$ACCOUNTS" == "current" ]]; then
   account_scope_label="当前账号"
 fi
 
-PREVIEW_JSON="$(mktemp -t wecom-space-preview.XXXX.json)"
-EXEC_JSON="$(mktemp -t wecom-space-exec.XXXX.json)"
-VERIFY_JSON="$(mktemp -t wecom-space-verify.XXXX.json)"
-PREVIEW_ERR="$(mktemp -t wecom-space-preview.XXXX.err)"
-EXEC_ERR="$(mktemp -t wecom-space-exec.XXXX.err)"
-VERIFY_ERR="$(mktemp -t wecom-space-verify.XXXX.err)"
-trap 'rm -f "$PREVIEW_JSON" "$EXEC_JSON" "$VERIFY_JSON" "$PREVIEW_ERR" "$EXEC_ERR" "$VERIFY_ERR"' EXIT
+RESULT_JSON="$(mktemp -t wecom-space-task.XXXX.json)"
+RESULT_ERR="$(mktemp -t wecom-space-task.XXXX.err)"
+PREVIEW_JSON="$RESULT_JSON"
+EXEC_JSON="$RESULT_JSON"
+RUN_TASK_MODE="preview"
+if [[ "$EXECUTE" == "true" ]]; then
+  RUN_TASK_MODE="preview-execute-verify"
+fi
+trap 'rm -f "$RESULT_JSON" "$RESULT_ERR"' EXIT
 
 run_cmd_to_file() {
-  local dry_run="$1"
+  local task_mode="$1"
   local output_file="$2"
   local err_file="$3"
   local cmd_parts=(
@@ -154,7 +156,7 @@ run_cmd_to_file() {
     --suggested-only "$SUGGESTED_ONLY"
     --allow-recent-active "$ALLOW_RECENT_ACTIVE"
     --output json
-    --dry-run "$dry_run"
+    --run-task "$task_mode"
   )
   if [[ -n "$TARGETS" ]]; then
     cmd_parts+=(--targets "$TARGETS")
@@ -168,29 +170,27 @@ run_cmd_to_file() {
   if [[ -n "$EXTERNAL_ROOTS_SOURCE" ]]; then
     cmd_parts+=(--external-roots-source "$EXTERNAL_ROOTS_SOURCE")
   fi
-  if [[ "$dry_run" == "false" ]]; then
+  if [[ "$task_mode" == "preview-execute-verify" ]]; then
     cmd_parts+=(--yes)
   fi
   if ! wecom-cleaner "${cmd_parts[@]}" >"$output_file" 2>"$err_file"; then
+    local err_head
     err_head="$(head -n 3 "$err_file" 2>/dev/null || true)"
-    echo "执行失败（dry-run=${dry_run}）：${err_head:-未知错误}" >&2
+    echo "执行失败（run-task=${task_mode}）：${err_head:-未知错误}" >&2
     return 1
   fi
 }
 
-run_cmd_to_file true "$PREVIEW_JSON" "$PREVIEW_ERR"
+run_cmd_to_file "$RUN_TASK_MODE" "$RESULT_JSON" "$RESULT_ERR"
 
-matched_targets="$(jq -r '.summary.matchedTargets // 0' "$PREVIEW_JSON")"
-matched_bytes="$(jq -r '.summary.matchedBytes // (.data.report.matched.totalBytes // 0)' "$PREVIEW_JSON")"
-preview_reclaimed="$(jq -r '.summary.reclaimedBytes // 0' "$PREVIEW_JSON")"
-preview_failed="$(jq -r '.summary.failedCount // 0' "$PREVIEW_JSON")"
-tier_count="$(jq -r '.summary.tierCount // (.data.report.matched.byTier // [] | length)' "$PREVIEW_JSON")"
-target_type_count="$(jq -r '.summary.targetTypeCount // (.data.report.matched.byTargetType // [] | length)' "$PREVIEW_JSON")"
-root_path_count="$(jq -r '.summary.rootPathCount // (.data.report.matched.byRoot // [] | length)' "$PREVIEW_JSON")"
-engine="$(jq -r '.data.engineUsed // .meta.engine // "unknown"' "$PREVIEW_JSON")"
-duration_preview="$(jq -r '.meta.durationMs // 0' "$PREVIEW_JSON")"
-warnings_preview="$(jq -r '(.warnings // []) | length' "$PREVIEW_JSON")"
-errors_preview="$(jq -r '(.errors // []) | length' "$PREVIEW_JSON")"
+matched_targets="$(jq -r '((.data.taskPhases // [] | map(select(.name=="preview"))[0].stats.matchedTargets) // .summary.matchedTargets // 0) | tonumber? // 0' "$RESULT_JSON")"
+matched_bytes="$(jq -r '((.data.taskPhases // [] | map(select(.name=="preview"))[0].stats.matchedBytes) // .summary.matchedBytes // (.data.report.matched.totalBytes // 0)) | tonumber? // 0' "$RESULT_JSON")"
+preview_reclaimed="$(jq -r '((.data.taskPhases // [] | map(select(.name=="preview"))[0].stats.reclaimedBytes) // .summary.reclaimedBytes // 0) | tonumber? // 0' "$RESULT_JSON")"
+preview_failed="$(jq -r '((.data.taskPhases // [] | map(select(.name=="preview"))[0].stats.failedCount) // .summary.failedCount // 0) | tonumber? // 0' "$RESULT_JSON")"
+tier_count="$(jq -r '.summary.tierCount // (.data.report.matched.byTier // [] | length) // 0' "$RESULT_JSON")"
+target_type_count="$(jq -r '.summary.targetTypeCount // (.data.report.matched.byTargetType // [] | length) // 0' "$RESULT_JSON")"
+root_path_count="$(jq -r '.summary.rootPathCount // (.data.report.matched.byRoot // [] | length) // 0' "$RESULT_JSON")"
+engine="$(jq -r '.data.engineUsed // .meta.engine // "unknown"' "$RESULT_JSON")"
 
 executed="false"
 execute_success=0
@@ -199,31 +199,16 @@ execute_failed=0
 execute_reclaimed=0
 execute_batch="-"
 verify_matched="$matched_targets"
-duration_exec=0
-duration_verify=0
-warnings_exec=0
-warnings_verify=0
-errors_exec=0
-errors_verify=0
-
-if [[ "$matched_targets" -gt 0 && "$EXECUTE" == "true" ]]; then
-  run_cmd_to_file false "$EXEC_JSON" "$EXEC_ERR"
+execute_phase_status="$(jq -r '.data.taskPhases // [] | map(select(.name=="execute"))[0].status // "missing"' "$RESULT_JSON")"
+if [[ "$execute_phase_status" == "completed" ]]; then
   executed="true"
-  execute_success="$(jq -r '.summary.successCount // 0' "$EXEC_JSON")"
-  execute_skipped="$(jq -r '.summary.skippedCount // 0' "$EXEC_JSON")"
-  execute_failed="$(jq -r '.summary.failedCount // 0' "$EXEC_JSON")"
-  execute_reclaimed="$(jq -r '.summary.reclaimedBytes // 0' "$EXEC_JSON")"
-  execute_batch="$(jq -r '.summary.batchId // "-"' "$EXEC_JSON")"
-  duration_exec="$(jq -r '.meta.durationMs // 0' "$EXEC_JSON")"
-  warnings_exec="$(jq -r '(.warnings // []) | length' "$EXEC_JSON")"
-  errors_exec="$(jq -r '(.errors // []) | length' "$EXEC_JSON")"
-
-  run_cmd_to_file true "$VERIFY_JSON" "$VERIFY_ERR"
-  verify_matched="$(jq -r '.summary.matchedTargets // 0' "$VERIFY_JSON")"
-  duration_verify="$(jq -r '.meta.durationMs // 0' "$VERIFY_JSON")"
-  warnings_verify="$(jq -r '(.warnings // []) | length' "$VERIFY_JSON")"
-  errors_verify="$(jq -r '(.errors // []) | length' "$VERIFY_JSON")"
+  execute_success="$(jq -r '((.data.taskPhases // [] | map(select(.name=="execute" and .status=="completed"))[0].stats.successCount) // .summary.successCount // 0) | tonumber? // 0' "$RESULT_JSON")"
+  execute_skipped="$(jq -r '((.data.taskPhases // [] | map(select(.name=="execute" and .status=="completed"))[0].stats.skippedCount) // .summary.skippedCount // 0) | tonumber? // 0' "$RESULT_JSON")"
+  execute_failed="$(jq -r '((.data.taskPhases // [] | map(select(.name=="execute" and .status=="completed"))[0].stats.failedCount) // .summary.failedCount // 0) | tonumber? // 0' "$RESULT_JSON")"
+  execute_reclaimed="$(jq -r '((.data.taskPhases // [] | map(select(.name=="execute" and .status=="completed"))[0].stats.reclaimedBytes) // .summary.reclaimedBytes // 0) | tonumber? // 0' "$RESULT_JSON")"
+  execute_batch="$(jq -r '((.data.taskPhases // [] | map(select(.name=="execute" and .status=="completed"))[0].stats.batchId) // .summary.batchId // "-")' "$RESULT_JSON")"
 fi
+verify_matched="$(jq -r '((.data.taskPhases // [] | map(select(.name=="verify" and .status=="completed"))[0].stats.matchedTargets) // ((.data.taskPhases // [] | map(select(.name=="preview" and .status=="completed"))[0].stats.matchedTargets) // .summary.matchedTargets // 0)) | tonumber? // 0' "$RESULT_JSON")"
 
 if [[ "$executed" == "true" ]]; then
   conclusion="已完成"
@@ -236,9 +221,9 @@ else
   reason="已完成预演，等待你确认执行真实治理。"
 fi
 
-duration_total=$((duration_preview + duration_exec + duration_verify))
-warnings_total=$((warnings_preview + warnings_exec + warnings_verify))
-errors_total=$((errors_preview + errors_exec + errors_verify))
+duration_total="$(jq -r 'if ((.data.taskPhases // []) | length) > 0 then ([.data.taskPhases[] | (.durationMs // 0 | tonumber? // 0)] | add) else (.meta.durationMs // 0 | tonumber? // 0) end' "$RESULT_JSON")"
+warnings_total="$(jq -r 'if ((.data.taskPhases // []) | length) > 0 then ([.data.taskPhases[] | (.warningCount // 0 | tonumber? // 0)] | add) else ((.warnings // []) | length) end' "$RESULT_JSON")"
+errors_total="$(jq -r 'if ((.data.taskPhases // []) | length) > 0 then ([.data.taskPhases[] | (.errorCount // 0 | tonumber? // 0)] | add) else ((.errors // []) | length) end' "$RESULT_JSON")"
 
 printf '\n=== 全量空间治理结果（给用户）===\n'
 printf -- '- 执行结论：%s（%s）\n' "$conclusion" "$reason"
