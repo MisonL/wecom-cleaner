@@ -17,7 +17,7 @@ usage() {
   - 默认会在升级后同步 Agent skills（可通过 --sync-skills false 关闭）。
 
 示例：
-  curl -fsSL https://raw.githubusercontent.com/MisonL/wecom-cleaner/main/scripts/upgrade.sh | bash -s -- --version 1.3.2
+  curl -fsSL https://raw.githubusercontent.com/MisonL/wecom-cleaner/main/scripts/upgrade.sh | bash -s -- --version 1.3.3
 USAGE
 }
 
