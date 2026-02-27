@@ -39,6 +39,8 @@
 - dry-run（预演）
 - 真实执行（`--dry-run false --yes`）
 - 真实执行后复核（同条件二次运行）
+- 阶段协议（`--run-task preview|execute|preview-execute-verify`）
+- 扫描诊断（`--scan-debug summary|full`）
 
 ### 维度 E：异常与边界
 
@@ -92,13 +94,15 @@
 
 1. `cleanup_monthly`：`--cutoff-month` + `--output json` + dry-run（有目标 / 无目标）
 2. `cleanup_monthly`：真实执行 + 复核（复核命中应下降或归零）
-3. `space_governance`：`suggested-only` 与 `allow-recent-active` 组合
-4. `restore`：`skip/overwrite/rename` 三冲突策略
-5. `recycle_maintain`：`disabled` / `no_candidate` / `partial_failed`
-6. `doctor`：只读模式不创建状态目录
-7. `check_update`：npm 正常 / npm 失败回退 GitHub / 全部失败
-8. `upgrade`：未确认拒绝、已是最新不执行、执行失败可返回非 0
-9. Agent 报告脚本：成功、无目标、失败三态退出码与卡片完整性
+3. `cleanup_monthly`：`--run-task preview-execute-verify --yes`（阶段字段稳定）
+4. `cleanup_monthly`：`--scan-debug summary/full`（诊断字段稳定）
+5. `space_governance`：`suggested-only` 与 `allow-recent-active` 组合
+6. `restore`：`skip/overwrite/rename` 三冲突策略
+7. `recycle_maintain`：`disabled` / `no_candidate` / `partial_failed`
+8. `doctor`：只读模式不创建状态目录
+9. `check_update`：npm 正常 / npm 失败回退 GitHub / 全部失败
+10. `upgrade`：未确认拒绝、已是最新不执行、执行失败可返回非 0
+11. Agent 报告脚本：成功、无目标、失败三态退出码与卡片完整性
 
 ## 当前门禁（执行顺序）
 

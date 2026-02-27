@@ -34,6 +34,10 @@
 - 默认 `dry-run`（不执行真实删除/恢复）。
 - 真实执行需显式传 `--yes`。
 - 若传 `--dry-run false` 且未传 `--yes`，退出码为 `3`。
+- 可通过 `--run-task` 启用阶段协议：
+  - `preview`：仅预演阶段。
+  - `execute`：仅真实执行阶段（破坏性动作需 `--yes`）。
+  - `preview-execute-verify`：预演 -> 真实执行 -> 同条件复核（预演命中 `0` 时自动跳过执行与复核）。
 
 ## 4. 输出协议
 
@@ -41,6 +45,8 @@
 
 - `--output json|text`（默认 `json`）
 - `--json` 为兼容别名（等价 `--output json`）
+- `--run-task preview|execute|preview-execute-verify`（推荐破坏性动作使用）
+- `--scan-debug off|summary|full`（默认 `off`）
 
 JSON 顶层字段：
 
@@ -53,6 +59,9 @@ JSON 顶层字段：
 - `data`：动作明细数据
 - `meta`：元信息（版本、耗时、引擎、时间戳等）
 - `data.userFacingSummary`：统一的用户侧结果摘要（范围 + 结果 + 关键分布）
+- `data.taskPhases`：阶段协议明细（仅在 `--run-task` 时返回）
+- `data.taskCard`：阶段任务卡片（仅在 `--run-task` 时返回）
+- `data.scanDebug`：扫描诊断信息（仅在 `--scan-debug summary|full` 时返回）
 
 `cleanup_monthly` 常见 `summary` 字段：
 
@@ -215,6 +224,8 @@ JSON 顶层字段：
 - `--upgrade-channel <stable|pre>`：更新通道（稳定版/预发布）
 - `--upgrade-version <x.y.z>`：升级到指定版本
 - `--upgrade-yes`：确认执行升级（无此参数将拒绝执行升级）
+- `--run-task preview|execute|preview-execute-verify`：无交互阶段协议
+- `--scan-debug off|summary|full`：扫描诊断输出等级
 
 ## 7. 动作参数
 

@@ -75,25 +75,35 @@ bash scripts/upgrade_report.sh --method github-script --version 1.3.0 --execute 
 ## 3. 回退方案：直接调用 wecom-cleaner
 
 仅在脚本不可用时使用直接命令，且保持 `--output json`。
+破坏性动作必须使用 `--run-task`，并优先消费 `data.taskCard` / `data.taskPhases`。
 
 ```bash
 # 年月清理（预演）
-wecom-cleaner --cleanup-monthly --accounts all --cutoff-month 2024-07 --output json
+wecom-cleaner --cleanup-monthly --accounts all --cutoff-month 2024-07 --run-task preview --output json
 
-# 年月清理（真实执行）
-wecom-cleaner --cleanup-monthly --accounts all --cutoff-month 2024-07 --dry-run false --yes --output json
+# 年月清理（真实执行 + 复核）
+wecom-cleaner --cleanup-monthly --accounts all --cutoff-month 2024-07 --run-task preview-execute-verify --yes --output json
 
 # 会话分析
 wecom-cleaner --analysis-only --accounts all --output json
 
-# 全量空间治理
-wecom-cleaner --space-governance --accounts all --tiers safe,caution --output json
+# 全量空间治理（预演）
+wecom-cleaner --space-governance --accounts all --tiers safe,caution --run-task preview --output json
 
-# 批次恢复
-wecom-cleaner --restore-batch 20260226-154831-c418d9 --conflict rename --output json
+# 全量空间治理（真实执行 + 复核）
+wecom-cleaner --space-governance --accounts all --tiers safe,caution --run-task preview-execute-verify --yes --output json
 
-# 回收区治理
-wecom-cleaner --recycle-maintain --output json
+# 批次恢复（预演）
+wecom-cleaner --restore-batch 20260226-154831-c418d9 --conflict rename --run-task preview --output json
+
+# 批次恢复（真实执行 + 复核）
+wecom-cleaner --restore-batch 20260226-154831-c418d9 --conflict rename --run-task preview-execute-verify --yes --output json
+
+# 回收区治理（预演）
+wecom-cleaner --recycle-maintain --run-task preview --output json
+
+# 回收区治理（真实执行 + 复核）
+wecom-cleaner --recycle-maintain --run-task preview-execute-verify --yes --output json
 
 # 系统自检
 wecom-cleaner --doctor --output json

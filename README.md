@@ -238,6 +238,9 @@ wecom-cleaner --space-governance \
 # 回收区治理（按策略执行）
 wecom-cleaner --recycle-maintain --dry-run false --yes
 
+# 年月清理（三阶段协议：预演 -> 执行 -> 复核）
+wecom-cleaner --cleanup-monthly --accounts all --cutoff-month 2024-04 --run-task preview-execute-verify --yes
+
 # 批次恢复（冲突策略：重命名）
 wecom-cleaner --restore-batch 20260226-105009-ffa098 --conflict rename
 
@@ -258,6 +261,8 @@ wecom-cleaner --upgrade github-script --upgrade-version 1.3.1 --upgrade-yes
 
 - `--output json|text`：无交互输出格式，默认 `json`。
 - `--json`：兼容别名，等价于 `--output json`。
+- `--run-task preview|execute|preview-execute-verify`：阶段任务协议（推荐给 Agent）。
+- `--scan-debug off|summary|full`：扫描诊断信息输出等级。
 - `--mode`：兼容参数，建议迁移到动作参数（如 `--cleanup-monthly`）。
 - `--save-config`：将本次全局配置参数写回 `config.json`。
 - `--help` / `-h`：输出命令帮助并退出。
@@ -280,6 +285,7 @@ wecom-cleaner --upgrade github-script --upgrade-version 1.3.1 --upgrade-yes
 - `summary.rootPathCount`：涉及的清理根目录数量
 - `summary.accountCount` / `monthCount` / `categoryCount` / `externalRootCount`
 - `summary.cutoffMonth`：截止月份（当使用 `--cutoff-month` 时）
+- `summary.runTaskMode` / `summary.taskDecision`：阶段协议模式与决策（仅 `--run-task`）
 
 `cleanup-monthly` 还会在 `data.report` 中返回可展示明细：
 
@@ -288,6 +294,9 @@ wecom-cleaner --upgrade github-script --upgrade-version 1.3.1 --upgrade-yes
 - `data.report.matched.rootStats`：按根目录统计（条目数、体积）
 - `data.report.matched.topPaths`：按体积 Top 路径样例
 - `data.report.executed.byCategory/byMonth/byRoot`：真实执行落地统计（成功/跳过/失败 + 体积）
+- `data.taskPhases`：阶段执行明细（预演/执行/复核）
+- `data.taskCard`：面向用户的任务卡片聚合结果
+- `data.scanDebug`：扫描诊断（当 `--scan-debug summary|full`）
 
 #### `analysis-only`
 
@@ -355,6 +364,8 @@ wecom-cleaner --upgrade github-script --upgrade-version 1.3.1 --upgrade-yes
 - `--theme <auto|light|dark>`：Logo 主题
 - `--interactive`：即使携带参数也进入交互流程（可配合 `--mode`）
 - `--force`：锁异常场景下强制清理并继续（兜底参数，通常无需）
+- `--run-task preview|execute|preview-execute-verify`：阶段任务协议（推荐无交互自动化调用）
+- `--scan-debug off|summary|full`：附加扫描诊断信息
 
 ### `--theme` 可选值
 
@@ -438,8 +449,8 @@ npm run pack:tgz:dry-run
 
 当前基线（主分支）：
 
-- 单元测试：`100/100` 通过。
-- 覆盖率：`statements 87.63%`，`branches 74.03%`，`functions 92.47%`，`lines 87.63%`。
+- 单元测试：`107/107` 通过。
+- 覆盖率：`statements 87.66%`，`branches 74.38%`，`functions 92.47%`，`lines 87.66%`。
 - 全菜单 smoke：通过（含恢复冲突分支与 doctor JSON 分支）。
 
 ## 测试矩阵
@@ -482,7 +493,7 @@ npm run pack:tgz
 npm run pack:release-assets
 
 # 2) 推送主分支与标签
-VERSION="1.3.0"
+VERSION="1.3.1"
 git push origin main
 git tag "v${VERSION}"
 git push origin "v${VERSION}"

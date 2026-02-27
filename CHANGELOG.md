@@ -18,6 +18,33 @@
 
 - 暂无。
 
+## [1.3.1] - 2026-02-27
+
+### Added
+
+- 新增无交互阶段协议 `--run-task`：
+  - `preview`
+  - `execute`
+  - `preview-execute-verify`
+- 新增扫描诊断参数 `--scan-debug off|summary|full`。
+- 新增无交互阶段输出字段：
+  - `data.taskPhases`
+  - `data.taskCard`
+  - `data.scanDebug`
+- 新增回归测试覆盖：
+  - `run-task` 三阶段/无目标跳过/确认校验
+  - `scan-debug` summary/full 字段稳定性
+
+### Changed
+
+- `--help` 与 CLI 使用说明补充阶段协议与扫描诊断参数。
+- skills 文档与命令参考更新：CLI 回退场景优先使用 `--run-task`，读取 `taskCard/taskPhases`。
+- 测试矩阵更新：加入阶段协议与扫描诊断维度。
+
+### Fixed
+
+- 统一无交互任务编排语义：破坏性动作可由单次命令完成“预演 -> 执行 -> 复核”，避免脚本侧多次拼接导致的统计口径漂移。
+
 ## [1.3.0] - 2026-02-27
 
 ### Added
