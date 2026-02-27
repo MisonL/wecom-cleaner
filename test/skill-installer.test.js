@@ -74,6 +74,13 @@ test('installSkill 在 force 模式可覆盖旧版本', async (t) => {
 
   const content = await fs.readFile(targetSkillFile, 'utf-8');
   assert.equal(content, '# new');
+
+  const siblingEntries = await fs.readdir(targetRoot, { withFileTypes: true });
+  const backupDirs = siblingEntries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .filter((name) => name.startsWith(`${SKILL_NAME}.backup-`));
+  assert.deepEqual(backupDirs, []);
 });
 
 test('installSkill 在 dry-run 模式只返回计划不写入文件', async (t) => {
