@@ -184,7 +184,7 @@ log_user 0
 log_file -noappend $logfile
 spawn node src/cli.js --interactive --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
 expect "开始菜单"
-send "\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\r"
+send "\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\r"
 expect {
   "已退出。" { exit 0 }
   timeout { exit 11 }
