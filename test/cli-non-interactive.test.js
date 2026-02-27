@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import path from 'node:path';
 import os from 'node:os';
 import { promises as fs } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { makeTempDir, removeDir } from './helpers/temp.js';
 
@@ -52,6 +53,61 @@ async function prepareAutoExternalRoot(prefix = 'wecom-cli-auto-root') {
   };
 }
 
+async function startMockUpdateServer() {
+  const state = {
+    npmHits: 0,
+    githubHits: 0,
+    unknownHits: 0,
+  };
+
+  const server = http.createServer((req, res) => {
+    const requestUrl = new URL(req.url || '/', 'http://127.0.0.1');
+    const pathname = requestUrl.pathname;
+    const decodedPath = decodeURIComponent(pathname);
+
+    if (decodedPath === '/@mison/wecom-cleaner') {
+      state.npmHits += 1;
+      res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: 'mock_npm_failure' }));
+      return;
+    }
+
+    if (pathname === '/repos/MisonL/wecom-cleaner/releases/latest') {
+      state.githubHits += 1;
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ tag_name: 'v9.9.9', prerelease: false, draft: false }));
+      return;
+    }
+
+    state.unknownHits += 1;
+    res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ error: 'not_found', path: pathname }));
+  });
+
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject);
+      resolve();
+    });
+  });
+
+  const address = server.address();
+  if (!address || typeof address === 'string') {
+    await new Promise((resolve) => server.close(() => resolve()));
+    throw new Error('mock_server_address_invalid');
+  }
+
+  return {
+    state,
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    close: async () =>
+      new Promise((resolve) => {
+        server.close(() => resolve());
+      }),
+  };
+}
+
 function runCli(args, env = {}) {
   return spawnSync(process.execPath, [CLI_PATH, ...args], {
     cwd: REPO_ROOT,
@@ -62,6 +118,40 @@ function runCli(args, env = {}) {
       ...env,
     },
     encoding: 'utf-8',
+  });
+}
+
+function runCliAsync(args, env = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [CLI_PATH, ...args], {
+      cwd: REPO_ROOT,
+      env: {
+        ...process.env,
+        WECOM_CLEANER_NATIVE_AUTO_REPAIR: 'false',
+        WECOM_CLEANER_AUTO_UPDATE: 'false',
+        ...env,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      encoding: 'utf-8',
+    });
+
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr?.on('data', (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on('error', (error) => reject(error));
+    child.on('close', (code, signal) => {
+      resolve({
+        status: code,
+        signal,
+        stdout,
+        stderr,
+      });
+    });
   });
 }
 
@@ -638,6 +728,34 @@ test('CLI 支持 --help 并返回无交互动作说明', () => {
   assert.match(output, /--upgrade <npm\|github-script>/);
   assert.match(output, /--run-task preview\|execute\|preview-execute-verify/);
   assert.match(output, /--scan-debug off\|summary\|full/);
+});
+
+test('无交互 --check-update 在 npm 失败时回退 GitHub 并保留错误痕迹', async (t) => {
+  const mockServer = await startMockUpdateServer();
+  t.after(async () => {
+    await mockServer.close();
+  });
+
+  const result = await runCliAsync(['--check-update'], {
+    WECOM_CLEANER_UPDATE_NPM_REGISTRY_URL: mockServer.baseUrl,
+    WECOM_CLEANER_UPDATE_GITHUB_API_BASE_URL: mockServer.baseUrl,
+  });
+
+  assert.equal(result.status, 0);
+  const payload = JSON.parse(String(result.stdout || '{}'));
+  assert.equal(payload.action, 'check_update');
+  assert.equal(payload.ok, true);
+  assert.equal(payload.summary.checked, true);
+  assert.equal(payload.summary.source, 'github');
+  assert.equal(payload.summary.latestVersion, '9.9.9');
+  assert.equal(payload.data?.update?.sourceUsed, 'github');
+  assert.equal(mockServer.state.npmHits >= 1, true);
+  assert.equal(mockServer.state.githubHits >= 1, true);
+  assert.equal(Array.isArray(payload.errors), true);
+  assert.equal(
+    payload.errors.some((item) => String(item.message || '').includes('npm检查失败')),
+    true
+  );
 });
 
 test('CLI 支持 --version 并输出版本号', () => {

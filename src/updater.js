@@ -1,6 +1,8 @@
 import { spawnSync } from 'node:child_process';
 
 const DEFAULT_TIMEOUT_MS = 2500;
+const DEFAULT_NPM_REGISTRY_BASE_URL = 'https://registry.npmjs.org';
+const DEFAULT_GITHUB_API_BASE_URL = 'https://api.github.com';
 
 function parseSemver(rawVersion) {
   const text = String(rawVersion || '')
@@ -221,14 +223,26 @@ async function fetchJson(url, fetchImpl, timeoutMs = DEFAULT_TIMEOUT_MS) {
   }
 }
 
+function normalizeBaseUrl(input, fallback) {
+  const raw = String(input || '')
+    .trim()
+    .replace(/\/+$/, '');
+  if (!raw) {
+    return fallback;
+  }
+  return raw;
+}
+
 export async function fetchLatestFromNpm({
   packageName,
   channel = 'stable',
   fetchImpl = fetch,
   timeoutMs = DEFAULT_TIMEOUT_MS,
+  registryBaseUrl = process.env.WECOM_CLEANER_UPDATE_NPM_REGISTRY_URL || DEFAULT_NPM_REGISTRY_BASE_URL,
 }) {
   const encoded = encodeURIComponent(String(packageName || '').trim());
-  const url = `https://registry.npmjs.org/${encoded}`;
+  const base = normalizeBaseUrl(registryBaseUrl, DEFAULT_NPM_REGISTRY_BASE_URL);
+  const url = `${base}/${encoded}`;
   const payload = await fetchJson(url, fetchImpl, timeoutMs);
   const distTags = payload?.['dist-tags'] || {};
   const latest = channel === 'pre' ? distTags.next || distTags.latest : distTags.latest;
@@ -262,8 +276,10 @@ export async function fetchLatestFromGithub({
   channel = 'stable',
   fetchImpl = fetch,
   timeoutMs = DEFAULT_TIMEOUT_MS,
+  apiBaseUrl = process.env.WECOM_CLEANER_UPDATE_GITHUB_API_BASE_URL || DEFAULT_GITHUB_API_BASE_URL,
 }) {
-  const base = `https://api.github.com/repos/${owner}/${repo}`;
+  const baseRoot = normalizeBaseUrl(apiBaseUrl, DEFAULT_GITHUB_API_BASE_URL);
+  const base = `${baseRoot}/repos/${owner}/${repo}`;
   if (channel === 'stable') {
     const payload = await fetchJson(`${base}/releases/latest`, fetchImpl, timeoutMs);
     const version = normalizeGitTagVersion(payload?.tag_name);
@@ -299,6 +315,8 @@ export async function checkLatestVersion({
   fetchImpl = fetch,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   reason = 'manual',
+  npmRegistryBaseUrl = process.env.WECOM_CLEANER_UPDATE_NPM_REGISTRY_URL || DEFAULT_NPM_REGISTRY_BASE_URL,
+  githubApiBaseUrl = process.env.WECOM_CLEANER_UPDATE_GITHUB_API_BASE_URL || DEFAULT_GITHUB_API_BASE_URL,
 }) {
   const current = normalizeVersion(currentVersion);
   const normalizedChannel = channel === 'pre' ? 'pre' : 'stable';
@@ -310,6 +328,7 @@ export async function checkLatestVersion({
       channel: normalizedChannel,
       fetchImpl,
       timeoutMs,
+      registryBaseUrl: npmRegistryBaseUrl,
     });
     const latest = npmResult.version;
     return {
@@ -335,6 +354,7 @@ export async function checkLatestVersion({
       channel: normalizedChannel,
       fetchImpl,
       timeoutMs,
+      apiBaseUrl: githubApiBaseUrl,
     });
     const latest = githubResult.version;
     return {
