@@ -562,7 +562,7 @@ export function updateWarningMessage(checkResult, skipVersion = '') {
   if (!latest || latest === normalizeVersion(skipVersion)) {
     return '';
   }
-  return `检测到新版本 v${latest}（当前 v${current || 'unknown'}，来源 ${result.sourceUsed || 'unknown'}）。可使用 --upgrade npm --upgrade-yes 升级。`;
+  return `检测到新版本 v${latest}（当前 v${current || 'unknown'}，来源 ${result.sourceUsed || 'unknown'}）。可使用 wecom-cleaner update apply npm --ack UPGRADE 升级。`;
 }
 
 export function shouldSkipVersion(checkResult, skipVersion = '') {

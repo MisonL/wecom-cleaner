@@ -124,6 +124,10 @@ export function defaultConfig() {
     aliasPath: path.join(stateRoot, 'account-aliases.json'),
     serviceConfigPath: path.join(stateRoot, 'service-config.json'),
     serviceStatePath: path.join(stateRoot, 'service-state.json'),
+    latestTaskPath: path.join(stateRoot, 'latest-task.json'),
+    plansRoot: path.join(stateRoot, 'plans'),
+    runsRoot: path.join(stateRoot, 'runs'),
+    eventsPath: path.join(stateRoot, 'events.jsonl'),
     dryRunDefault: true,
     defaultCategories: [],
     spaceGovernance: {
@@ -483,6 +487,11 @@ export function parseCliArgs(argv) {
       i += 1;
       continue;
     }
+    if (token === '--allow-missing-targets') {
+      parsed.allowMissingTargets = parseBooleanFlag(token, takeValue(token, i));
+      i += 1;
+      continue;
+    }
     if (token === '--conflict') {
       parsed.conflict = parseEnumValue(token, takeValue(token, i), ALLOWED_CONFLICT_STRATEGIES);
       i += 1;
@@ -680,12 +689,18 @@ export async function loadConfig(cliArgs = {}, options = {}) {
   merged.serviceStatePath = expandHome(
     fileConfig.serviceStatePath || path.join(stateRoot, 'service-state.json')
   );
+  merged.latestTaskPath = expandHome(fileConfig.latestTaskPath || path.join(stateRoot, 'latest-task.json'));
+  merged.plansRoot = expandHome(fileConfig.plansRoot || path.join(stateRoot, 'plans'));
+  merged.runsRoot = expandHome(fileConfig.runsRoot || path.join(stateRoot, 'runs'));
+  merged.eventsPath = expandHome(fileConfig.eventsPath || path.join(stateRoot, 'events.jsonl'));
   merged.configPath = configPath;
 
   if (!options.readOnly) {
     await ensureDir(merged.stateRoot);
     await ensureDir(merged.recycleRoot);
     await ensureDir(merged.serviceRecycleRoot);
+    await ensureDir(merged.plansRoot);
+    await ensureDir(merged.runsRoot);
   }
 
   return merged;
@@ -704,6 +719,10 @@ export async function saveConfig(config) {
     aliasPath: config.aliasPath,
     serviceConfigPath: config.serviceConfigPath,
     serviceStatePath: config.serviceStatePath,
+    latestTaskPath: config.latestTaskPath,
+    plansRoot: config.plansRoot,
+    runsRoot: config.runsRoot,
+    eventsPath: config.eventsPath,
     dryRunDefault: Boolean(config.dryRunDefault),
     defaultCategories: Array.isArray(config.defaultCategories) ? config.defaultCategories : [],
     spaceGovernance: normalizeSpaceGovernance(config.spaceGovernance, defaultConfig().spaceGovernance),

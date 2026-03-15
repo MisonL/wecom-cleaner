@@ -37,6 +37,25 @@ async function prepareFixture(root) {
   return profilesRoot;
 }
 
+async function addFixtureAccount(profilesRoot, accountId, fileName = 'payload.txt') {
+  const accountRoot = path.join(profilesRoot, accountId);
+  await fs.mkdir(path.join(accountRoot, 'Caches', 'Files', '2024-01'), { recursive: true });
+  await fs.writeFile(
+    path.join(accountRoot, 'Caches', 'Files', '2024-01', fileName),
+    `data-${accountId}`,
+    'utf-8'
+  );
+  await fs.writeFile(
+    path.join(accountRoot, 'io_data.json'),
+    JSON.stringify({
+      user_info: toBase64(`姓名 ${accountId}`),
+      corp_info: toBase64(`企业 ${accountId}`),
+    }),
+    'utf-8'
+  );
+  return accountRoot;
+}
+
 async function prepareAutoExternalRoot(prefix = 'wecom-cli-auto-root') {
   const parent = path.join(
     os.homedir(),
@@ -51,6 +70,14 @@ async function prepareAutoExternalRoot(prefix = 'wecom-cli-auto-root') {
     parent,
     externalRoot: path.resolve(externalRoot),
   };
+}
+
+async function prepareConfiguredExternalRoot(root) {
+  const externalRoot = path.join(root, 'WXWork_Data');
+  const cacheDir = path.join(externalRoot, 'WXWork Files', 'Caches', 'Files', '2024-01');
+  await fs.mkdir(cacheDir, { recursive: true });
+  await fs.writeFile(path.join(cacheDir, 'external.txt'), 'external', 'utf-8');
+  return path.resolve(externalRoot);
 }
 
 async function startMockUpdateServer() {
@@ -115,6 +142,7 @@ function runCli(args, env = {}) {
       ...process.env,
       WECOM_CLEANER_NATIVE_AUTO_REPAIR: 'false',
       WECOM_CLEANER_AUTO_UPDATE: 'false',
+      WECOM_CLEANER_ALLOW_INTERNAL_LEGACY: 'true',
       ...env,
     },
     encoding: 'utf-8',
@@ -129,6 +157,7 @@ function runCliAsync(args, env = {}) {
         ...process.env,
         WECOM_CLEANER_NATIVE_AUTO_REPAIR: 'false',
         WECOM_CLEANER_AUTO_UPDATE: 'false',
+        WECOM_CLEANER_ALLOW_INTERNAL_LEGACY: 'true',
         ...env,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -152,6 +181,19 @@ function runCliAsync(args, env = {}) {
         stderr,
       });
     });
+  });
+}
+
+function runCliV2(args, env = {}) {
+  return spawnSync(process.execPath, [CLI_PATH, ...args], {
+    cwd: REPO_ROOT,
+    env: {
+      ...process.env,
+      WECOM_CLEANER_NATIVE_AUTO_REPAIR: 'false',
+      WECOM_CLEANER_AUTO_UPDATE: 'false',
+      ...env,
+    },
+    encoding: 'utf-8',
   });
 }
 
@@ -759,18 +801,16 @@ test('--interactive 可在带参数时进入交互模式并按 --mode 直达功�
   assert.equal(String(result.stderr || '').includes('必须指定一个动作参数'), false);
 });
 
-test('CLI 支持 --help 并返回无交互动作说明', () => {
+test('CLI 支持 --help 并返回 v2 控制器说明', () => {
   const result = runCli(['--help']);
   assert.equal(result.status, 0);
   const output = String(result.stdout || '');
   assert.match(output, /用法：/);
-  assert.match(output, /--cleanup-monthly/);
-  assert.match(output, /--doctor/);
-  assert.match(output, /--check-update/);
-  assert.match(output, /--upgrade <npm\|github-script>/);
-  assert.match(output, /--sync-skills/);
-  assert.match(output, /--run-task preview\|execute\|preview-execute-verify/);
-  assert.match(output, /--scan-debug off\|summary\|full/);
+  assert.match(output, /inspect doctor/);
+  assert.match(output, /plan monthly-cleanup/);
+  assert.match(output, /update apply <npm\|github-script>/);
+  assert.match(output, /skills sync/);
+  assert.match(output, /--output text\|agent-json/);
 });
 
 test('无交互 --check-update 在 npm 失败时回退 GitHub 并保留错误痕迹', async (t) => {
@@ -1396,6 +1436,253 @@ test('无交互 --output agent-json 返回统一任务协议字段', async (t) =
   assert.equal(payload.data.taskPhases[0].name, 'inspect');
   assert.equal(typeof payload.data.taskCard?.conclusion, 'string');
   assert.equal(Array.isArray(payload.data.userFacingSummary?.scopeNotes), true);
+
+  const latestTask = JSON.parse(await fs.readFile(path.join(stateRoot, 'latest-task.json'), 'utf-8'));
+  assert.equal(latestTask.action, 'analysis_only');
+  assert.equal(latestTask.protocolVersion, '1');
+  assert.equal(typeof latestTask.taskCard?.conclusion, 'string');
+});
+
+test('v2 CLI help 输出新控制器入口', () => {
+  const result = runCliV2(['--help']);
+  assert.equal(result.status, 0);
+  const output = String(result.stdout || '');
+  assert.match(output, /inspect footprint/);
+  assert.match(output, /plan monthly-cleanup/);
+  assert.match(output, /apply <plan-id>/);
+  assert.match(output, /skills status/);
+});
+
+test('v2 CLI 对旧动作旗标返回迁移错误', () => {
+  const result = runCliV2(['--doctor']);
+  assert.equal(result.status, 2);
+  assert.match(String(result.stderr || ''), /v2 已移除旧动作旗标/);
+  assert.match(String(result.stderr || ''), /inspect doctor/);
+});
+
+test('v2 CLI update apply 缺少确认时返回 v2 ack 提示', () => {
+  const result = runCliV2(['update', 'apply', 'npm']);
+  assert.equal(result.status, 3);
+  assert.match(String(result.stderr || ''), /--ack UPGRADE/);
+});
+
+test('v2 CLI inspect footprint 返回分析与治理双视图', async (t) => {
+  const root = await makeTempDir('wecom-cli-v2-inspect-');
+  t.after(async () => removeDir(root));
+
+  const profilesRoot = await prepareFixture(root);
+  const stateRoot = path.join(root, 'state');
+
+  const result = runCliV2([
+    'inspect',
+    'footprint',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--accounts',
+    'all',
+    '--output',
+    'agent-json',
+  ]);
+  assert.equal(result.status, 0);
+  const payload = JSON.parse(String(result.stdout || '{}'));
+  assert.equal(payload.action, 'inspect_footprint');
+  assert.equal(typeof payload.summary.cacheTargetCount, 'number');
+  assert.equal(typeof payload.summary.observedTargetTypeCount, 'number');
+  assert.equal(typeof payload.data.analysis, 'object');
+  assert.equal(typeof payload.data.governance, 'object');
+  assert.equal(typeof payload.data.report.observed, 'object');
+  assert.equal(
+    await fs
+      .stat(stateRoot)
+      .then(() => true)
+      .catch(() => false),
+    false
+  );
+});
+
+test('v2 CLI plan/apply/verify 可完成年月清理闭环', async (t) => {
+  const root = await makeTempDir('wecom-cli-v2-plan-');
+  t.after(async () => removeDir(root));
+
+  const profilesRoot = await prepareFixture(root);
+  const stateRoot = path.join(root, 'state');
+
+  const planResult = runCliV2([
+    'plan',
+    'monthly-cleanup',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--accounts',
+    'current',
+    '--categories',
+    'files',
+    '--months',
+    '2024-01',
+    '--output',
+    'agent-json',
+  ]);
+  assert.equal(planResult.status, 0);
+  const planPayload = JSON.parse(String(planResult.stdout || '{}'));
+  assert.equal(planPayload.summary.planId.length > 0, true);
+  const planId = planPayload.summary.planId;
+
+  const applyResult = runCliV2([
+    'apply',
+    planId,
+    '--state-root',
+    stateRoot,
+    '--ack',
+    'APPLY',
+    '--output',
+    'agent-json',
+  ]);
+  assert.equal(applyResult.status, 0);
+  const applyPayload = JSON.parse(String(applyResult.stdout || '{}'));
+  assert.equal(applyPayload.summary.planId, planId);
+  assert.equal(applyPayload.summary.runId.length > 0, true);
+  const runId = applyPayload.summary.runId;
+
+  await addFixtureAccount(profilesRoot, 'acc002', 'later.txt');
+  await fs.writeFile(
+    path.join(profilesRoot, 'setting.json'),
+    JSON.stringify({ CurrentProfile: 'acc002' }),
+    'utf-8'
+  );
+
+  const verifyResult = runCliV2(['verify', runId, '--state-root', stateRoot, '--output', 'agent-json']);
+  assert.equal(verifyResult.status, 0);
+  const verifyPayload = JSON.parse(String(verifyResult.stdout || '{}'));
+  assert.equal(verifyPayload.summary.runId, runId);
+  assert.equal(verifyPayload.summary.planId, planId);
+  assert.equal(verifyPayload.summary.matchedTargets, 0);
+
+  const planRecord = JSON.parse(await fs.readFile(path.join(stateRoot, 'plans', `${planId}.json`), 'utf-8'));
+  const runRecord = JSON.parse(await fs.readFile(path.join(stateRoot, 'runs', `${runId}.json`), 'utf-8'));
+  assert.equal(planRecord.planId, planId);
+  assert.equal(runRecord.runId, runId);
+  assert.match(planRecord.baseLegacyArgv.join(' '), /--accounts acc001/);
+});
+
+test('v2 CLI apply 在计划目标漂移时拒绝执行', async (t) => {
+  const root = await makeTempDir('wecom-cli-v2-plan-drift-');
+  t.after(async () => removeDir(root));
+
+  const profilesRoot = await prepareFixture(root);
+  const stateRoot = path.join(root, 'state');
+
+  const planResult = runCliV2([
+    'plan',
+    'monthly-cleanup',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--accounts',
+    'all',
+    '--categories',
+    'files',
+    '--months',
+    '2024-01',
+    '--output',
+    'agent-json',
+  ]);
+  assert.equal(planResult.status, 0);
+  const planPayload = JSON.parse(String(planResult.stdout || '{}'));
+  const planId = planPayload.summary.planId;
+
+  await fs.writeFile(
+    path.join(profilesRoot, 'acc001', 'Caches', 'Files', '2024-01', 'new.txt'),
+    'changed',
+    'utf-8'
+  );
+
+  const applyResult = runCliV2([
+    'apply',
+    planId,
+    '--state-root',
+    stateRoot,
+    '--ack',
+    'APPLY',
+    '--output',
+    'agent-json',
+  ]);
+  assert.equal(applyResult.status, 2);
+  assert.match(String(applyResult.stderr || ''), /计划已漂移/);
+});
+
+test('v2 CLI space-governance 显式 targets 在 verify 阶段按已清理处理', async (t) => {
+  const root = await makeTempDir('wecom-cli-v2-governance-targets-');
+  t.after(async () => removeDir(root));
+
+  const profilesRoot = await prepareFixture(root);
+  const externalRoot = await prepareConfiguredExternalRoot(root);
+  const stateRoot = path.join(root, 'state');
+
+  const previewPlanResult = runCliV2([
+    'plan',
+    'space-governance',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--accounts',
+    'all',
+    '--external-roots',
+    externalRoot,
+    '--allow-recent-active',
+    'true',
+    '--output',
+    'agent-json',
+  ]);
+  assert.equal(previewPlanResult.status, 0);
+  const previewPlanPayload = JSON.parse(String(previewPlanResult.stdout || '{}'));
+  const targetId = previewPlanPayload.data.selectedTargetIds[0];
+  assert.equal(typeof targetId, 'string');
+
+  const planResult = runCliV2([
+    'plan',
+    'space-governance',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--accounts',
+    'all',
+    '--external-roots',
+    externalRoot,
+    '--allow-recent-active',
+    'true',
+    '--targets',
+    targetId,
+    '--output',
+    'agent-json',
+  ]);
+  assert.equal(planResult.status, 0);
+  const planPayload = JSON.parse(String(planResult.stdout || '{}'));
+  const planId = planPayload.summary.planId;
+
+  const applyResult = runCliV2([
+    'apply',
+    planId,
+    '--state-root',
+    stateRoot,
+    '--ack',
+    'APPLY',
+    '--output',
+    'agent-json',
+  ]);
+  assert.equal(applyResult.status, 0);
+  const applyPayload = JSON.parse(String(applyResult.stdout || '{}'));
+  const runId = applyPayload.summary.runId;
+
+  const verifyResult = runCliV2(['verify', runId, '--state-root', stateRoot, '--output', 'agent-json']);
+  assert.equal(verifyResult.status, 0);
+  const verifyPayload = JSON.parse(String(verifyResult.stdout || '{}'));
+  assert.equal(verifyPayload.summary.matchedTargets, 0);
 });
 
 test('非破坏性动作仅支持 --run-task preview', async (t) => {

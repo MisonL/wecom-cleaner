@@ -80,6 +80,28 @@ import {
   buildUserFacingSummary,
   withRunTaskResult,
 } from './task-protocol.js';
+import { loadLatestTask, saveLatestTask } from './task-state.js';
+import {
+  detectLegacyActionFlag,
+  extractGlobalLegacyArgv,
+  legacyMigrationHint,
+  parseControllerCommandArgv,
+  renderV2Usage,
+} from './controller-command.js';
+import {
+  buildCleanupSelectionSignature,
+  buildFrozenPlanLegacyArgv,
+  buildGovernanceSelectionSignature,
+} from './controller-plan.js';
+import {
+  appendControllerEvent,
+  defaultControllerStatePaths,
+  loadPlanRecord,
+  loadRunRecord,
+  savePlanRecord,
+  saveRunRecord,
+  updateRunRecord,
+} from './controller-state.js';
 import {
   compareMonthKey,
   expandHome,
@@ -202,6 +224,13 @@ function allowAutoUpdateByEnv() {
     .trim()
     .toLowerCase();
   return !['0', 'false', 'no', 'off'].includes(raw);
+}
+
+function allowInternalLegacyCliByEnv() {
+  const raw = String(process.env.WECOM_CLEANER_ALLOW_INTERNAL_LEGACY || 'false')
+    .trim()
+    .toLowerCase();
+  return ['1', 'true', 'yes', 'on'].includes(raw);
 }
 
 function isBackCommand(inputValue) {
@@ -997,6 +1026,7 @@ function printHeader({
   profileRootHealth = null,
   skillSummary = null,
   serviceSummary = null,
+  latestTaskSummary = null,
 }) {
   console.clear();
   const normalizedThemeMode = normalizeThemeMode(config.theme);
@@ -1064,6 +1094,18 @@ function printHeader({
           { muted: true }
         );
       }
+    }
+  }
+  if (latestTaskSummary?.actionLabel) {
+    const latestTimeText = latestTaskSummary.timestamp
+      ? formatLocalDate(latestTaskSummary.timestamp)
+      : '未记录';
+    printLine(
+      '最近任务',
+      `${latestTaskSummary.actionLabel} | ${latestTaskSummary.ok ? '成功' : '失败'} | ${latestTimeText}`
+    );
+    if (latestTaskSummary.taskCard?.conclusion) {
+      printLine('最近结论', latestTaskSummary.taskCard.conclusion, { muted: true });
     }
   }
 
@@ -3564,7 +3606,7 @@ function printCheckUpdateTextResult(payload) {
   ]);
   if (!skills.matched) {
     printTextRows('Skills 建议', [
-      { label: '建议命令', value: 'wecom-cleaner --sync-skills --skill-sync-method npm' },
+      { label: '建议命令', value: 'wecom-cleaner skills sync --skill-sync-method npm --ack SKILLS_SYNC' },
       { label: '补充', value: skills.recommendation || '同步后再让 Agent 继续执行任务。' },
     ]);
   }
@@ -3572,11 +3614,11 @@ function printCheckUpdateTextResult(payload) {
     printTextRows('升级建议', [
       {
         label: '默认方式',
-        value: `wecom-cleaner --upgrade npm --upgrade-version ${summary.latestVersion} --upgrade-yes`,
+        value: `wecom-cleaner update apply npm --upgrade-version ${summary.latestVersion} --ack UPGRADE`,
       },
       {
         label: '备选方式',
-        value: `wecom-cleaner --upgrade github-script --upgrade-version ${summary.latestVersion} --upgrade-yes`,
+        value: `wecom-cleaner update apply github-script --upgrade-version ${summary.latestVersion} --ack UPGRADE`,
       },
     ]);
   }
@@ -3964,6 +4006,9 @@ async function runCleanupModeNonInteractive(context, cliArgs, warnings = []) {
   const targets = scan.targets || [];
   const matchedBytes = targets.reduce((total, item) => total + Number(item?.sizeBytes || 0), 0);
   const matchedReport = buildCleanupTargetReport(targets, { topPathLimit: 20 });
+  const controllerData = {
+    selectionSignature: buildCleanupSelectionSignature(targets),
+  };
   const scanDebugSummary = {
     action: MODES.CLEANUP_MONTHLY,
     engineReady: context.nativeCorePath ? 'zig' : 'node',
@@ -4020,6 +4065,7 @@ async function runCleanupModeNonInteractive(context, cliArgs, warnings = []) {
         selectedExternalRoots: externalResolved.roots,
         deleteMode,
         engineUsed: scan.engineUsed || 'node',
+        controller: controllerData,
         report: {
           matched: matchedReport,
           executed: null,
@@ -4064,6 +4110,7 @@ async function runCleanupModeNonInteractive(context, cliArgs, warnings = []) {
       includeNonMonthDirs,
       deleteMode,
       engineUsed: scan.engineUsed || 'node',
+      controller: controllerData,
       report: {
         matched: matchedReport,
         executed: result.breakdown || null,
@@ -4189,16 +4236,19 @@ async function runSpaceGovernanceModeNonInteractive(context, cliArgs, warnings =
 
   const selectableTargets = scan.targets.filter((item) => item.deletable);
   const targetIdSet = new Set(selectableTargets.map((item) => item.id));
-  const selectedById =
+  const requestedTargetIds =
     Array.isArray(cliArgs.targets) && cliArgs.targets.length > 0
       ? uniqueStrings(cliArgs.targets)
       : selectableTargets.map((item) => item.id);
 
-  for (const targetId of selectedById) {
-    if (!targetIdSet.has(targetId)) {
-      throw new UsageError(`参数 --targets 中存在未知治理目标: ${targetId}`);
-    }
+  const missingTargetIds = requestedTargetIds.filter((targetId) => !targetIdSet.has(targetId));
+  if (missingTargetIds.length > 0 && cliArgs.allowMissingTargets !== true) {
+    throw new UsageError(`参数 --targets 中存在未知治理目标: ${missingTargetIds[0]}`);
   }
+  if (missingTargetIds.length > 0) {
+    warnings.push(`部分治理目标已不存在，已按已处理跳过 ${missingTargetIds.length} 项。`);
+  }
+  const selectedById = requestedTargetIds.filter((targetId) => targetIdSet.has(targetId));
 
   const tierFilterSet = resolveGovernanceTierFilters(cliArgs.tiers || []);
   let selectedTargets = selectableTargets.filter((item) => selectedById.includes(item.id));
@@ -4216,6 +4266,9 @@ async function runSpaceGovernanceModeNonInteractive(context, cliArgs, warnings =
   }
   const observedReport = buildGovernanceTargetReport(scan.targets, { topPathLimit: 20 });
   const matchedReport = buildGovernanceTargetReport(selectedTargets, { topPathLimit: 20 });
+  const controllerData = {
+    selectionSignature: buildGovernanceSelectionSignature(selectedTargets),
+  };
   const scanDebugSummary = {
     action: MODES.SPACE_GOVERNANCE,
     engineReady: context.nativeCorePath ? 'zig' : 'node',
@@ -4275,6 +4328,45 @@ async function runSpaceGovernanceModeNonInteractive(context, cliArgs, warnings =
         selectedTargetIds: [],
         deleteMode,
         engineUsed: scan.engineUsed || 'node',
+        controller: controllerData,
+        report: {
+          observed: observedReport,
+          matched: matchedReport,
+          executed: null,
+        },
+        ...attachScanDebugData({}, cliArgs, scanDebugSummary, scanDebugFull),
+      },
+    };
+  }
+
+  if (cliArgs.inspectOnly === true) {
+    return {
+      ok: true,
+      action: MODES.SPACE_GOVERNANCE,
+      dryRun: null,
+      summary: {
+        matchedTargets: selectedTargets.length,
+        matchedBytes: matchedReport.totalBytes,
+        reclaimedBytes: 0,
+        successCount: 0,
+        skippedCount: 0,
+        failedCount: 0,
+        tierCount: matchedReport.byTier.length,
+        targetTypeCount: matchedReport.byTargetType.length,
+        rootPathCount: matchedReport.byRoot.length,
+        allowRecentActive,
+        deleteMode,
+        recoverable: deleteModeRecoverable(deleteMode),
+      },
+      warnings,
+      errors: [],
+      data: {
+        selectedAccounts: accountResolved.selectedAccountIds,
+        selectedExternalRoots: externalResolved.roots,
+        selectedTargetIds: selectedTargets.map((item) => item.id),
+        deleteMode,
+        engineUsed: scan.engineUsed || 'node',
+        controller: controllerData,
         report: {
           observed: observedReport,
           matched: matchedReport,
@@ -4328,6 +4420,7 @@ async function runSpaceGovernanceModeNonInteractive(context, cliArgs, warnings =
       selectedTargetIds: selectedTargets.map((item) => item.id),
       deleteMode,
       engineUsed: scan.engineUsed || 'node',
+      controller: controllerData,
       report: {
         observed: observedReport,
         matched: matchedReport,
@@ -5302,7 +5395,9 @@ async function runUpgradeModeNonInteractive(context, cliArgs, warnings = []) {
           warnings.push(`skills 同步失败：${syncResult.skillSync.error}`);
         }
       } else if (!syncSkillsEnabled && !beforeSkills.matched) {
-        warnings.push('当前已是最新版本，但 skills 未匹配；可执行 wecom-cleaner --sync-skills 处理。');
+        warnings.push(
+          '当前已是最新版本，但 skills 未匹配；可执行 wecom-cleaner skills sync --ack SKILLS_SYNC 处理。'
+        );
       }
 
       const payloadOk = syncResult ? syncResult.ok : true;
@@ -5387,7 +5482,9 @@ async function runUpgradeModeNonInteractive(context, cliArgs, warnings = []) {
       warnings.push(`skills 同步失败：${syncResult.skillSync.error}`);
     }
   } else if (upgrade.ok && !syncSkillsEnabled && !afterSkills.matched) {
-    warnings.push('程序升级已完成，但 skills 同步已关闭；建议执行 wecom-cleaner --sync-skills。');
+    warnings.push(
+      '程序升级已完成，但 skills 同步已关闭；建议执行 wecom-cleaner skills sync --ack SKILLS_SYNC。'
+    );
   }
 
   const payloadOk = upgrade.ok && (syncResult ? syncResult.ok : true);
@@ -5610,7 +5707,7 @@ async function maybePromptInteractiveUpgrade(context, startupUpdate) {
     printTextRows('Skills 提示', [
       {
         label: '建议',
-        value: syncResult.after.recommendation || '请执行 wecom-cleaner --sync-skills 重试。',
+        value: syncResult.after.recommendation || '请执行 wecom-cleaner skills sync --ack SKILLS_SYNC 重试。',
       },
       { label: '错误', value: syncResult.skillSync?.error || 'skills_sync_failed' },
     ]);
@@ -6050,6 +6147,42 @@ async function runCleanupMode(context) {
     headers: ['路径', '错误'],
     mapRow: (item) => [item.path || '-', item.message || '-'],
   });
+  const matchedReport = buildCleanupTargetReport(targets, { topPathLimit: 20 });
+  await persistLatestTaskSnapshot(context, MODES.CLEANUP_MONTHLY, {
+    ok: result.failedCount === 0,
+    action: MODES.CLEANUP_MONTHLY,
+    dryRun: executeDryRun,
+    summary: responseSummaryFromCleanupResult(result, {
+      matchedTargets: targets.length,
+      matchedBytes: matchedReport.totalBytes,
+      engineUsed: scan.engineUsed || 'node',
+      matchedMonthStart: matchedReport.monthRange?.from || null,
+      matchedMonthEnd: matchedReport.monthRange?.to || null,
+      rootPathCount: matchedReport.rootStats.length,
+      accountCount: selectedAccountIds.length,
+      monthCount: matchedReport.monthStats.length,
+      categoryCount: matchedReport.categoryStats.length,
+      externalRootCount: selectedExternalStorageRoots.length,
+      explicitMonthCount: selectedMonths.length,
+      deleteMode,
+      recoverable: deleteModeRecoverable(deleteMode),
+    }),
+    warnings: scan.nativeFallbackReason ? [scan.nativeFallbackReason] : [],
+    errors: result.errors.map((item) => toStructuredError(item)),
+    data: {
+      selectedAccounts: selectedAccountIds,
+      selectedMonths,
+      selectedCategories,
+      selectedExternalRoots: selectedExternalStorageRoots,
+      includeNonMonthDirs,
+      deleteMode,
+      engineUsed: scan.engineUsed || 'node',
+      report: {
+        matched: matchedReport,
+        executed: result.breakdown || null,
+      },
+    },
+  });
 }
 
 async function runAnalysisMode(context) {
@@ -6112,6 +6245,34 @@ async function runAnalysisMode(context) {
 
   printSection('分析结果（只读）');
   printAnalysisSummary(result);
+  const analysisReport = buildCleanupTargetReport(result.targets, { topPathLimit: 20 });
+  await persistLatestTaskSnapshot(context, MODES.ANALYSIS_ONLY, {
+    ok: true,
+    action: MODES.ANALYSIS_ONLY,
+    dryRun: null,
+    summary: {
+      targetCount: result.targets.length,
+      totalBytes: result.totalBytes,
+      accountCount: selectedAccountIds.length,
+      matchedAccountCount: result.accountsSummary.length,
+      categoryCount: result.categoriesSummary.length,
+      monthBucketCount: result.monthsSummary.length,
+    },
+    warnings: result.nativeFallbackReason ? [result.nativeFallbackReason] : [],
+    errors: [],
+    data: {
+      engineUsed: result.engineUsed || 'node',
+      selectedAccounts: selectedAccountIds,
+      selectedCategories,
+      selectedExternalRoots: selectedExternalStorageRoots,
+      accountsSummary: result.accountsSummary,
+      categoriesSummary: result.categoriesSummary,
+      monthsSummary: result.monthsSummary,
+      report: {
+        matched: analysisReport,
+      },
+    },
+  });
 }
 
 async function runSpaceGovernanceMode(context) {
@@ -6377,6 +6538,37 @@ async function runSpaceGovernanceMode(context) {
     headers: ['路径', '错误'],
     mapRow: (item) => [item.path || '-', item.message || '-'],
   });
+  const matchedReport = buildGovernanceTargetReport(selectedTargets, { topPathLimit: 20 });
+  const observedReport = buildGovernanceTargetReport(scan.targets, { topPathLimit: 20 });
+  await persistLatestTaskSnapshot(context, MODES.SPACE_GOVERNANCE, {
+    ok: result.failedCount === 0,
+    action: MODES.SPACE_GOVERNANCE,
+    dryRun,
+    summary: responseSummaryFromCleanupResult(result, {
+      matchedTargets: selectedTargets.length,
+      matchedBytes: matchedReport.totalBytes,
+      allowRecentActive,
+      tierCount: matchedReport.byTier.length,
+      targetTypeCount: matchedReport.byTargetType.length,
+      rootPathCount: matchedReport.byRoot.length,
+      deleteMode,
+      recoverable: deleteModeRecoverable(deleteMode),
+    }),
+    warnings: scan.nativeFallbackReason ? [scan.nativeFallbackReason] : [],
+    errors: result.errors.map((item) => toStructuredError(item)),
+    data: {
+      selectedAccounts: selectedAccountIds,
+      selectedExternalRoots: selectedExternalStorageRoots,
+      selectedTargetIds: selectedTargets.map((item) => item.id),
+      deleteMode,
+      engineUsed: scan.engineUsed || 'node',
+      report: {
+        observed: observedReport,
+        matched: matchedReport,
+        executed: result.breakdown || null,
+      },
+    },
+  });
 }
 
 function batchTableRows(batches) {
@@ -6549,6 +6741,35 @@ async function runRestoreMode(context) {
       headers: ['路径', '错误'],
       mapRow: (item) => [item.sourcePath || '-', item.message || '-'],
     });
+    const matchedReport = buildRestoreBatchTargetReport(batch.entries, { topPathLimit: 20 });
+    await persistLatestTaskSnapshot(context, MODES.RESTORE, {
+      ok: result.failCount === 0,
+      action: MODES.RESTORE,
+      dryRun,
+      summary: {
+        batchId: result.batchId,
+        successCount: result.successCount,
+        skippedCount: result.skipCount,
+        failedCount: result.failCount,
+        restoredBytes: result.restoredBytes,
+        conflictStrategy: 'interactive',
+        entryCount: batch.entries.length,
+        matchedBytes: matchedReport.totalBytes,
+        scopeCount: matchedReport.byScope.length,
+        categoryCount: matchedReport.byCategory.length,
+        rootPathCount: matchedReport.byRoot.length,
+      },
+      warnings: [],
+      errors: result.errors.map((item) => toStructuredError(item)),
+      data: {
+        selectedExternalRoots: externalStorageRoots,
+        governanceRoot,
+        report: {
+          matched: matchedReport,
+          executed: result.breakdown || null,
+        },
+      },
+    });
     return result;
   };
 
@@ -6576,6 +6797,24 @@ async function runDoctorMode(context, options = {}) {
     appVersion: appMeta?.version || null,
   });
   await printDoctorReport(report, Boolean(options.jsonOutput));
+  await persistLatestTaskSnapshot(context, MODES.DOCTOR, {
+    ok: report.overall !== 'fail',
+    action: MODES.DOCTOR,
+    dryRun: null,
+    summary: {
+      overall: report.overall,
+      pass: report.summary?.pass || 0,
+      warn: report.summary?.warn || 0,
+      fail: report.summary?.fail || 0,
+    },
+    warnings: Array.isArray(report.recommendations) ? report.recommendations : [],
+    errors: [],
+    data: {
+      runtime: report.runtime || {},
+      checks: report.checks || [],
+      metrics: report.metrics || {},
+    },
+  });
 }
 
 async function runCheckUpdateMode(context, cliArgs = {}) {
@@ -6658,6 +6897,11 @@ async function runCheckUpdateMode(context, cliArgs = {}) {
     payload.warnings.push(updateWarningMessage(payload.data.update, context.config.selfUpdate.skipVersion));
   }
   printCheckUpdateTextResult(payload);
+  await saveLatestTaskForContext(
+    context,
+    context.config.latestTaskPath,
+    attachTaskProtocolData(MODES.CHECK_UPDATE, payload)
+  );
 
   const upgraded = await maybePromptInteractiveUpgrade(context, payload.data.update);
   if (upgraded) {
@@ -6690,6 +6934,380 @@ function buildTextPayloadFromResult(context, result) {
       engine: context.lastRunEngineUsed || (context.nativeCorePath ? 'zig_ready' : 'node'),
     },
   });
+}
+
+function buildPersistableTaskPayload(context, action, result, metaOverrides = {}) {
+  const now = Date.now();
+  return attachTaskProtocolData(action, {
+    ...result,
+    action,
+    meta: {
+      app: APP_NAME,
+      package: PACKAGE_NAME,
+      version: context.appMeta?.version || '0.0.0',
+      timestamp: metaOverrides.timestamp || now,
+      durationMs: Number(metaOverrides.durationMs || 0),
+      output: metaOverrides.output || OUTPUT_TEXT,
+      engine:
+        metaOverrides.engine || context.lastRunEngineUsed || (context.nativeCorePath ? 'zig_ready' : 'node'),
+    },
+  });
+}
+
+async function persistLatestTaskSnapshot(context, action, result, metaOverrides = {}) {
+  const payload = buildPersistableTaskPayload(context, action, result, metaOverrides);
+  await saveLatestTaskForContext(context, context.config.latestTaskPath, payload);
+  return payload;
+}
+
+function controllerPathsFromConfig(config) {
+  return {
+    ...defaultControllerStatePaths(config.stateRoot),
+    plansRoot: config.plansRoot,
+    runsRoot: config.runsRoot,
+    eventsPath: config.eventsPath,
+  };
+}
+
+function stripOptionPair(argv, flag) {
+  const out = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] === flag) {
+      i += 1;
+      continue;
+    }
+    out.push(argv[i]);
+  }
+  return out;
+}
+
+function withRunTaskModeArgv(argv, runTaskMode, options = {}) {
+  const base = stripOptionPair(
+    stripOptionPair(stripOptionPair(argv, '--yes'), '--run-task'),
+    '--allow-missing-targets'
+  );
+  const allowMissingTargets = options.allowMissingTargets === true ? ['--allow-missing-targets', 'true'] : [];
+  return runTaskMode === 'execute'
+    ? [...base, ...allowMissingTargets, '--run-task', runTaskMode, '--yes']
+    : [...base, ...allowMissingTargets, '--run-task', runTaskMode];
+}
+
+function shouldPersistLatestTaskForContext(context) {
+  return !context?.strictReadOnly;
+}
+
+async function saveLatestTaskForContext(context, latestTaskPath, payload) {
+  if (!shouldPersistLatestTaskForContext(context)) {
+    return null;
+  }
+  return saveLatestTask(latestTaskPath, payload);
+}
+
+function resolveControllerSelectionSignature(payload) {
+  const signature = payload?.data?.controller?.selectionSignature;
+  return typeof signature === 'string' && signature.trim() ? signature.trim() : null;
+}
+
+function assertControllerPlanStable(planRecord, payload) {
+  const expected =
+    typeof planRecord?.previewSelectionSignature === 'string' ? planRecord.previewSelectionSignature : '';
+  if (!expected) {
+    return;
+  }
+  const actual = resolveControllerSelectionSignature(payload);
+  if (actual === expected) {
+    return;
+  }
+  throw new UsageError('计划已漂移：当前匹配范围与 plan 阶段不一致，请重新执行 plan。');
+}
+
+async function buildScopedExecutionContext(context, legacyArgv, options = {}) {
+  const cliArgs = parseCliArgs(legacyArgv);
+  const action = resolveActionFromCli(cliArgs, true);
+  const strictReadOnly = options.readOnly === true || action === MODES.DOCTOR;
+  const scopedConfig = await loadConfig(cliArgs, {
+    readOnly: strictReadOnly,
+  });
+  const scopedAliases = await loadAliases(scopedConfig.aliasPath);
+  const scopedContext = {
+    ...context,
+    config: scopedConfig,
+    aliases: scopedAliases,
+    strictReadOnly,
+  };
+  return { cliArgs, action, scopedConfig, scopedAliases, scopedContext };
+}
+
+async function executeLegacyArgvPayload(context, legacyArgv) {
+  const { cliArgs, action, scopedConfig, scopedContext } = await buildScopedExecutionContext(
+    context,
+    legacyArgv
+  );
+  const startedAt = Date.now();
+  let result = await runNonInteractiveTask(action, scopedContext, cliArgs);
+  result = attachTaskProtocolData(action, result, {
+    durationMs: Date.now() - startedAt,
+  });
+  const outputMode = normalizeActionOutputMode(cliArgs);
+  const payload = {
+    ok: Boolean(result.ok),
+    action,
+    dryRun: result.dryRun ?? null,
+    summary: result.summary || {},
+    warnings: Array.isArray(result.warnings) ? result.warnings : [],
+    errors: Array.isArray(result.errors) ? result.errors : [],
+    data: result.data || {},
+    meta: {
+      app: APP_NAME,
+      package: PACKAGE_NAME,
+      version: context.appMeta?.version || '0.0.0',
+      timestamp: Date.now(),
+      durationMs: Date.now() - startedAt,
+      output: outputMode,
+      protocol: outputMode === OUTPUT_AGENT_JSON ? `agent-json-v${TASK_PROTOCOL_VERSION}` : 'json-v1',
+      engine: scopedContext.lastRunEngineUsed || (scopedContext.nativeCorePath ? 'zig_ready' : 'node'),
+    },
+  };
+  await saveLatestTaskForContext(scopedContext, scopedConfig.latestTaskPath, payload);
+  return { payload, cliArgs, action };
+}
+
+async function buildSkillsStatusPayload(context, cliArgs) {
+  const startedAt = Date.now();
+  const binding = await inspectSkillBindingSafe(context, context.appMeta?.version || '');
+  const skills = summarizeSkillBinding(binding);
+  const outputMode = normalizeActionOutputMode(cliArgs);
+  const payload = attachTaskProtocolData('skills_status', {
+    ok: skills.matched,
+    action: 'skills_status',
+    dryRun: null,
+    summary: {
+      checked: true,
+      skillsStatus: skills.status,
+      skillsMatched: skills.matched,
+      skillsInstalledVersion: skills.installedSkillVersion || '-',
+      skillsBoundAppVersion: skills.installedRequiredAppVersion || '-',
+    },
+    warnings: collectSkillBindingWarnings(binding),
+    errors: [],
+    data: {
+      skills,
+    },
+    meta: {
+      app: APP_NAME,
+      package: PACKAGE_NAME,
+      version: context.appMeta?.version || '0.0.0',
+      timestamp: Date.now(),
+      durationMs: Date.now() - startedAt,
+      output: outputMode,
+      protocol: outputMode === OUTPUT_AGENT_JSON ? `agent-json-v${TASK_PROTOCOL_VERSION}` : 'json-v1',
+      engine: context.lastRunEngineUsed || (context.nativeCorePath ? 'zig_ready' : 'node'),
+    },
+  });
+  await saveLatestTaskForContext(context, context.config.latestTaskPath, payload);
+  return { payload, outputMode };
+}
+
+async function runControllerCommand(controllerSpec, context, cliArgs) {
+  const paths = controllerPathsFromConfig(context.config);
+  if (controllerSpec.kind === 'inspect_footprint') {
+    const {
+      cliArgs: analysisArgs,
+      scopedConfig,
+      scopedAliases,
+      scopedContext,
+    } = await buildScopedExecutionContext(context, controllerSpec.legacyArgv, { readOnly: true });
+    const analysisResult = await runAnalysisModeNonInteractive(scopedContext, analysisArgs, []);
+    const governanceResult = await runSpaceGovernanceModeNonInteractive(
+      {
+        ...scopedContext,
+        config: scopedConfig,
+        aliases: scopedAliases,
+      },
+      {
+        ...analysisArgs,
+        targets: null,
+        tiers: ['safe', 'caution', 'protected'],
+        suggestedOnly: false,
+        allowRecentActive: false,
+        inspectOnly: true,
+        dryRun: true,
+        yes: false,
+      },
+      []
+    );
+    const outputMode = normalizeActionOutputMode(analysisArgs);
+    const observed = governanceResult?.data?.report?.observed || {
+      byTargetType: [],
+      byRoot: [],
+      topPaths: [],
+    };
+    const payload = attachTaskProtocolData('inspect_footprint', {
+      ok: Boolean(analysisResult.ok) && Boolean(governanceResult.ok),
+      action: 'inspect_footprint',
+      dryRun: null,
+      summary: {
+        cacheTargetCount: Number(analysisResult.summary?.targetCount || 0),
+        cacheBytes: Number(analysisResult.summary?.totalBytes || 0),
+        matchedAccountCount: Number(analysisResult.summary?.matchedAccountCount || 0),
+        observedTargetTypeCount: Array.isArray(observed.byTargetType) ? observed.byTargetType.length : 0,
+        observedRootCount: Array.isArray(observed.byRoot) ? observed.byRoot.length : 0,
+      },
+      warnings: uniqueStrings([...(analysisResult.warnings || []), ...(governanceResult.warnings || [])]),
+      errors: [...(analysisResult.errors || []), ...(governanceResult.errors || [])],
+      data: {
+        analysis: analysisResult.data || {},
+        governance: governanceResult.data || {},
+        report: {
+          matched: analysisResult.data?.report?.matched || {},
+          observed,
+        },
+      },
+      meta: {
+        app: APP_NAME,
+        package: PACKAGE_NAME,
+        version: context.appMeta?.version || '0.0.0',
+        timestamp: Date.now(),
+        durationMs: 0,
+        output: outputMode,
+        protocol: outputMode === OUTPUT_AGENT_JSON ? `agent-json-v${TASK_PROTOCOL_VERSION}` : 'json-v1',
+        engine: scopedContext.lastRunEngineUsed || (scopedContext.nativeCorePath ? 'zig_ready' : 'node'),
+      },
+    });
+    await saveLatestTaskForContext(scopedContext, scopedConfig.latestTaskPath, payload);
+    return { payload, cliArgs: analysisArgs, action: 'inspect_footprint' };
+  }
+
+  if (controllerSpec.kind === 'mapped') {
+    return executeLegacyArgvPayload(context, controllerSpec.legacyArgv);
+  }
+
+  if (controllerSpec.kind === 'update_apply') {
+    if (controllerSpec.ack !== 'UPGRADE') {
+      throw new ConfirmationRequiredError('执行 update apply 需要提供 --ack UPGRADE。');
+    }
+    const execution = await executeLegacyArgvPayload(context, [
+      ...controllerSpec.legacyArgv,
+      '--upgrade-yes',
+    ]);
+    await saveLatestTaskForContext(context, context.config.latestTaskPath, execution.payload);
+    return execution;
+  }
+
+  if (controllerSpec.kind === 'plan') {
+    const previewArgv = controllerSpec.legacyArgv;
+    const execution = await executeLegacyArgvPayload(context, previewArgv);
+    const baseArgv = buildFrozenPlanLegacyArgv(execution.action, previewArgv, execution.payload);
+    const planRecord = await savePlanRecord(paths, {
+      kind: controllerSpec.controllerKind,
+      action: execution.action,
+      createdAt: Date.now(),
+      baseLegacyArgv: baseArgv,
+      previewLegacyArgv: previewArgv,
+      previewSummary: execution.payload.summary,
+      previewTaskCard: execution.payload.data?.taskCard || {},
+      previewSelectionSignature: resolveControllerSelectionSignature(execution.payload),
+    });
+    execution.payload.summary = {
+      ...(execution.payload.summary || {}),
+      planId: planRecord.planId,
+    };
+    execution.payload.data = {
+      ...(execution.payload.data || {}),
+      plan: {
+        planId: planRecord.planId,
+        kind: planRecord.kind,
+        action: planRecord.action,
+      },
+    };
+    await saveLatestTaskForContext(context, context.config.latestTaskPath, execution.payload);
+    return execution;
+  }
+
+  if (controllerSpec.kind === 'apply') {
+    if (controllerSpec.ack !== 'APPLY') {
+      throw new ConfirmationRequiredError('执行 apply 需要提供 --ack APPLY。');
+    }
+    const planRecord = await loadPlanRecord(paths, controllerSpec.planId);
+    if (!planRecord) {
+      throw new UsageError(`未找到计划: ${controllerSpec.planId}`);
+    }
+    const preflightArgv = withRunTaskModeArgv(planRecord.baseLegacyArgv || [], 'preview', {
+      allowMissingTargets: true,
+    });
+    const preflight = await executeLegacyArgvPayload(context, preflightArgv);
+    assertControllerPlanStable(planRecord, preflight.payload);
+    const executeArgv = withRunTaskModeArgv(planRecord.baseLegacyArgv || [], 'execute');
+    const execution = await executeLegacyArgvPayload(context, executeArgv);
+    const runRecord = await saveRunRecord(paths, {
+      kind: planRecord.kind,
+      action: planRecord.action,
+      planId: planRecord.planId,
+      createdAt: Date.now(),
+      baseLegacyArgv: planRecord.baseLegacyArgv || [],
+      preflightLegacyArgv: preflightArgv,
+      preflightSummary: preflight.payload.summary,
+      preflightTaskCard: preflight.payload.data?.taskCard || {},
+      executeLegacyArgv: executeArgv,
+      executeSummary: execution.payload.summary,
+      executeTaskCard: execution.payload.data?.taskCard || {},
+      executeSelectionSignature: resolveControllerSelectionSignature(execution.payload),
+    });
+    execution.payload.summary = {
+      ...(execution.payload.summary || {}),
+      planId: planRecord.planId,
+      runId: runRecord.runId,
+    };
+    execution.payload.data = {
+      ...(execution.payload.data || {}),
+      run: {
+        runId: runRecord.runId,
+        planId: runRecord.planId,
+        kind: runRecord.kind,
+      },
+    };
+    await saveLatestTaskForContext(context, context.config.latestTaskPath, execution.payload);
+    return execution;
+  }
+
+  if (controllerSpec.kind === 'verify') {
+    const runRecord = await loadRunRecord(paths, controllerSpec.runId);
+    if (!runRecord) {
+      throw new UsageError(`未找到运行记录: ${controllerSpec.runId}`);
+    }
+    const verifyArgv = withRunTaskModeArgv(runRecord.baseLegacyArgv || [], 'preview', {
+      allowMissingTargets: true,
+    });
+    const verification = await executeLegacyArgvPayload(context, verifyArgv);
+    await updateRunRecord(paths, controllerSpec.runId, {
+      verifiedAt: Date.now(),
+      verifyLegacyArgv: verifyArgv,
+      verifySummary: verification.payload.summary,
+      verifyTaskCard: verification.payload.data?.taskCard || {},
+      verifySelectionSignature: resolveControllerSelectionSignature(verification.payload),
+    });
+    verification.payload.summary = {
+      ...(verification.payload.summary || {}),
+      runId: controllerSpec.runId,
+      planId: runRecord.planId || null,
+    };
+    verification.payload.data = {
+      ...(verification.payload.data || {}),
+      run: {
+        runId: controllerSpec.runId,
+        planId: runRecord.planId || null,
+        kind: runRecord.kind,
+      },
+    };
+    await saveLatestTaskForContext(context, context.config.latestTaskPath, verification.payload);
+    return verification;
+  }
+
+  if (controllerSpec.kind === 'skills_status') {
+    return buildSkillsStatusPayload(context, cliArgs);
+  }
+
+  throw new UsageError('不支持的 v2 控制命令。');
 }
 
 async function runSyncSkillsMode(context, cliArgs = {}) {
@@ -6747,6 +7365,11 @@ async function runSyncSkillsMode(context, cliArgs = {}) {
     },
   };
   printSyncSkillsTextResult(payload);
+  await saveLatestTaskForContext(
+    context,
+    context.config.latestTaskPath,
+    attachTaskProtocolData(MODES.SYNC_SKILLS, payload)
+  );
 }
 
 async function runServiceMode(context) {
@@ -7008,6 +7631,29 @@ async function runRecycleMaintainMode(context, options = {}) {
   if (result.failBatches > 0) {
     printGuideBlock('结果建议', [{ label: '建议', value: '部分批次清理失败，请检查目录权限后重试。' }]);
   }
+  await persistLatestTaskSnapshot(context, MODES.RECYCLE_MAINTAIN, {
+    ok: result.failBatches === 0,
+    action: MODES.RECYCLE_MAINTAIN,
+    dryRun,
+    summary: {
+      status: result.status,
+      candidateCount: result.candidateCount,
+      selectedByAge: result.selectedByAge,
+      selectedBySize: result.selectedBySize,
+      deletedBatches: result.deletedBatches,
+      deletedBytes: result.deletedBytes,
+      failedBatches: result.failBatches,
+      remainingBatches: result.after.totalBatches,
+      remainingBytes: result.after.totalBytes,
+    },
+    warnings: [],
+    errors: [],
+    data: {
+      report: {
+        operations: result.operations || [],
+      },
+    },
+  });
 }
 
 async function runAliasManager(context) {
@@ -7307,22 +7953,30 @@ async function runMode(mode, context, options = {}) {
   }
   if (mode === MODES.SERVICE_STATUS) {
     const result = await runServiceStatusModeNonInteractive(context, options.cliArgs || {}, []);
-    printServiceStatusTextResult(buildTextPayloadFromResult(context, result));
+    const payload = buildTextPayloadFromResult(context, { ...result, action: MODES.SERVICE_STATUS });
+    printServiceStatusTextResult(payload);
+    await saveLatestTaskForContext(context, context.config.latestTaskPath, payload);
     return;
   }
   if (mode === MODES.SERVICE_INSTALL) {
     const result = await runServiceInstallModeNonInteractive(context, options.cliArgs || {}, []);
-    printServiceInstallTextResult(buildTextPayloadFromResult(context, result));
+    const payload = buildTextPayloadFromResult(context, { ...result, action: MODES.SERVICE_INSTALL });
+    printServiceInstallTextResult(payload);
+    await saveLatestTaskForContext(context, context.config.latestTaskPath, payload);
     return;
   }
   if (mode === MODES.SERVICE_UNINSTALL) {
     const result = await runServiceUninstallModeNonInteractive(context, options.cliArgs || {}, []);
-    printServiceUninstallTextResult(buildTextPayloadFromResult(context, result));
+    const payload = buildTextPayloadFromResult(context, { ...result, action: MODES.SERVICE_UNINSTALL });
+    printServiceUninstallTextResult(payload);
+    await saveLatestTaskForContext(context, context.config.latestTaskPath, payload);
     return;
   }
   if (mode === MODES.SERVICE_RUN) {
     const result = await runServiceRunModeNonInteractive(context, options.cliArgs || {}, []);
-    printServiceRunTextResult(buildTextPayloadFromResult(context, result));
+    const payload = buildTextPayloadFromResult(context, { ...result, action: MODES.SERVICE_RUN });
+    printServiceRunTextResult(payload);
+    await saveLatestTaskForContext(context, context.config.latestTaskPath, payload);
     return;
   }
   if (mode === MODES.RECYCLE_MAINTAIN) {
@@ -7388,6 +8042,7 @@ async function runInteractiveLoop(context) {
     const skillSummary = summarizeSkillBinding(
       await inspectSkillBindingSafe(context, context.appMeta?.version || '')
     );
+    const latestTaskSummary = await loadLatestTask(context.config.latestTaskPath);
     let serviceSummary = null;
     try {
       const serviceStatus = await queryServiceStatus({
@@ -7443,6 +8098,7 @@ async function runInteractiveLoop(context) {
       profileRootHealth,
       skillSummary,
       serviceSummary,
+      latestTaskSummary,
     });
 
     const mode = await askSelect({
@@ -7489,28 +8145,63 @@ async function runInteractiveLoop(context) {
 async function main() {
   const rawArgv = process.argv.slice(2);
   const hasAnyArgs = rawArgv.length > 0;
-  const cliArgs = parseCliArgs(rawArgv);
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
   const projectRoot = path.resolve(__dirname, '..');
   const appMeta = await loadAppMeta(projectRoot);
+  const controllerSpec = parseControllerCommandArgv(rawArgv);
 
-  if (cliArgs.version) {
+  if (rawArgv.includes('-v') || rawArgv.includes('--version')) {
     console.log(appMeta.version);
     return;
   }
-  if (cliArgs.help) {
-    printCliUsage(appMeta);
+  if (rawArgv.includes('-h') || rawArgv.includes('--help') || controllerSpec.kind === 'help') {
+    console.log(renderV2Usage(appMeta));
     return;
   }
+  const legacyActionFlag = detectLegacyActionFlag(rawArgv);
+  if (legacyActionFlag && !allowInternalLegacyCliByEnv()) {
+    throw new CliArgError(
+      `v2 已移除旧动作旗标 ${legacyActionFlag}。${legacyMigrationHint(legacyActionFlag)}`
+    );
+  }
+  if (controllerSpec.kind === 'invalid') {
+    throw new CliArgError(`无法识别的 v2 命令: ${rawArgv.join(' ')}`);
+  }
+
+  const controllerMode = controllerSpec.kind !== 'interactive' && controllerSpec.kind !== 'legacy';
+  const controllerGlobalArgv = extractGlobalLegacyArgv(rawArgv);
+  if (
+    controllerMode &&
+    controllerSpec.kind !== 'mapped' &&
+    controllerSpec.kind !== 'plan' &&
+    !controllerGlobalArgv.includes('--output') &&
+    !controllerGlobalArgv.includes('--json')
+  ) {
+    controllerGlobalArgv.push('--output', OUTPUT_AGENT_JSON);
+  }
+  const parsedArgv = controllerMode
+    ? controllerSpec.kind === 'mapped' || controllerSpec.kind === 'plan'
+      ? controllerSpec.legacyArgv
+      : controllerGlobalArgv
+    : rawArgv;
+  const cliArgs = parseCliArgs(parsedArgv);
 
   const forceInteractive = cliArgs.interactive === true;
-  const hasNonInteractiveArgs = hasAnyArgs && !forceInteractive;
-  const action = resolveActionFromCli(cliArgs, hasNonInteractiveArgs);
+  const hasNonInteractiveArgs = (hasAnyArgs && !forceInteractive) || controllerMode;
+  const action = controllerMode ? null : resolveActionFromCli(cliArgs, hasNonInteractiveArgs);
   const interactiveMode = !hasNonInteractiveArgs;
   const interactiveStartMode = interactiveMode ? resolveInteractiveStartMode(cliArgs) : MODES.START;
-  const lockMode = interactiveMode ? interactiveStartMode : action || MODES.START;
-  const readOnlyConfig = lockMode === MODES.DOCTOR;
+  const lockMode = controllerMode
+    ? controllerSpec.action || controllerSpec.kind
+    : interactiveMode
+      ? interactiveStartMode
+      : action || MODES.START;
+  const strictReadOnly =
+    lockMode === MODES.DOCTOR ||
+    controllerSpec.kind === 'inspect_footprint' ||
+    controllerSpec.kind === 'skills_status';
+  const readOnlyConfig = strictReadOnly || controllerSpec.kind === 'verify';
 
   const config = await loadConfig(cliArgs, {
     readOnly: readOnlyConfig,
@@ -7522,7 +8213,7 @@ async function main() {
       ? { nativeCorePath: null, repairNote: null }
       : await detectNativeCore(projectRoot, {
           stateRoot: config.stateRoot,
-          allowAutoRepair: true,
+          allowAutoRepair: !readOnlyConfig,
         });
   const outputMode = normalizeActionOutputMode(cliArgs);
 
@@ -7534,15 +8225,27 @@ async function main() {
     appMeta,
     projectRoot,
     readOnlyConfig,
+    strictReadOnly,
   };
 
   let lockHandle = null;
-  if (lockMode !== MODES.DOCTOR) {
+  if (!strictReadOnly) {
     lockHandle = await acquireExecutionLock(config.stateRoot, lockMode, { force: cliArgs.force });
   }
 
   try {
-    const startupUpdate = await maybeRunStartupUpdateCheck(context, cliArgs, action, interactiveMode);
+    const startupUpdate = controllerMode
+      ? null
+      : await maybeRunStartupUpdateCheck(context, cliArgs, action, interactiveMode);
+
+    if (controllerMode) {
+      const controllerResult = await runControllerCommand(controllerSpec, context, cliArgs);
+      emitNonInteractivePayload(controllerResult.payload, normalizeActionOutputMode(cliArgs));
+      if (!controllerResult.payload.ok) {
+        process.exitCode = 1;
+      }
+      return;
+    }
 
     if (interactiveMode) {
       const upgraded = await maybePromptInteractiveUpgrade(context, startupUpdate);
@@ -7592,6 +8295,7 @@ async function main() {
         engine: context.lastRunEngineUsed || (context.nativeCorePath ? 'zig_ready' : 'node'),
       },
     };
+    await saveLatestTaskForContext(context, config.latestTaskPath, payload);
     emitNonInteractivePayload(payload, outputMode);
     if (!payload.ok) {
       process.exitCode = 1;
