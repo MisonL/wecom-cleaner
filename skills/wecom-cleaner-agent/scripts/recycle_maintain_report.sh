@@ -121,7 +121,7 @@ run_cmd_to_file() {
   local task_mode="$1"
   local output_file="$2"
   local err_file="$3"
-  local cmd_parts=(--recycle-maintain --output json --run-task "$task_mode")
+  local cmd_parts=(--recycle-maintain --output agent-json --run-task "$task_mode")
   if [[ -n "$RETENTION_ENABLED" ]]; then
     cmd_parts+=(--retention-enabled "$RETENTION_ENABLED")
   fi

@@ -5,7 +5,7 @@ import { normalizeRecycleRetention } from './recycle-maintenance.js';
 import { normalizeSelfUpdateConfig } from './updater.js';
 
 const ALLOWED_THEMES = new Set(['auto', 'light', 'dark']);
-const ALLOWED_OUTPUTS = new Set(['json', 'text']);
+const ALLOWED_OUTPUTS = new Set(['json', 'text', 'agent-json']);
 const ALLOWED_CONFLICT_STRATEGIES = new Set(['skip', 'overwrite', 'rename']);
 const ALLOWED_EXTERNAL_ROOT_SOURCES = new Set(['preset', 'configured', 'auto', 'all']);
 const ALLOWED_GOVERNANCE_TIERS = new Set(['safe', 'caution', 'protected']);
@@ -605,7 +605,7 @@ export function parseCliArgs(argv) {
 
   if (parsed.jsonOutput) {
     if (parsed.output && parsed.output !== 'json') {
-      throw new CliArgError('参数 --json 与 --output text 不能同时使用');
+      throw new CliArgError('参数 --json 与 --output 非 json 不能同时使用');
     }
     parsed.output = 'json';
   }

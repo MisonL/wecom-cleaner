@@ -18,6 +18,8 @@
   - `--service-uninstall`
   - `--service-status`
   - `--service-run`
+- 新增任务协议模块 `src/task-protocol.js`，统一生成 `userFacingSummary`、`taskPhases`、`taskCard`。
+- 新增无交互输出模式 `--output agent-json`，面向 Agent 提供稳定任务协议载荷。
 
 ### Changed
 
@@ -26,11 +28,19 @@
 - 无交互模式新增 `--delete-mode direct|recycle|service_recycle`、`--direct-delete-ack DIRECT_DELETE`、`--recycle-scope manual|service|all`。
 - 恢复链路支持同时识别手动回收站与服务回收站批次。
 - `e2e:smoke` 已适配新的删除方式步骤与确认词。
+- macOS 外部文件存储自动探测增强：除 `WXWork Files/Caches` 外，也会识别仅含 `WXWork Files/File` / `Image` 的自定义保存路径。
+- `doctor` 新增对 `WXDrive`、`Wedoc`、`WeMail`、`VoipRecords`、`CrashReporter`、`VoipNNModel` 等扩展业务目录占用的体检提示。
+- macOS 目录建模继续扩展到 `Documents/Network`、`Library/HTTPStorages`、`Library/WebKit/WebsiteData`，并在 `doctor` 中增加“未建模大目录”观测。
+- macOS 整体文件建模继续补齐：新增 `Documents/local_storage_index.db`、`Documents/local_en`、`Library/Preferences`、`Library/WecomPrivate`、`Library/Cookies`、`Library/Application Support/com.tencent.WeWorkMac` 等受保护目标，并在 `doctor` 中单独观测 `Publishsys/pkg` 与其 `tmp` 子目录占用。
+- macOS 全量空间治理补充对 `Documents/local_storage_index.db`、`WeMail/load_encrypted` 的受保护建模，并将 `WeDrive/<企业名>` 动态业务目录纳入“可见但不自动删除”的展示范围。
+- Agent skills 报告脚本与命令参考统一切换到 `agent-json`，优先消费 `data.taskCard` / `data.taskPhases`。
+- 交互首页头部增加自动服务状态徽章与计划摘要，提升“驾驶舱”可见性。
 
 ### Fixed
 
 - 修复“手动清理后空间未立即释放”的体验偏差：手动默认不再先搬运到回收区。
 - 修复回收站治理在多回收站语义下的无交互兼容字段缺口，保持旧 JSON 契约可读。
+- 修复 macOS 平台下部分企业微信目录“实际存在但不在扫描/体检模型内”的盲区，新增显式治理目标与保护分级。
 
 ## [1.3.3] - 2026-02-27
 

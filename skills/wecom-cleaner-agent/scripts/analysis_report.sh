@@ -115,7 +115,7 @@ REPORT_JSON="$(mktemp -t wecom-analysis.XXXX.json)"
 REPORT_ERR="$(mktemp -t wecom-analysis.XXXX.err)"
 trap 'rm -f "$REPORT_JSON" "$REPORT_ERR"' EXIT
 
-cmd=(--analysis-only --accounts "$ACCOUNTS" --output json)
+cmd=(--analysis-only --accounts "$ACCOUNTS" --output agent-json)
 if [[ -n "$CATEGORIES" ]]; then
   cmd+=(--categories "$CATEGORIES")
 fi

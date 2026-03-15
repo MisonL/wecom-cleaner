@@ -32,13 +32,13 @@ description: 用于执行和编排 wecom-cleaner 的无交互 Agent 技能。当
 - 系统自检：`scripts/doctor_report.sh`
 - 检查更新：`scripts/check_update_report.sh`
 - 程序升级：`scripts/upgrade_report.sh`
-- skills 同步：回退到 `wecom-cleaner --sync-skills --output json`
+- skills 同步：回退到 `wecom-cleaner --sync-skills --output agent-json`
 
 调用顺序：
 
 1. 先判断用户意图对应哪个动作。
 2. 直接调用对应脚本。
-3. 脚本失败时，才回退到 `wecom-cleaner --<action> --output json` 手工流程。
+3. 脚本失败时，才回退到 `wecom-cleaner --<action> --output agent-json` 手工流程。
 4. 回退流程里优先读取 `data.taskCard` 与 `data.taskPhases`，再读取 `summary/data.report` 细节。
 
 ## 脚本调用约定

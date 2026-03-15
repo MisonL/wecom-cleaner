@@ -89,7 +89,7 @@ test('parseCliArgs 可解析无交互动作与动作参数', () => {
     '--yes',
     '--save-config',
     '--output',
-    'json',
+    'agent-json',
   ]);
 
   assert.equal(parsed.action, 'cleanup_monthly');
@@ -103,6 +103,13 @@ test('parseCliArgs 可解析无交互动作与动作参数', () => {
   assert.equal(parsed.dryRun, false);
   assert.equal(parsed.yes, true);
   assert.equal(parsed.saveConfig, true);
+  assert.equal(parsed.output, 'agent-json');
+});
+
+test('parseCliArgs 保持 --json 为 json 兼容别名', () => {
+  const parsed = parseCliArgs(['--doctor', '--json']);
+  assert.equal(parsed.action, 'doctor');
+  assert.equal(parsed.jsonOutput, true);
   assert.equal(parsed.output, 'json');
 });
 

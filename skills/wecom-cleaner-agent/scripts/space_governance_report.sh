@@ -155,7 +155,7 @@ run_cmd_to_file() {
     --tiers "$TIERS"
     --suggested-only "$SUGGESTED_ONLY"
     --allow-recent-active "$ALLOW_RECENT_ACTIVE"
-    --output json
+    --output agent-json
     --run-task "$task_mode"
   )
   if [[ -n "$TARGETS" ]]; then

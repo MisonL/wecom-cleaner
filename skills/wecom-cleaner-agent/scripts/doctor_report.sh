@@ -50,7 +50,7 @@ REPORT_JSON="$(mktemp -t wecom-doctor.XXXX.json)"
 REPORT_ERR="$(mktemp -t wecom-doctor.XXXX.err)"
 trap 'rm -f "$REPORT_JSON" "$REPORT_ERR"' EXIT
 
-cmd=(--doctor --output json)
+cmd=(--doctor --output agent-json)
 if [[ -n "$ROOT" ]]; then
   cmd+=(--root "$ROOT")
 fi

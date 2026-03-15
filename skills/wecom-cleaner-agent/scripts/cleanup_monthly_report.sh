@@ -168,7 +168,7 @@ run_cmd_to_file() {
     --cleanup-monthly
     --cutoff-month "$CUTOFF_MONTH"
     --accounts "$ACCOUNTS"
-    --output json
+    --output agent-json
     --run-task "$task_mode"
   )
   if [[ -n "$ROOT" ]]; then

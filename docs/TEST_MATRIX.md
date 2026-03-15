@@ -13,7 +13,7 @@
 ### 维度 A：入口
 
 - 交互模式（TUI）
-- 无交互 CLI（`--output json|text`）
+- 无交互 CLI（`--output json|text|agent-json`）
 - Agent 脚本（`skills/wecom-cleaner-agent/scripts/*.sh`）
 
 ### 维度 B：动作

@@ -73,6 +73,14 @@ import {
 } from './updater.js';
 import { inspectSkillBinding, installSkill, skillBindingStatusLabel } from './skill-installer.js';
 import {
+  TASK_PROTOCOL_VERSION,
+  attachTaskProtocolData,
+  buildTaskPhaseEntry,
+  buildSkippedTaskPhase,
+  buildUserFacingSummary,
+  withRunTaskResult,
+} from './task-protocol.js';
+import {
   compareMonthKey,
   expandHome,
   formatBytes,
@@ -167,6 +175,7 @@ const INTERACTIVE_MODE_ALIASES = new Map([
   ['settings', MODES.SETTINGS],
 ]);
 const OUTPUT_JSON = 'json';
+const OUTPUT_AGENT_JSON = 'agent-json';
 const OUTPUT_TEXT = 'text';
 const RUN_TASK_PREVIEW = 'preview';
 const RUN_TASK_EXECUTE = 'execute';
@@ -987,6 +996,7 @@ function printHeader({
   externalStorageMeta = null,
   profileRootHealth = null,
   skillSummary = null,
+  serviceSummary = null,
 }) {
   console.clear();
   const normalizedThemeMode = normalizeThemeMode(config.theme);
@@ -1011,6 +1021,15 @@ function printHeader({
     renderBadge(`账号 ${accountCount}`, 'info', palette),
     renderBadge(engineStatus.badge, engineStatus.tone, palette),
     renderBadge(skillStatus.badge, skillStatus.tone, palette),
+    renderBadge(
+      serviceSummary?.installed
+        ? serviceSummary?.healthy
+          ? '自动服务:已安装'
+          : '自动服务:需关注'
+        : '自动服务:未安装',
+      serviceSummary?.installed ? (serviceSummary?.healthy ? 'success' : 'warn') : 'muted',
+      palette
+    ),
     renderBadge(formatThemeStatus(config.theme, resolvedThemeMode), 'muted', palette),
   ];
   console.log(`${INFO_LEFT_PADDING}${stateBadges.join(' ')}`);
@@ -1023,6 +1042,30 @@ function printHeader({
   printLine('仓库', appMeta.repository);
   printLine('根目录', config.rootDir);
   printLine('状态目录', config.stateRoot);
+  if (serviceSummary) {
+    printLine(
+      '服务状态',
+      serviceSummary.installed
+        ? `登录${serviceSummary.loginLoaded ? '已载入' : '未载入'} | 定时${serviceSummary.scheduleLoaded ? '已载入' : '未载入'}`
+        : '未安装'
+    );
+    if (serviceSummary.installed) {
+      const nextRunText = serviceSummary.nextRunAt ? formatLocalDate(serviceSummary.nextRunAt) : '待计算';
+      printLine(
+        '服务计划',
+        `保留${serviceSummary.retainDays}天 | ${serviceDeleteModeLabel(serviceSummary.deleteMode)} | 下次 ${nextRunText}`,
+        { muted: true }
+      );
+      if (serviceSummary.lastStatus) {
+        const lastRunText = serviceSummary.lastRunAt ? formatLocalDate(serviceSummary.lastRunAt) : '未记录';
+        printLine(
+          '最近服务',
+          `${serviceSummary.lastStatus} | ${serviceTriggerLabel(serviceSummary.lastTriggerSource)} | ${lastRunText}`,
+          { muted: true }
+        );
+      }
+    }
+  }
 
   const sourceCounts = externalStorageMeta?.sourceCounts || null;
   if (externalStorageRoots.length > 0) {
@@ -1959,7 +2002,11 @@ function attachScanDebugData(baseData, cliArgs, summaryPayload, fullPayload = {}
 }
 
 function normalizeActionOutputMode(cliArgs) {
-  if (cliArgs.output === OUTPUT_TEXT || cliArgs.output === OUTPUT_JSON) {
+  if (
+    cliArgs.output === OUTPUT_TEXT ||
+    cliArgs.output === OUTPUT_JSON ||
+    cliArgs.output === OUTPUT_AGENT_JSON
+  ) {
     return cliArgs.output;
   }
   return OUTPUT_JSON;
@@ -2036,7 +2083,7 @@ function printCliUsage(appMeta) {
     '  --service-run',
     '',
     '常用选项：',
-    '  --output json|text',
+    '  --output json|text|agent-json',
     '  --dry-run true|false',
     '  --yes',
     '  --delete-mode direct|recycle|service_recycle',
@@ -2795,257 +2842,6 @@ function mergeRecycleResults(scopeResults, dryRun) {
     aggregate.remainingBytes += Number(item.after?.totalBytes || 0);
   }
   return aggregate;
-}
-
-function buildUserFacingSummary(action, result) {
-  const summary = result?.summary || {};
-  const data = result?.data || {};
-  const report = result?.data?.report || {};
-  const matched = report?.matched || {};
-
-  if (action === MODES.CLEANUP_MONTHLY) {
-    return {
-      scopeNotes: buildActionScopeNotes(action, result),
-      scope: {
-        accountCount: Number(summary.accountCount || 0),
-        monthCount: Number(summary.monthCount || 0),
-        categoryCount: Number(summary.categoryCount || 0),
-        rootPathCount: Number(summary.rootPathCount || 0),
-        cutoffMonth: summary.cutoffMonth || null,
-        monthRange: {
-          from: summary.matchedMonthStart || matched?.monthRange?.from || null,
-          to: summary.matchedMonthEnd || matched?.monthRange?.to || null,
-        },
-      },
-      result: {
-        noTarget: Boolean(summary.noTarget),
-        deleteMode: summary.deleteMode || DELETE_MODES.RECYCLE,
-        recoverable: summary.recoverable !== false,
-        matchedTargets: Number(summary.matchedTargets || 0),
-        matchedBytes: Number(summary.matchedBytes || 0),
-        reclaimedBytes: Number(summary.reclaimedBytes || 0),
-        successCount: Number(summary.successCount || 0),
-        skippedCount: Number(summary.skippedCount || 0),
-        failedCount: Number(summary.failedCount || 0),
-        batchId: summary.batchId || null,
-      },
-      byMonth: summarizeDimensionRows(matched.monthStats, { labelKey: 'monthKey' }),
-      byCategory: summarizeDimensionRows(matched.categoryStats, { labelKey: 'categoryLabel' }),
-      byRoot: summarizeDimensionRows(matched.rootStats, { labelKey: 'rootPath' }),
-    };
-  }
-
-  if (action === MODES.ANALYSIS_ONLY) {
-    return {
-      scopeNotes: buildActionScopeNotes(action, result),
-      scope: {
-        accountCount: Number(summary.accountCount || 0),
-        matchedAccountCount: Number(summary.matchedAccountCount || 0),
-        categoryCount: Number(summary.categoryCount || 0),
-        monthBucketCount: Number(summary.monthBucketCount || 0),
-      },
-      result: {
-        targetCount: Number(summary.targetCount || 0),
-        totalBytes: Number(summary.totalBytes || 0),
-      },
-      byMonth: summarizeDimensionRows(matched.monthStats, { labelKey: 'monthKey' }),
-      byCategory: summarizeDimensionRows(matched.categoryStats, { labelKey: 'categoryLabel' }),
-      byRoot: summarizeDimensionRows(matched.rootStats, { labelKey: 'rootPath' }),
-    };
-  }
-
-  if (action === MODES.SPACE_GOVERNANCE) {
-    return {
-      scopeNotes: buildActionScopeNotes(action, result),
-      scope: {
-        accountCount: Number(summary.accountCount || 0),
-        tierCount: Number(summary.tierCount || 0),
-        targetTypeCount: Number(summary.targetTypeCount || 0),
-        rootPathCount: Number(summary.rootPathCount || 0),
-      },
-      result: {
-        noTarget: Boolean(summary.noTarget),
-        deleteMode: summary.deleteMode || DELETE_MODES.RECYCLE,
-        recoverable: summary.recoverable !== false,
-        matchedTargets: Number(summary.matchedTargets || 0),
-        matchedBytes: Number(summary.matchedBytes || 0),
-        reclaimedBytes: Number(summary.reclaimedBytes || 0),
-        successCount: Number(summary.successCount || 0),
-        skippedCount: Number(summary.skippedCount || 0),
-        failedCount: Number(summary.failedCount || 0),
-        batchId: summary.batchId || null,
-      },
-      byTier: summarizeDimensionRows(matched.byTier, { labelKey: 'tierLabel' }),
-      byCategory: summarizeDimensionRows(matched.byTargetType, { labelKey: 'targetLabel' }),
-      byRoot: summarizeDimensionRows(matched.byRoot, { labelKey: 'rootPath' }),
-    };
-  }
-
-  if (action === MODES.RESTORE) {
-    return {
-      scopeNotes: buildActionScopeNotes(action, result),
-      scope: {
-        entryCount: Number(summary.entryCount || 0),
-        conflictStrategy: summary.conflictStrategy || null,
-        rootPathCount: Number(summary.rootPathCount || 0),
-      },
-      result: {
-        batchId: summary.batchId || null,
-        matchedBytes: Number(summary.matchedBytes || 0),
-        restoredBytes: Number(summary.restoredBytes || 0),
-        successCount: Number(summary.successCount || 0),
-        skippedCount: Number(summary.skippedCount || 0),
-        failedCount: Number(summary.failedCount || 0),
-      },
-      byMonth: summarizeDimensionRows(matched.byMonth, { labelKey: 'monthKey' }),
-      byCategory: summarizeDimensionRows(matched.byCategory, { labelKey: 'categoryLabel' }),
-      byRoot: summarizeDimensionRows(matched.byRoot, { labelKey: 'rootPath' }),
-    };
-  }
-
-  if (action === MODES.RECYCLE_MAINTAIN) {
-    return {
-      scopeNotes: buildActionScopeNotes(action, result),
-      scope: {
-        candidateCount: Number(summary.candidateCount || 0),
-        selectedByAge: Number(summary.selectedByAge || 0),
-        selectedBySize: Number(summary.selectedBySize || 0),
-      },
-      result: {
-        status: summary.status || null,
-        deletedBatches: Number(summary.deletedBatches || 0),
-        deletedBytes: Number(summary.deletedBytes || 0),
-        failedBatches: Number(summary.failedBatches || 0),
-        remainingBatches: Number(summary.remainingBatches || 0),
-        remainingBytes: Number(summary.remainingBytes || 0),
-      },
-    };
-  }
-
-  if (action === MODES.DOCTOR) {
-    return {
-      scopeNotes: buildActionScopeNotes(action, result),
-      scope: {
-        platform: result?.data?.runtime?.targetTag || null,
-      },
-      result: {
-        overall: summary.overall || null,
-        pass: Number(summary.pass || 0),
-        warn: Number(summary.warn || 0),
-        fail: Number(summary.fail || 0),
-      },
-    };
-  }
-
-  if (action === MODES.CHECK_UPDATE) {
-    const update = result?.data?.update || {};
-    const skills = summarizeSkillBinding(result?.data?.skills || {});
-    const scopeNotes = [
-      deriveUpdateSourceChain(summary, update),
-      summary.hasUpdate
-        ? '检测到新版本后，仍需你手动确认才会执行升级。'
-        : '本次仅执行检查，不会改动本机安装。',
-    ];
-    if (!skills.matched) {
-      scopeNotes.push(`skills 状态：${skills.statusLabel}，建议同步后再让 Agent 执行任务。`);
-    }
-    return {
-      scopeNotes: uniqueStrings(scopeNotes),
-      result: {
-        checked: Boolean(summary.checked),
-        hasUpdate: Boolean(summary.hasUpdate),
-        currentVersion: summary.currentVersion || null,
-        latestVersion: summary.latestVersion || null,
-        source: summary.source || null,
-        sourceChain: summary.sourceChain || deriveUpdateSourceChain(summary, update),
-        channel: summary.channel || null,
-        skillsStatus: skills.status,
-        skillsMatched: skills.matched,
-        skillsInstalledVersion: skills.installedSkillVersion,
-        skillsBoundAppVersion: skills.installedRequiredAppVersion,
-      },
-    };
-  }
-
-  if (action === MODES.UPGRADE) {
-    const skillSync = result?.data?.skillSync || {};
-    return {
-      scopeNotes: buildActionScopeNotes(action, result),
-      result: {
-        executed: Boolean(summary.executed),
-        method: summary.method || null,
-        targetVersion: summary.targetVersion || null,
-        status: hasDisplayValue(summary.status) ? Number(summary.status) : null,
-        skillSyncStatus: summary.skillSyncStatus || null,
-        skillSyncMethod: summary.skillSyncMethod || null,
-        skillSyncTargetVersion: summary.skillSyncTargetVersion || null,
-        skillSyncCommand: skillSync.command || null,
-      },
-    };
-  }
-
-  if (action === MODES.SYNC_SKILLS) {
-    return {
-      scopeNotes: buildActionScopeNotes(action, result),
-      result: {
-        method: summary.method || null,
-        dryRun: Boolean(summary.dryRun),
-        status: summary.status || null,
-        skillsStatusBefore: summary.skillsStatusBefore || null,
-        skillsStatusAfter: summary.skillsStatusAfter || null,
-      },
-    };
-  }
-
-  if (action === MODES.SERVICE_STATUS) {
-    return {
-      scopeNotes: ['自动服务状态查询不会执行任何清理动作。'],
-      result: {
-        installed: Boolean(summary.installed),
-        loginLoaded: Boolean(summary.loginLoaded),
-        scheduleLoaded: Boolean(summary.scheduleLoaded),
-        nextRunAt: summary.nextRunAt || null,
-        deleteMode: summary.deleteMode || null,
-        retainDays: Number(summary.retainDays || 0),
-      },
-    };
-  }
-
-  if (action === MODES.SERVICE_INSTALL || action === MODES.SERVICE_UNINSTALL) {
-    return {
-      scopeNotes: ['自动服务安装状态已更新。'],
-      result: summary,
-    };
-  }
-
-  if (action === MODES.SERVICE_RUN) {
-    return {
-      scopeNotes: buildActionScopeNotes(action, result),
-      scope: {
-        accountCount: Array.isArray(data.selectedAccounts) ? data.selectedAccounts.length : 0,
-        categoryCount: Array.isArray(data.selectedCategories) ? data.selectedCategories.length : 0,
-        externalRootCount: Array.isArray(data.selectedExternalRoots) ? data.selectedExternalRoots.length : 0,
-      },
-      result: {
-        triggerSource: summary.triggerSource || null,
-        deleteMode: summary.deleteMode || null,
-        retainDays: Number(summary.retainDays || 0),
-        matchedTargets: Number(summary.matchedTargets || 0),
-        reclaimedBytes: Number(summary.reclaimedBytes || 0),
-        serviceRecycleDeletedBytes: Number(summary.serviceRecycleDeletedBytes || 0),
-        lowSpaceTriggered: Boolean(summary.lowSpaceTriggered),
-        lowSpaceDeletedBytes: Number(summary.lowSpaceDeletedBytes || 0),
-      },
-      byMonth: summarizeDimensionRows(matched.monthStats, { labelKey: 'monthKey' }),
-      byCategory: summarizeDimensionRows(matched.categoryStats, { labelKey: 'categoryLabel' }),
-      byRoot: summarizeDimensionRows(matched.rootStats, { labelKey: 'rootPath' }),
-    };
-  }
-
-  return {
-    scopeNotes: buildActionScopeNotes(action, result),
-    result: summary,
-  };
 }
 
 const ACTION_DISPLAY_NAMES = new Map([
@@ -4418,6 +4214,7 @@ async function runSpaceGovernanceModeNonInteractive(context, cliArgs, warnings =
   if (!dryRun) {
     assertDirectDeleteAck(deleteMode, cliArgs.directDeleteAck);
   }
+  const observedReport = buildGovernanceTargetReport(scan.targets, { topPathLimit: 20 });
   const matchedReport = buildGovernanceTargetReport(selectedTargets, { topPathLimit: 20 });
   const scanDebugSummary = {
     action: MODES.SPACE_GOVERNANCE,
@@ -4479,6 +4276,7 @@ async function runSpaceGovernanceModeNonInteractive(context, cliArgs, warnings =
         deleteMode,
         engineUsed: scan.engineUsed || 'node',
         report: {
+          observed: observedReport,
           matched: matchedReport,
           executed: null,
         },
@@ -4531,6 +4329,7 @@ async function runSpaceGovernanceModeNonInteractive(context, cliArgs, warnings =
       deleteMode,
       engineUsed: scan.engineUsed || 'node',
       report: {
+        observed: observedReport,
         matched: matchedReport,
         executed: result.breakdown || null,
       },
@@ -5868,279 +5667,6 @@ async function runNonInteractiveAction(action, context, cliArgs) {
   throw new UsageError(`不支持的无交互动作: ${action}`);
 }
 
-function phaseMatchedTargets(action, result) {
-  const summary = result?.summary || {};
-  if (action === MODES.CLEANUP_MONTHLY || action === MODES.SPACE_GOVERNANCE) {
-    return Number(summary.matchedTargets || 0);
-  }
-  if (action === MODES.RESTORE) {
-    return Number(summary.entryCount || 0);
-  }
-  if (action === MODES.RECYCLE_MAINTAIN) {
-    return Number(summary.candidateCount || 0);
-  }
-  if (action === MODES.ANALYSIS_ONLY) {
-    return Number(summary.targetCount || 0);
-  }
-  return 0;
-}
-
-function phaseMatchedBytes(action, result) {
-  const summary = result?.summary || {};
-  if (action === MODES.CLEANUP_MONTHLY || action === MODES.SPACE_GOVERNANCE || action === MODES.RESTORE) {
-    return Number(summary.matchedBytes || 0);
-  }
-  if (action === MODES.ANALYSIS_ONLY) {
-    return Number(summary.totalBytes || 0);
-  }
-  if (action === MODES.RECYCLE_MAINTAIN) {
-    return Number(summary.deletedBytes || 0);
-  }
-  return 0;
-}
-
-function phaseReclaimedBytes(action, result) {
-  const summary = result?.summary || {};
-  if (action === MODES.RESTORE) {
-    return Number(summary.restoredBytes || 0);
-  }
-  if (action === MODES.RECYCLE_MAINTAIN) {
-    return Number(summary.deletedBytes || 0);
-  }
-  return Number(summary.reclaimedBytes || 0);
-}
-
-function buildTaskPhaseEntry(action, phaseName, result, durationMs) {
-  const summary = result?.summary || {};
-  const warnings = Array.isArray(result?.warnings) ? result.warnings : [];
-  const errors = Array.isArray(result?.errors) ? result.errors : [];
-  return {
-    name: phaseName,
-    status: 'completed',
-    ok: Boolean(result?.ok),
-    dryRun: result?.dryRun ?? null,
-    durationMs: Math.max(0, Number(durationMs || 0)),
-    summary,
-    warningCount: warnings.length,
-    errorCount: errors.length,
-    warnings,
-    errors,
-    stats: {
-      matchedTargets: phaseMatchedTargets(action, result),
-      matchedBytes: phaseMatchedBytes(action, result),
-      reclaimedBytes: phaseReclaimedBytes(action, result),
-      successCount: Number(summary.successCount || 0),
-      skippedCount: Number(summary.skippedCount || 0),
-      failedCount: Number(summary.failedCount || summary.failedBatches || 0),
-      batchId: summary.batchId || null,
-    },
-    userFacingSummary: buildUserFacingSummary(action, result),
-  };
-}
-
-function buildSkippedTaskPhase(phaseName, reason) {
-  return {
-    name: phaseName,
-    status: 'skipped',
-    reason,
-    ok: true,
-    dryRun: null,
-    durationMs: 0,
-    summary: {},
-    warningCount: 0,
-    errorCount: 0,
-    warnings: [],
-    errors: [],
-    stats: {
-      matchedTargets: 0,
-      matchedBytes: 0,
-      reclaimedBytes: 0,
-      successCount: 0,
-      skippedCount: 0,
-      failedCount: 0,
-      batchId: null,
-    },
-    userFacingSummary: {},
-  };
-}
-
-function buildTaskCardBreakdown(action, report) {
-  const matched = report?.matched || {};
-  if (action === MODES.CLEANUP_MONTHLY || action === MODES.ANALYSIS_ONLY) {
-    return {
-      byCategory: summarizeDimensionRows(matched.categoryStats, { labelKey: 'categoryLabel' }, 16),
-      byMonth: summarizeDimensionRows(matched.monthStats, { labelKey: 'monthKey' }, 16),
-      byRoot: summarizeDimensionRows(matched.rootStats, { labelKey: 'rootPath' }, 12),
-      topPaths: Array.isArray(matched.topPaths)
-        ? matched.topPaths.slice(0, 12).map((item) => ({
-            path: item.path || '-',
-            category: item.categoryLabel || item.categoryKey || '-',
-            month: item.monthKey || '非月份目录',
-            sizeBytes: Number(item.sizeBytes || 0),
-          }))
-        : [],
-    };
-  }
-  if (action === MODES.SPACE_GOVERNANCE) {
-    return {
-      byCategory: summarizeDimensionRows(matched.byTargetType, { labelKey: 'targetLabel' }, 16),
-      byMonth: [],
-      byRoot: summarizeDimensionRows(matched.byRoot, { labelKey: 'rootPath' }, 12),
-      byTier: summarizeDimensionRows(matched.byTier, { labelKey: 'tierLabel' }, 8),
-      topPaths: Array.isArray(matched.topPaths)
-        ? matched.topPaths.slice(0, 12).map((item) => ({
-            path: item.path || '-',
-            category: item.targetLabel || item.targetKey || '-',
-            month: '-',
-            sizeBytes: Number(item.sizeBytes || 0),
-          }))
-        : [],
-    };
-  }
-  if (action === MODES.RESTORE) {
-    return {
-      byCategory: summarizeDimensionRows(matched.byCategory, { labelKey: 'categoryLabel' }, 16),
-      byMonth: summarizeDimensionRows(matched.byMonth, { labelKey: 'monthKey' }, 16),
-      byRoot: summarizeDimensionRows(matched.byRoot, { labelKey: 'rootPath' }, 12),
-      topPaths: Array.isArray(matched.topEntries)
-        ? matched.topEntries.slice(0, 12).map((item) => ({
-            path: item.originalPath || '-',
-            category: item.categoryLabel || item.categoryKey || '-',
-            month: item.monthKey || '非月份目录',
-            sizeBytes: Number(item.sizeBytes || 0),
-          }))
-        : [],
-    };
-  }
-  if (action === MODES.RECYCLE_MAINTAIN) {
-    const operations = Array.isArray(report?.operations) ? report.operations : [];
-    const byStatus = operations.reduce((acc, item) => {
-      const key = String(item?.status || 'unknown');
-      acc.set(key, (acc.get(key) || 0) + 1);
-      return acc;
-    }, new Map());
-    return {
-      byCategory: [...byStatus.entries()].map(([label, count]) => ({
-        label,
-        count: Number(count || 0),
-        sizeBytes: 0,
-      })),
-      byMonth: [],
-      byRoot: [],
-      topPaths: [],
-    };
-  }
-  return {
-    byCategory: [],
-    byMonth: [],
-    byRoot: [],
-    topPaths: [],
-  };
-}
-
-function buildRunTaskCard(action, runTaskMode, taskDecision, phases, finalResult) {
-  const previewPhase = phases.find((item) => item.name === 'preview' && item.status === 'completed') || null;
-  const executePhase = phases.find((item) => item.name === 'execute' && item.status === 'completed') || null;
-  const verifyPhase = phases.find((item) => item.name === 'verify' && item.status === 'completed') || null;
-  const report = finalResult?.data?.report || {};
-  const breakdown = buildTaskCardBreakdown(action, report);
-
-  let conclusion = '任务已完成。';
-  if (taskDecision === 'skipped_no_target') {
-    conclusion = '预演命中为 0，已按安全策略跳过真实执行。';
-  } else if (taskDecision === 'preview_only') {
-    conclusion = '已完成预演，本次未执行真实操作。';
-  } else if (taskDecision === 'execute_only' && executePhase) {
-    conclusion = executePhase.ok ? '已完成真实执行。' : '已尝试真实执行，但存在失败项。';
-  } else if (taskDecision === 'executed_and_verified') {
-    conclusion =
-      verifyPhase && Number(verifyPhase.stats.matchedTargets || 0) === 0
-        ? '已完成真实执行并通过复核，范围内无剩余目标。'
-        : '已完成真实执行与复核。';
-  } else if (taskDecision === 'preview_failed') {
-    conclusion = '预演阶段失败，后续阶段未执行。';
-  }
-
-  return {
-    action,
-    actionLabel: actionDisplayName(action),
-    mode: runTaskMode,
-    decision: taskDecision,
-    conclusion,
-    phases: phases.map((item) => ({
-      name: item.name,
-      status: item.status,
-      reason: item.reason || null,
-      dryRun: item.dryRun,
-      ok: item.ok,
-      durationMs: item.durationMs,
-      matchedTargets: Number(item?.stats?.matchedTargets || 0),
-      matchedBytes: Number(item?.stats?.matchedBytes || 0),
-      reclaimedBytes: Number(item?.stats?.reclaimedBytes || 0),
-      successCount: Number(item?.stats?.successCount || 0),
-      skippedCount: Number(item?.stats?.skippedCount || 0),
-      failedCount: Number(item?.stats?.failedCount || 0),
-      batchId: item?.stats?.batchId || null,
-    })),
-    scope: {
-      accountCount: Number(finalResult?.summary?.accountCount || 0),
-      monthCount: Number(finalResult?.summary?.monthCount || 0),
-      categoryCount: Number(finalResult?.summary?.categoryCount || 0),
-      rootPathCount: Number(finalResult?.summary?.rootPathCount || 0),
-      cutoffMonth: finalResult?.summary?.cutoffMonth || null,
-      selectedAccounts: uniqueStrings(finalResult?.data?.selectedAccounts || []),
-      selectedMonths: uniqueStrings(finalResult?.data?.selectedMonths || []),
-      selectedCategories: uniqueStrings(finalResult?.data?.selectedCategories || []),
-      selectedExternalRoots: uniqueStrings(finalResult?.data?.selectedExternalRoots || []),
-    },
-    preview: previewPhase
-      ? {
-          matchedTargets: Number(previewPhase.stats.matchedTargets || 0),
-          matchedBytes: Number(previewPhase.stats.matchedBytes || 0),
-          reclaimedBytes: Number(previewPhase.stats.reclaimedBytes || 0),
-          failedCount: Number(previewPhase.stats.failedCount || 0),
-        }
-      : null,
-    execute: executePhase
-      ? {
-          successCount: Number(executePhase.stats.successCount || 0),
-          skippedCount: Number(executePhase.stats.skippedCount || 0),
-          failedCount: Number(executePhase.stats.failedCount || 0),
-          reclaimedBytes: Number(executePhase.stats.reclaimedBytes || 0),
-          batchId: executePhase.stats.batchId || null,
-        }
-      : null,
-    verify: verifyPhase
-      ? {
-          matchedTargets: Number(verifyPhase.stats.matchedTargets || 0),
-          matchedBytes: Number(verifyPhase.stats.matchedBytes || 0),
-          failedCount: Number(verifyPhase.stats.failedCount || 0),
-        }
-      : null,
-    breakdown,
-  };
-}
-
-function withRunTaskResult(baseResult, action, runTaskMode, taskDecision, phases) {
-  const output = baseResult && typeof baseResult === 'object' ? baseResult : {};
-  const data = output.data && typeof output.data === 'object' ? output.data : {};
-  const summary = output.summary && typeof output.summary === 'object' ? output.summary : {};
-  return {
-    ...output,
-    summary: {
-      ...summary,
-      runTaskMode,
-      taskDecision,
-      phaseCount: phases.length,
-    },
-    data: {
-      ...data,
-      taskPhases: phases,
-      taskCard: buildRunTaskCard(action, runTaskMode, taskDecision, phases, output),
-    },
-  };
-}
-
 async function runNonInteractiveTask(action, context, cliArgs) {
   const runTaskMode = normalizeRunTaskMode(cliArgs.runTask);
   if (!runTaskMode) {
@@ -6204,7 +5730,7 @@ async function runNonInteractiveTask(action, context, cliArgs) {
     return withRunTaskResult(preview.result, action, runTaskMode, 'preview_failed', phases);
   }
 
-  if (phaseMatchedTargets(action, preview.result) <= 0) {
+  if (Number(preview.phase?.stats?.matchedTargets || 0) <= 0) {
     const phases = [
       preview.phase,
       buildSkippedTaskPhase('execute', 'no_target'),
@@ -7152,7 +6678,7 @@ async function runCheckUpdateMode(context, cliArgs = {}) {
 }
 
 function buildTextPayloadFromResult(context, result) {
-  return {
+  return attachTaskProtocolData(result?.action || null, {
     ...result,
     meta: {
       app: APP_NAME,
@@ -7163,7 +6689,7 @@ function buildTextPayloadFromResult(context, result) {
       output: OUTPUT_TEXT,
       engine: context.lastRunEngineUsed || (context.nativeCorePath ? 'zig_ready' : 'node'),
     },
-  };
+  });
 }
 
 async function runSyncSkillsMode(context, cliArgs = {}) {
@@ -7862,6 +7388,41 @@ async function runInteractiveLoop(context) {
     const skillSummary = summarizeSkillBinding(
       await inspectSkillBindingSafe(context, context.appMeta?.version || '')
     );
+    let serviceSummary = null;
+    try {
+      const serviceStatus = await queryServiceStatus({
+        stateRoot: context.config.stateRoot,
+        serviceConfigPath: context.config.serviceConfigPath,
+        serviceStatePath: context.config.serviceStatePath,
+      });
+      serviceSummary = {
+        installed: Boolean(serviceStatus.installed),
+        loginLoaded: Boolean(serviceStatus.login?.loaded),
+        scheduleLoaded: Boolean(serviceStatus.schedule?.loaded),
+        healthy:
+          Boolean(serviceStatus.installed) &&
+          Boolean(serviceStatus.login?.loaded || serviceStatus.schedule?.loaded),
+        nextRunAt: serviceStatus.nextTriggerAt || null,
+        retainDays: Number(serviceStatus.config?.retainDays || 0),
+        deleteMode: serviceStatus.config?.deleteMode || DELETE_MODES.SERVICE_RECYCLE,
+        lastStatus: serviceStatus.state?.lastStatus || '',
+        lastTriggerSource: serviceStatus.state?.lastTriggerSource || '',
+        lastRunAt: Number(serviceStatus.state?.lastRunAt || 0),
+      };
+    } catch {
+      serviceSummary = {
+        installed: false,
+        loginLoaded: false,
+        scheduleLoaded: false,
+        healthy: false,
+        nextRunAt: null,
+        retainDays: 0,
+        deleteMode: DELETE_MODES.SERVICE_RECYCLE,
+        lastStatus: '',
+        lastTriggerSource: '',
+        lastRunAt: 0,
+      };
+    }
     const detectedExternalStorage = await detectExternalStorageRoots({
       configuredRoots: context.config.externalStorageRoots,
       profilesRoot: context.config.rootDir,
@@ -7881,6 +7442,7 @@ async function runInteractiveLoop(context) {
       externalStorageMeta: detectedExternalStorage.meta,
       profileRootHealth,
       skillSummary,
+      serviceSummary,
     });
 
     const mode = await askSelect({
@@ -8004,13 +7566,9 @@ async function main() {
     if (action !== MODES.CHECK_UPDATE && action !== MODES.UPGRADE) {
       result = attachStartupUpdateToResult(result, startupUpdate, context.config.selfUpdate.skipVersion);
     }
-    result = {
-      ...(result || {}),
-      data: {
-        ...((result && result.data) || {}),
-        userFacingSummary: buildUserFacingSummary(action, result),
-      },
-    };
+    result = attachTaskProtocolData(action, result, {
+      durationMs: Date.now() - startedAt,
+    });
     if (cliArgs.saveConfig) {
       await saveConfig(config);
     }
@@ -8030,6 +7588,7 @@ async function main() {
         timestamp: Date.now(),
         durationMs: Date.now() - startedAt,
         output: outputMode,
+        protocol: outputMode === OUTPUT_AGENT_JSON ? `agent-json-v${TASK_PROTOCOL_VERSION}` : 'json-v1',
         engine: context.lastRunEngineUsed || (context.nativeCorePath ? 'zig_ready' : 'node'),
       },
     };

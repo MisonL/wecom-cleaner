@@ -1,17 +1,32 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { SPACE_GOVERNANCE_TARGETS } from './constants.js';
 import { collectRecycleStats, normalizeRecycleRetention } from './recycle-maintenance.js';
 import { detectExternalStorageRoots, discoverAccounts } from './scanner.js';
 import { computeNextTriggerAt, queryServiceStatus, readFilesystemUsage } from './service-manager.js';
 import { inspectSkillBinding, skillBindingStatusLabel } from './skill-installer.js';
 import { normalizeSelfUpdateConfig } from './updater.js';
-import { calculateDirectorySize } from './utils.js';
+import { calculateDirectorySize, inferDataRootFromProfilesRoot } from './utils.js';
 
 const STATUS_PASS = 'pass';
 const STATUS_WARN = 'warn';
 const STATUS_FAIL = 'fail';
 const DEFAULT_PROBE_TIMEOUT_MS = 3_000;
+const UNMODELED_DIR_WARN_BYTES = 128 * 1024 * 1024;
+const PUBLISHSYS_WARN_BYTES = 512 * 1024 * 1024;
+const AUXILIARY_SUPPORT_RELATIVE_PATHS = [
+  ['wxdrive', 'Library/Application Support/WXDrive'],
+  ['wedoc', 'Library/Application Support/Wedoc'],
+  ['wemail', 'Library/Application Support/WeMail'],
+  ['voipRecords', 'Library/Application Support/WXWork/VoipRecords'],
+  ['crashReporter', 'Library/Application Support/CrashReporter'],
+  ['voipModel', 'Documents/VoipNNModel'],
+  ['cefUserData', 'Library/Application Support/CEF/User Data'],
+  ['httpStorages', 'Library/HTTPStorages'],
+  ['webkitWebsiteData', 'Library/WebKit/WebsiteData'],
+];
+const UNMODELED_DIR_OBSERVE_ROOTS = ['Documents', 'Library/Application Support', 'Library/WebKit'];
 
 function resolveProbeTimeoutMs() {
   const raw = Number.parseInt(String(process.env.WECOM_CLEANER_NATIVE_PROBE_TIMEOUT_MS || ''), 10);
@@ -87,6 +102,131 @@ function buildCheck(id, title, status, detail, suggestion = '') {
     status,
     detail,
     suggestion,
+  };
+}
+
+function splitRelativePathSegments(relativePath) {
+  return String(relativePath || '')
+    .split(/[\\/]+/)
+    .filter(Boolean);
+}
+
+function buildKnownObservedChildMap() {
+  const observed = new Map(
+    UNMODELED_DIR_OBSERVE_ROOTS.map((relativePath) => [
+      relativePath,
+      new Set(relativePath === 'Documents' ? ['Profiles'] : []),
+    ])
+  );
+
+  for (const target of SPACE_GOVERNANCE_TARGETS) {
+    if (target.scope !== 'data_root') {
+      continue;
+    }
+    const targetSegments = splitRelativePathSegments(target.relativePath);
+    for (const observeRoot of UNMODELED_DIR_OBSERVE_ROOTS) {
+      const rootSegments = splitRelativePathSegments(observeRoot);
+      const matched = rootSegments.every((segment, index) => targetSegments[index] === segment);
+      if (!matched) {
+        continue;
+      }
+      const child = targetSegments[rootSegments.length];
+      if (child && !child.includes('*')) {
+        observed.get(observeRoot)?.add(child);
+      }
+    }
+  }
+
+  return observed;
+}
+
+async function collectUnmodeledDataRootEntries(dataRoot) {
+  if (!dataRoot) {
+    return [];
+  }
+  const knownChildMap = buildKnownObservedChildMap();
+  const rows = [];
+
+  for (const observeRoot of UNMODELED_DIR_OBSERVE_ROOTS) {
+    const absRoot = path.join(dataRoot, observeRoot);
+    const entries = await fs.readdir(absRoot, { withFileTypes: true }).catch(() => []);
+    const knownChildren = knownChildMap.get(observeRoot) || new Set();
+
+    for (const entry of entries) {
+      if (
+        (!entry.isDirectory() && !entry.isFile()) ||
+        entry.isSymbolicLink() ||
+        knownChildren.has(entry.name)
+      ) {
+        continue;
+      }
+      const targetPath = path.join(absRoot, entry.name);
+      rows.push({
+        rootLabel: observeRoot,
+        name: entry.name,
+        path: targetPath,
+        sizeBytes: await calculateDirectorySize(targetPath),
+      });
+    }
+  }
+
+  rows.sort((a, b) => b.sizeBytes - a.sizeBytes);
+  return rows;
+}
+
+async function collectWeDriveBusinessStats(dataRoot) {
+  if (!dataRoot) {
+    return [];
+  }
+  const root = path.join(dataRoot, 'WeDrive');
+  const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
+  const rows = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.isSymbolicLink() || entry.name.startsWith('.')) {
+      continue;
+    }
+    const targetPath = path.join(root, entry.name);
+    rows.push({
+      name: entry.name,
+      path: targetPath,
+      sizeBytes: await calculateDirectorySize(targetPath),
+    });
+  }
+
+  rows.sort((a, b) => b.sizeBytes - a.sizeBytes);
+  return rows;
+}
+
+async function collectPublishsysPkgStats(accounts) {
+  const list = Array.isArray(accounts) ? accounts : [];
+  let totalBytes = 0;
+  let tmpBytes = 0;
+  let tmpDirCount = 0;
+
+  for (const account of list) {
+    const pkgRoot = path.join(account.profilePath, 'Publishsys', 'pkg');
+    totalBytes += await calculateDirectorySize(pkgRoot);
+
+    const packageDirs = await fs.readdir(pkgRoot, { withFileTypes: true }).catch(() => []);
+    for (const entry of packageDirs) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const tmpPath = path.join(pkgRoot, entry.name, 'tmp');
+      const tmpSize = await calculateDirectorySize(tmpPath);
+      if (tmpSize <= 0) {
+        continue;
+      }
+      tmpBytes += tmpSize;
+      tmpDirCount += 1;
+    }
+  }
+
+  return {
+    totalBytes,
+    tmpBytes,
+    tmpDirCount,
   };
 }
 
@@ -187,6 +327,7 @@ export async function runDoctor({ config, aliases, projectRoot, appVersion }) {
   const rootDir = path.resolve(String(config.rootDir || ''));
   const stateRoot = path.resolve(String(config.stateRoot || ''));
   const recycleRoot = path.resolve(String(config.recycleRoot || ''));
+  const dataRoot = inferDataRootFromProfilesRoot(rootDir);
   const indexDir = path.dirname(
     path.resolve(String(config.indexPath || path.join(stateRoot, 'index.jsonl')))
   );
@@ -200,6 +341,75 @@ export async function runDoctor({ config, aliases, projectRoot, appVersion }) {
       rootExists && rootReadable ? STATUS_PASS : STATUS_FAIL,
       rootExists ? (rootReadable ? `可读: ${rootDir}` : `存在但不可读: ${rootDir}`) : `不存在: ${rootDir}`,
       rootExists && rootReadable ? '' : '请在“交互配置”中修正根目录并确认权限。'
+    )
+  );
+
+  const auxiliarySupportBytes = {
+    wxdrive: 0,
+    wedoc: 0,
+    wemail: 0,
+    voipRecords: 0,
+    crashReporter: 0,
+    voipModel: 0,
+    cefUserData: 0,
+    httpStorages: 0,
+    webkitWebsiteData: 0,
+  };
+  if (dataRoot) {
+    for (const [key, relativePath] of AUXILIARY_SUPPORT_RELATIVE_PATHS) {
+      auxiliarySupportBytes[key] = await calculateDirectorySize(path.join(dataRoot, relativePath));
+    }
+  }
+  const auxiliarySupportTotalBytes = Object.values(auxiliarySupportBytes).reduce(
+    (sum, value) => sum + Number(value || 0),
+    0
+  );
+  checks.push(
+    buildCheck(
+      'auxiliary_support_data',
+      '扩展业务目录占用',
+      auxiliarySupportTotalBytes >= 256 * 1024 * 1024 ? STATUS_WARN : STATUS_PASS,
+      `WXDrive ${auxiliarySupportBytes.wxdrive} bytes，Wedoc ${auxiliarySupportBytes.wedoc} bytes，WeMail ${auxiliarySupportBytes.wemail} bytes，VoipRecords ${auxiliarySupportBytes.voipRecords} bytes，CEF ${auxiliarySupportBytes.cefUserData} bytes，HTTPStorages ${auxiliarySupportBytes.httpStorages} bytes，WebsiteData ${auxiliarySupportBytes.webkitWebsiteData} bytes`,
+      auxiliarySupportTotalBytes >= 256 * 1024 * 1024
+        ? '这部分不属于“年月清理”主线，可通过“全量空间治理”查看；其中数据库/配置目录默认受保护。'
+        : ''
+    )
+  );
+
+  const weDriveBusinessDirs = await collectWeDriveBusinessStats(dataRoot);
+  const weDriveBusinessBytes = weDriveBusinessDirs.reduce(
+    (sum, item) => sum + Number(item.sizeBytes || 0),
+    0
+  );
+  checks.push(
+    buildCheck(
+      'wedrive_business_dirs',
+      '微盘业务目录',
+      weDriveBusinessBytes >= 512 * 1024 * 1024 ? STATUS_WARN : STATUS_PASS,
+      weDriveBusinessDirs.length > 0
+        ? weDriveBusinessDirs
+            .slice(0, 3)
+            .map((item) => `${item.name} ${item.sizeBytes} bytes`)
+            .join('，')
+        : '未发现微盘业务目录',
+      weDriveBusinessBytes >= 512 * 1024 * 1024 ? '这部分通常属于微盘业务文档，不纳入自动删除范围。' : ''
+    )
+  );
+
+  const unmodeledDirs = await collectUnmodeledDataRootEntries(dataRoot);
+  const largeUnmodeledDirs = unmodeledDirs.filter((item) => item.sizeBytes >= UNMODELED_DIR_WARN_BYTES);
+  checks.push(
+    buildCheck(
+      'unmodeled_data_root_dirs',
+      '未建模条目观测',
+      largeUnmodeledDirs.length > 0 ? STATUS_WARN : STATUS_PASS,
+      largeUnmodeledDirs.length > 0
+        ? largeUnmodeledDirs
+            .slice(0, 3)
+            .map((item) => `${item.rootLabel}/${item.name} ${item.sizeBytes} bytes`)
+            .join('，')
+        : `未发现超过 ${UNMODELED_DIR_WARN_BYTES} bytes 的未建模条目`,
+      largeUnmodeledDirs.length > 0 ? '发现新文件/目录形态，建议补充建模后再决定是否纳入自动治理。' : ''
     )
   );
 
@@ -259,6 +469,19 @@ export async function runDoctor({ config, aliases, projectRoot, appVersion }) {
       accounts.length > 0 ? STATUS_PASS : STATUS_WARN,
       `识别到 ${accounts.length} 个账号`,
       accounts.length > 0 ? '' : '请确认 Profile 根目录是否指向真实企业微信数据目录。'
+    )
+  );
+
+  const publishsysPkgStats = await collectPublishsysPkgStats(accounts);
+  checks.push(
+    buildCheck(
+      'publishsys_pkg',
+      '文档组件缓存(Publishsys/pkg)',
+      publishsysPkgStats.totalBytes >= PUBLISHSYS_WARN_BYTES ? STATUS_WARN : STATUS_PASS,
+      `总计 ${publishsysPkgStats.totalBytes} bytes，其中 tmp ${publishsysPkgStats.tmpBytes} bytes，目录 ${publishsysPkgStats.tmpDirCount} 个`,
+      publishsysPkgStats.totalBytes >= PUBLISHSYS_WARN_BYTES
+        ? '这部分属于在线文档组件缓存；其中 Publishsys/pkg/*/tmp 常见为临时 zip 包，可通过“全量空间治理”处理。'
+        : ''
     )
   );
 
@@ -478,6 +701,13 @@ export async function runDoctor({ config, aliases, projectRoot, appVersion }) {
       externalStorageCount: externalStorage.roots.length,
       externalSavedFileBytes,
       externalSavedImageBytes,
+      publishsysPkgBytes: publishsysPkgStats.totalBytes,
+      publishsysPkgTmpBytes: publishsysPkgStats.tmpBytes,
+      publishsysPkgTmpDirCount: publishsysPkgStats.tmpDirCount,
+      auxiliarySupportBytes,
+      auxiliarySupportTotalBytes,
+      weDriveBusinessDirCount: weDriveBusinessDirs.length,
+      weDriveBusinessBytes,
       recycleBatchCount: recycleStats.totalBatches,
       recycleBytes: recycleStats.totalBytes,
       recycleThresholdBytes: thresholdBytes,
@@ -494,6 +724,8 @@ export async function runDoctor({ config, aliases, projectRoot, appVersion }) {
       serviceLastStatus: serviceStatus.state.lastStatus || 'never',
       serviceLastTriggerSource: serviceStatus.state.lastTriggerSource || '',
       serviceFilesystemAvailableBytes: Number(serviceFilesystemUsage?.availableBytes || 0),
+      unmodeledDataRootDirCount: largeUnmodeledDirs.length,
+      unmodeledDataRootBytes: largeUnmodeledDirs.reduce((sum, item) => sum + item.sizeBytes, 0),
       skillsStatus: skillBinding?.status || 'unknown',
       skillsMatched: Boolean(skillBinding?.matched),
       skillsInstalled: Boolean(skillBinding?.installed),

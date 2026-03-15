@@ -132,7 +132,7 @@ run_cmd_to_file() {
   local cmd_parts=(
     --restore-batch "$BATCH_ID"
     --conflict "$CONFLICT"
-    --output json
+    --output agent-json
     --run-task "$task_mode"
   )
   if [[ -n "$ROOT" ]]; then

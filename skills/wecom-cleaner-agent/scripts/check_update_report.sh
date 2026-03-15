@@ -64,7 +64,7 @@ REPORT_JSON="$(mktemp -t wecom-check-update.XXXX.json)"
 REPORT_ERR="$(mktemp -t wecom-check-update.XXXX.err)"
 trap 'rm -f "$REPORT_JSON" "$REPORT_ERR"' EXIT
 
-cmd=(--check-update --output json --upgrade-channel "$CHANNEL")
+cmd=(--check-update --output agent-json --upgrade-channel "$CHANNEL")
 if [[ -n "$ROOT" ]]; then
   cmd+=(--root "$ROOT")
 fi

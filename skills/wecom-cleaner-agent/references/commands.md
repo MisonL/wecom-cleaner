@@ -70,13 +70,13 @@ bash scripts/upgrade_report.sh --method github-script --version 1.3.3 --execute 
 
 ```bash
 # 预演同步（不落盘）
-wecom-cleaner --sync-skills --dry-run true --output json
+wecom-cleaner --sync-skills --dry-run true --output agent-json
 
 # 真实同步（默认 npm）
-wecom-cleaner --sync-skills --skill-sync-method npm --dry-run false --output json
+wecom-cleaner --sync-skills --skill-sync-method npm --dry-run false --output agent-json
 
 # 按 GitHub 版本标签同步
-wecom-cleaner --sync-skills --skill-sync-method github-script --skill-sync-ref 1.3.3 --dry-run false --output json
+wecom-cleaner --sync-skills --skill-sync-method github-script --skill-sync-ref 1.3.3 --dry-run false --output agent-json
 ```
 
 ## 2. 常用全局参数
@@ -92,49 +92,49 @@ wecom-cleaner --sync-skills --skill-sync-method github-script --skill-sync-ref 1
 
 ## 3. 回退方案：直接调用 wecom-cleaner
 
-仅在脚本不可用时使用直接命令，且保持 `--output json`。
+仅在脚本不可用时使用直接命令，且保持 `--output agent-json`。
 破坏性动作必须使用 `--run-task`，并优先消费 `data.taskCard` / `data.taskPhases`。
 
 ```bash
 # 年月清理（预演）
-wecom-cleaner --cleanup-monthly --accounts all --cutoff-month 2024-07 --run-task preview --output json
+wecom-cleaner --cleanup-monthly --accounts all --cutoff-month 2024-07 --run-task preview --output agent-json
 
 # 年月清理（真实执行 + 复核）
-wecom-cleaner --cleanup-monthly --accounts all --cutoff-month 2024-07 --run-task preview-execute-verify --yes --output json
+wecom-cleaner --cleanup-monthly --accounts all --cutoff-month 2024-07 --run-task preview-execute-verify --yes --output agent-json
 
 # 会话分析
-wecom-cleaner --analysis-only --accounts all --output json
+wecom-cleaner --analysis-only --accounts all --output agent-json
 
 # 全量空间治理（预演）
-wecom-cleaner --space-governance --accounts all --tiers safe,caution --run-task preview --output json
+wecom-cleaner --space-governance --accounts all --tiers safe,caution --run-task preview --output agent-json
 
 # 全量空间治理（真实执行 + 复核）
-wecom-cleaner --space-governance --accounts all --tiers safe,caution --run-task preview-execute-verify --yes --output json
+wecom-cleaner --space-governance --accounts all --tiers safe,caution --run-task preview-execute-verify --yes --output agent-json
 
 # 批次恢复（预演）
-wecom-cleaner --restore-batch 20260226-154831-c418d9 --conflict rename --run-task preview --output json
+wecom-cleaner --restore-batch 20260226-154831-c418d9 --conflict rename --run-task preview --output agent-json
 
 # 批次恢复（真实执行 + 复核）
-wecom-cleaner --restore-batch 20260226-154831-c418d9 --conflict rename --run-task preview-execute-verify --yes --output json
+wecom-cleaner --restore-batch 20260226-154831-c418d9 --conflict rename --run-task preview-execute-verify --yes --output agent-json
 
 # 回收区治理（预演）
-wecom-cleaner --recycle-maintain --run-task preview --output json
+wecom-cleaner --recycle-maintain --run-task preview --output agent-json
 
 # 回收区治理（真实执行 + 复核）
-wecom-cleaner --recycle-maintain --run-task preview-execute-verify --yes --output json
+wecom-cleaner --recycle-maintain --run-task preview-execute-verify --yes --output agent-json
 
 # 系统自检
-wecom-cleaner --doctor --output json
+wecom-cleaner --doctor --output agent-json
 
 # 检查更新
-wecom-cleaner --check-update --output json
+wecom-cleaner --check-update --output agent-json
 
 # 程序升级（必须带 --upgrade-yes）
-wecom-cleaner --upgrade npm --upgrade-yes --output json
-wecom-cleaner --upgrade github-script --upgrade-version 1.3.3 --upgrade-yes --output json
+wecom-cleaner --upgrade npm --upgrade-yes --output agent-json
+wecom-cleaner --upgrade github-script --upgrade-version 1.3.3 --upgrade-yes --output agent-json
 
 # 同步 skills（独立动作）
-wecom-cleaner --sync-skills --skill-sync-method npm --output json
+wecom-cleaner --sync-skills --skill-sync-method npm --output agent-json
 ```
 
 ## 4. 退出码约定

@@ -1365,6 +1365,39 @@ test('无交互 --run-task execute 缺少 --yes 时返回确认错误', async (t
   assert.match(String(result.stderr || ''), /确认错误/);
 });
 
+test('无交互 --output agent-json 返回统一任务协议字段', async (t) => {
+  const root = await makeTempDir('wecom-cli-agent-json-');
+  t.after(async () => removeDir(root));
+
+  const profilesRoot = await prepareFixture(root);
+  const stateRoot = path.join(root, 'state');
+
+  const result = runCli([
+    '--analysis-only',
+    '--root',
+    profilesRoot,
+    '--state-root',
+    stateRoot,
+    '--accounts',
+    'all',
+    '--output',
+    'agent-json',
+    '--external-storage-auto-detect',
+    'false',
+  ]);
+  assert.equal(result.status, 0);
+
+  const payload = JSON.parse(String(result.stdout || '{}'));
+  assert.equal(payload.meta.output, 'agent-json');
+  assert.equal(payload.meta.protocol, 'agent-json-v1');
+  assert.equal(payload.data.protocolVersion, '1');
+  assert.equal(Array.isArray(payload.data.taskPhases), true);
+  assert.equal(payload.data.taskPhases.length >= 1, true);
+  assert.equal(payload.data.taskPhases[0].name, 'inspect');
+  assert.equal(typeof payload.data.taskCard?.conclusion, 'string');
+  assert.equal(Array.isArray(payload.data.userFacingSummary?.scopeNotes), true);
+});
+
 test('非破坏性动作仅支持 --run-task preview', async (t) => {
   const root = await makeTempDir('wecom-cli-ni-run-task-analysis-');
   t.after(async () => removeDir(root));

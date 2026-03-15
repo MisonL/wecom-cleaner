@@ -138,6 +138,35 @@ test('runDoctor 在健康场景下返回 pass', async (t) => {
   await ensureFile(path.join(externalRoot, 'WXWork Files', 'Caches', 'Files', '2024-01', 'a.bin'), 'a');
   await ensureFile(path.join(externalRoot, 'WXWork Files', 'File', '2024-01', 'saved.docx'), 'saved');
   await ensureFile(path.join(externalRoot, 'WXWork Files', 'Image', '2024-01', 'saved.png'), 'saved');
+  await ensureFile(
+    path.join(dataRoot, 'Library', 'Application Support', 'WXDrive', 'sqlite3', 'meta.db'),
+    'meta'
+  );
+  await ensureFile(
+    path.join(dataRoot, 'Library', 'Application Support', 'WeMail', 'sqlite', 'mail.db'),
+    'mail'
+  );
+  await ensureFile(
+    path.join(dataRoot, 'Library', 'Application Support', 'WeMail', 'load_encrypted'),
+    'encrypted'
+  );
+  await ensureFile(
+    path.join(dataRoot, 'Library', 'Application Support', 'CrashReporter', 'crash.plist'),
+    'crash'
+  );
+  await ensureFile(path.join(dataRoot, 'Documents', 'VoipNNModel', 'model.bin'), 'model');
+  await ensureFile(path.join(dataRoot, 'Documents', 'local_storage_index.db'), 'index-db');
+  await ensureFile(
+    path.join(profilesRoot, 'acc001', 'Publishsys', 'pkg', 'component-a', 'tmp', 'archive.zip'),
+    'archive'
+  );
+  await ensureFile(path.join(dataRoot, 'Library', 'HTTPStorages', 'store.bin'), 'http-store');
+  await ensureFile(path.join(dataRoot, 'Library', 'WebKit', 'WebsiteData', 'site.bin'), 'wk-site');
+  await ensureFile(
+    path.join(dataRoot, 'Library', 'Application Support', 'CEF', 'User Data', 'state.json'),
+    'cef-state'
+  );
+  await ensureFile(path.join(dataRoot, 'WeDrive', '企业资料', 'doc.txt'), 'doc');
   await ensureDir(recycleRoot);
   await ensureDir(serviceRecycleRoot);
   await ensureFile(indexPath, '');
@@ -225,6 +254,18 @@ test('runDoctor 在健康场景下返回 pass', async (t) => {
   assert.equal(report.metrics.serviceInstalled, true);
   assert.equal(report.metrics.externalSavedFileBytes > 0, true);
   assert.equal(report.metrics.externalSavedImageBytes > 0, true);
+  assert.equal(report.metrics.publishsysPkgBytes > 0, true);
+  assert.equal(report.metrics.publishsysPkgTmpBytes > 0, true);
+  assert.equal(report.metrics.publishsysPkgTmpDirCount, 1);
+  assert.equal(report.metrics.auxiliarySupportTotalBytes > 0, true);
+  assert.equal(report.metrics.auxiliarySupportBytes.wxdrive > 0, true);
+  assert.equal(report.metrics.auxiliarySupportBytes.wemail > 0, true);
+  assert.equal(report.metrics.auxiliarySupportBytes.cefUserData > 0, true);
+  assert.equal(report.metrics.auxiliarySupportBytes.httpStorages > 0, true);
+  assert.equal(report.metrics.auxiliarySupportBytes.webkitWebsiteData > 0, true);
+  assert.equal(report.metrics.weDriveBusinessDirCount, 1);
+  assert.equal(report.metrics.weDriveBusinessBytes > 0, true);
+  assert.equal(report.metrics.unmodeledDataRootDirCount, 0);
 });
 
 test('runDoctor 在异常场景下返回 fail/warn 并给出建议', async (t) => {
@@ -336,4 +377,49 @@ test('runDoctor 不会在只读巡检时创建缺失回收目录', async (t) => 
 
   assert.equal(Array.isArray(report.checks), true);
   assert.equal(await exists(recycleRoot), false);
+});
+
+test('runDoctor 会提示未建模大目录', async (t) => {
+  const root = await makeTempDir('wecom-doctor-unmodeled-');
+  t.after(async () => removeDir(root));
+
+  const projectRoot = path.join(root, 'project');
+  const dataRoot = path.join(root, 'ContainerData');
+  const profilesRoot = path.join(dataRoot, 'Documents', 'Profiles');
+  const stateRoot = path.join(root, 'state');
+  const recycleRoot = path.join(stateRoot, 'recycle-bin');
+  const indexPath = path.join(stateRoot, 'index.jsonl');
+  const unknownPath = path.join(dataRoot, 'Library', 'Application Support', 'FutureCache', 'payload.bin');
+
+  await ensureDir(profilesRoot);
+  await ensureFile(indexPath, '');
+  await ensureFile(unknownPath, '');
+  await fs.truncate(unknownPath, 256 * 1024 * 1024);
+
+  const report = await runDoctor({
+    config: {
+      rootDir: profilesRoot,
+      stateRoot,
+      recycleRoot,
+      indexPath,
+      externalStorageRoots: [],
+      externalStorageAutoDetect: false,
+      recycleRetention: {
+        enabled: true,
+        maxAgeDays: 30,
+        minKeepBatches: 20,
+        sizeThresholdGB: 20,
+      },
+    },
+    aliases: {},
+    projectRoot,
+    appVersion: '1.0.0',
+  });
+
+  const check = report.checks.find((item) => item.id === 'unmodeled_data_root_dirs');
+  assert.ok(check);
+  assert.equal(check.status, 'warn');
+  assert.match(check.detail, /FutureCache/);
+  assert.equal(report.metrics.unmodeledDataRootDirCount, 1);
+  assert.equal(report.metrics.unmodeledDataRootBytes, 256 * 1024 * 1024);
 });

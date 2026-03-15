@@ -52,7 +52,7 @@
 
 无交互默认输出 JSON，可通过 `--output text` 切换文本任务卡片（中文结论 + 范围 + 统计 + 风险提示）。
 
-- `--output json|text`（默认 `json`）
+- `--output json|text|agent-json`（默认 `json`）
 - `--json` 为兼容别名（等价 `--output json`）
 - `--run-task preview|execute|preview-execute-verify`（推荐破坏性动作使用）
 - `--scan-debug off|summary|full`（默认 `off`）
@@ -69,8 +69,9 @@ JSON 顶层字段：
 - `meta`：元信息（版本、耗时、引擎、时间戳等）
 - `data.userFacingSummary`：统一的用户侧结果摘要（范围 + 结果 + 关键分布）
   - `scopeNotes`：扫描边界说明（例如是否纳入“文件存储位置”目录、是否因命中为 0 跳过执行）
-- `data.taskPhases`：阶段协议明细（仅在 `--run-task` 时返回）
-- `data.taskCard`：阶段任务卡片（仅在 `--run-task` 时返回）
+- `data.protocolVersion`：任务协议版本，当前为 `1`
+- `data.taskPhases`：阶段协议明细；`--run-task` 返回预演/执行/复核三阶段，其他动作至少返回单阶段摘要
+- `data.taskCard`：阶段任务卡片；无交互统一返回，供 Agent 直接消费
 - `data.scanDebug`：扫描诊断信息（仅在 `--scan-debug summary|full` 时返回）
 - 破坏性清理类动作新增：
   - `summary.deleteMode`

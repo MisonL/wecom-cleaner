@@ -98,7 +98,7 @@ EXEC_JSON="$(mktemp -t wecom-upgrade-exec.XXXX.json)"
 EXEC_ERR="$(mktemp -t wecom-upgrade-exec.XXXX.err)"
 trap 'rm -f "$CHECK_JSON" "$CHECK_ERR" "$EXEC_JSON" "$EXEC_ERR"' EXIT
 
-check_cmd=(--check-update --output json --upgrade-channel "$CHANNEL")
+check_cmd=(--check-update --output agent-json --upgrade-channel "$CHANNEL")
 if [[ -n "$ROOT" ]]; then
   check_cmd+=(--root "$ROOT")
 fi
@@ -138,7 +138,7 @@ fi
 if [[ -n "$STATE_ROOT" ]]; then
   plan_cmd+=(--state-root "$STATE_ROOT")
 fi
-plan_cmd+=(--output json)
+plan_cmd+=(--output agent-json)
 
 if [[ "$EXECUTE" != "true" ]]; then
   printf '\n=== 程序升级预演结果（给用户）===\n'
@@ -167,7 +167,7 @@ if [[ "$EXECUTE" != "true" ]]; then
   exit 0
 fi
 
-upgrade_cmd=(--upgrade "$METHOD" --upgrade-channel "$CHANNEL" --upgrade-yes --output json)
+upgrade_cmd=(--upgrade "$METHOD" --upgrade-channel "$CHANNEL" --upgrade-yes --output agent-json)
 if [[ -n "$VERSION" ]]; then
   upgrade_cmd+=(--upgrade-version "$VERSION")
 fi

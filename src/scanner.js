@@ -27,6 +27,11 @@ const WWSECURITY_KEY = 'wwsecurity';
 const EXTERNAL_STORAGE_CACHE_RELATIVE = path.join('WXWork Files', 'Caches');
 const EXTERNAL_STORAGE_FILE_RELATIVE = path.join('WXWork Files', 'File');
 const EXTERNAL_STORAGE_IMAGE_RELATIVE = path.join('WXWork Files', 'Image');
+const EXTERNAL_STORAGE_MARKER_RELATIVES = [
+  EXTERNAL_STORAGE_CACHE_RELATIVE,
+  EXTERNAL_STORAGE_FILE_RELATIVE,
+  EXTERNAL_STORAGE_IMAGE_RELATIVE,
+];
 const EXTERNAL_SOURCE_BUILTIN = 'builtin';
 const EXTERNAL_SOURCE_CONFIGURED = 'configured';
 const EXTERNAL_SOURCE_AUTO = 'auto';
@@ -304,7 +309,10 @@ function collectBuiltInStorageRootCandidates(options = {}) {
 async function collectDefaultExternalSearchBaseRoots() {
   const bases = new Set();
   const home = os.homedir();
+  bases.add(home);
   bases.add(path.join(home, 'Documents'));
+  bases.add(path.join(home, 'Desktop'));
+  bases.add(path.join(home, 'Downloads'));
 
   const volumeEntries = await fs.readdir('/Volumes', { withFileTypes: true }).catch(() => []);
   for (const entry of volumeEntries) {
@@ -389,8 +397,10 @@ async function findExternalStorageRootsByStructure(baseRoots, options = {}) {
       visitCount += 1;
       visitedDirs += 1;
 
-      const markerPath = path.join(dir, EXTERNAL_STORAGE_CACHE_RELATIVE);
-      if (await isDirectoryPath(markerPath)) {
+      const hasMarker = await Promise.all(
+        EXTERNAL_STORAGE_MARKER_RELATIVES.map((relativePath) => isDirectoryPath(path.join(dir, relativePath)))
+      ).then((results) => results.some(Boolean));
+      if (hasMarker && (await isLikelyExternalStorageRoot(dir, { strictMarkers: true }))) {
         found.add(dir);
         continue;
       }
@@ -504,6 +514,41 @@ async function resolveRelativePathMatches(basePath, relativePath) {
     dedup.set(item.path, item);
   }
   return [...dedup.values()];
+}
+
+async function collectWeDriveBusinessRoots(dataRoot) {
+  if (!dataRoot) {
+    return [];
+  }
+  const weDriveRoot = path.join(dataRoot, 'WeDrive');
+  const entries = await fs.readdir(weDriveRoot, { withFileTypes: true }).catch(() => []);
+  return entries
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+    .map((entry) => {
+      const targetPath = path.join(weDriveRoot, entry.name);
+      return {
+        id: `wedrive_business_root:global:${entry.name.replace(/[\\/]/g, '|')}`,
+        scope: 'space_governance',
+        path: targetPath,
+        directoryName: entry.name,
+        sizeBytes: 0,
+        mtimeMs: 0,
+        targetKey: 'wedrive_business_root',
+        targetLabel: `微盘业务目录(${entry.name})`,
+        targetDesc: '微盘业务文档目录，默认仅展示，不纳入自动删除范围。',
+        tier: SPACE_GOVERNANCE_TIERS.PROTECTED,
+        deletable: false,
+        accountId: null,
+        accountShortId: '-',
+        userName: '全局',
+        corpName: entry.name,
+        accountPath: dataRoot,
+        categoryKey: 'wedrive_business_root',
+        categoryLabel: `微盘业务目录(${entry.name})`,
+        monthKey: null,
+        categoryPath: path.join('WeDrive', entry.name),
+      };
+    });
 }
 
 async function collectRecursiveDirectoryCandidates(rootPath, maxDepth = 2) {
@@ -1250,6 +1295,9 @@ export async function scanSpaceGovernanceTargets({
       });
     }
   }
+
+  const weDriveBusinessTargets = await collectWeDriveBusinessRoots(dataRoot);
+  candidates.push(...weDriveBusinessTargets);
 
   const sizeResult = await calculateSizesWithEngine({
     candidates,

@@ -88,6 +88,7 @@ test('detectExternalStorageRoots 支持内置/手动/自动探测与缓存', asy
   const manualRoot = path.join(root, 'Custom-Manual-Storage');
   const manualSubPath = path.join(manualRoot, 'WXWork Files', 'File');
   const autoRoot = path.join(root, 'Auto-Storage-Root');
+  const autoImageOnlyRoot = path.join(root, 'Desktop', 'Auto-Image-Only-Root');
   const fakeRoot = path.join(root, 'Fake-Storage-Root');
 
   await ensureFile(path.join(profilesRoot, 'placeholder.txt'), 'ok');
@@ -95,6 +96,7 @@ test('detectExternalStorageRoots 支持内置/手动/自动探测与缓存', asy
   await ensureFile(path.join(manualRoot, 'WXWork Files', 'Caches', 'Files', '2024-02', 'a.txt'), 'a');
   await ensureFile(path.join(manualRoot, 'WXWork Files', 'File', '2024-02', 'saved.docx'), 'a');
   await ensureFile(path.join(autoRoot, 'WXWork Files', 'Caches', 'Files', '2024-03', 'a.txt'), 'a');
+  await ensureFile(path.join(autoImageOnlyRoot, 'WXWork Files', 'Image', '2024-04', 'saved.png'), 'a');
   await ensureFile(path.join(fakeRoot, 'WXWork Files', 'Caches', 'OtherAppCache', 'a.txt'), 'a');
 
   const first = await detectExternalStorageRoots({
@@ -111,12 +113,13 @@ test('detectExternalStorageRoots 支持内置/手动/自动探测与缓存', asy
   assert.equal(first.roots.includes(path.resolve(builtInRoot)), true);
   assert.equal(first.roots.includes(path.resolve(manualRoot)), true);
   assert.equal(first.roots.includes(path.resolve(autoRoot)), true);
+  assert.equal(first.roots.includes(path.resolve(autoImageOnlyRoot)), true);
   assert.equal(first.roots.includes(path.resolve(fakeRoot)), false);
   assert.equal(first.meta.fromCache, false);
   assert.equal(first.meta.sourceCounts.builtin >= 1, true);
   assert.equal(first.meta.sourceCounts.configured >= 1, true);
   assert.equal(first.meta.sourceCounts.auto >= 1, true);
-  assert.equal(first.meta.autoRejectedRootCount >= 1, true);
+  assert.equal(first.meta.autoRejectedRootCount, 0);
 
   const second = await detectExternalStorageRoots({
     profilesRoot,
@@ -172,6 +175,36 @@ test('月份扫描、清理目标扫描、分析汇总与全量治理可工作',
     path.join(dataRoot, 'Library', 'Application Support', 'WeMail', 'sqlite', 'mail.db'),
     'mail-db'
   );
+  await ensureFile(
+    path.join(dataRoot, 'Library', 'Application Support', 'WeMail', 'load_encrypted'),
+    'encrypted'
+  );
+  await ensureFile(
+    path.join(dataRoot, 'Library', 'Application Support', 'WXWork', 'VoipRecords', 'call.log'),
+    'call'
+  );
+  await ensureFile(
+    path.join(dataRoot, 'Library', 'Application Support', 'CrashReporter', 'crash.plist'),
+    'crash'
+  );
+  await ensureFile(path.join(dataRoot, 'Documents', 'VoipNNModel', 'model.bin'), 'model');
+  await ensureFile(path.join(dataRoot, 'Documents', 'Network', 'netcontext', 'meta.bin'), 'network');
+  await ensureFile(path.join(dataRoot, 'Documents', 'local_storage_index.db'), 'index-db');
+  await ensureFile(path.join(dataRoot, 'Documents', 'local_en', 'lang.dat'), 'lang');
+  await ensureFile(
+    path.join(dataRoot, 'Library', 'Application Support', 'CEF', 'User Data', 'State'),
+    'cef-state'
+  );
+  await ensureFile(path.join(dataRoot, 'Library', 'WebKit', 'WebsiteData', 'wk.data'), 'wk');
+  await ensureFile(path.join(dataRoot, 'Library', 'HTTPStorages', 'http.data'), 'http');
+  await ensureFile(path.join(dataRoot, 'Library', 'Preferences', 'prefs.plist'), 'prefs');
+  await ensureFile(path.join(dataRoot, 'Library', 'WecomPrivate', 'private.dat'), 'private');
+  await ensureFile(path.join(dataRoot, 'Library', 'Cookies', 'cookies.bin'), 'cookie');
+  await ensureFile(
+    path.join(dataRoot, 'Library', 'Application Support', 'com.tencent.WeWorkMac', 'state.bin'),
+    'state'
+  );
+  await ensureFile(path.join(dataRoot, 'WeDrive', '企业资料', 'doc.txt'), 'wedrive-doc');
   await ensureFile(path.join(dataRoot, 'tmp', 'large.bin'), Buffer.alloc(2 * 1024 * 1024));
 
   const oldTime = new Date(Date.now() - 10 * 24 * 3600 * 1000);
@@ -263,4 +296,81 @@ test('月份扫描、清理目标扫描、分析汇总与全量治理可工作',
   assert.ok(wemailSqlite);
   assert.equal(wemailSqlite.deletable, false);
   assert.equal(wemailSqlite.tier, 'protected');
+
+  const voipRecords = governance.targets.find((item) => item.targetKey === 'wxwork_voip_records');
+  assert.ok(voipRecords);
+  assert.equal(voipRecords.deletable, true);
+  assert.equal(voipRecords.tier, 'caution');
+
+  const crashReporter = governance.targets.find((item) => item.targetKey === 'crash_reporter');
+  assert.ok(crashReporter);
+  assert.equal(crashReporter.deletable, true);
+  assert.equal(crashReporter.tier, 'safe');
+
+  const voipModel = governance.targets.find((item) => item.targetKey === 'documents_voip_nn_model');
+  assert.ok(voipModel);
+  assert.equal(voipModel.deletable, true);
+  assert.equal(voipModel.tier, 'caution');
+
+  const networkMeta = governance.targets.find((item) => item.targetKey === 'documents_network');
+  assert.ok(networkMeta);
+  assert.equal(networkMeta.deletable, true);
+  assert.equal(networkMeta.tier, 'caution');
+
+  const localStorageIndex = governance.targets.find(
+    (item) => item.targetKey === 'documents_local_storage_index'
+  );
+  assert.ok(localStorageIndex);
+  assert.equal(localStorageIndex.deletable, false);
+  assert.equal(localStorageIndex.tier, 'protected');
+
+  const localEn = governance.targets.find((item) => item.targetKey === 'documents_local_en');
+  assert.ok(localEn);
+  assert.equal(localEn.deletable, false);
+  assert.equal(localEn.tier, 'protected');
+
+  const cefUserData = governance.targets.find((item) => item.targetKey === 'cef_user_data');
+  assert.ok(cefUserData);
+  assert.equal(cefUserData.deletable, false);
+  assert.equal(cefUserData.tier, 'protected');
+
+  const websiteData = governance.targets.find((item) => item.targetKey === 'webkit_website_data');
+  assert.ok(websiteData);
+  assert.equal(websiteData.deletable, true);
+  assert.equal(websiteData.tier, 'caution');
+
+  const httpStorages = governance.targets.find((item) => item.targetKey === 'library_http_storages');
+  assert.ok(httpStorages);
+  assert.equal(httpStorages.deletable, true);
+  assert.equal(httpStorages.tier, 'caution');
+
+  const preferences = governance.targets.find((item) => item.targetKey === 'library_preferences');
+  assert.ok(preferences);
+  assert.equal(preferences.deletable, false);
+  assert.equal(preferences.tier, 'protected');
+
+  const wecomPrivate = governance.targets.find((item) => item.targetKey === 'library_wecom_private');
+  assert.ok(wecomPrivate);
+  assert.equal(wecomPrivate.deletable, false);
+  assert.equal(wecomPrivate.tier, 'protected');
+
+  const cookies = governance.targets.find((item) => item.targetKey === 'library_cookies');
+  assert.ok(cookies);
+  assert.equal(cookies.deletable, false);
+  assert.equal(cookies.tier, 'protected');
+
+  const appSupportWeWorkMac = governance.targets.find((item) => item.targetKey === 'appsupport_weworkmac');
+  assert.ok(appSupportWeWorkMac);
+  assert.equal(appSupportWeWorkMac.deletable, false);
+  assert.equal(appSupportWeWorkMac.tier, 'protected');
+
+  const wemailLoadEncrypted = governance.targets.find((item) => item.targetKey === 'wemail_load_encrypted');
+  assert.ok(wemailLoadEncrypted);
+  assert.equal(wemailLoadEncrypted.deletable, false);
+  assert.equal(wemailLoadEncrypted.tier, 'protected');
+
+  const weDriveBusinessRoot = governance.targets.find((item) => item.targetKey === 'wedrive_business_root');
+  assert.ok(weDriveBusinessRoot);
+  assert.equal(weDriveBusinessRoot.deletable, false);
+  assert.equal(weDriveBusinessRoot.tier, 'protected');
 });

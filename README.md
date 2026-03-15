@@ -66,7 +66,7 @@
 2. 文件存储目录识别
 
 - 支持默认路径、手动配置路径、自动探测路径。
-- 自动探测采用“结构 + 缓存特征”联合识别（如 `*/WXWork Files/Caches` + 企业微信缓存类别/月目录信号），不依赖目录名且降低误判。
+- 自动探测采用“结构 + 缓存特征”联合识别（如 `*/WXWork Files/Caches`、`*/WXWork Files/File`、`*/WXWork Files/Image` + 企业微信缓存类别/月目录信号），不依赖目录名且降低误判。
 - 自动探测结果默认预选，执行前可手动取消；同时保留确认提示，避免误纳入无关目录。
 
 3. 删除与恢复链路
@@ -91,7 +91,7 @@
 
 6. 可观测性与并发安全
 
-- `doctor` 模式可输出人类可读报告，或通过 `--output json` 输出结构化结果。
+- `doctor` 模式可输出人类可读报告，或通过 `--output agent-json` 输出面向 Agent 的结构化结果。
 - `doctor` 模式为只读体检：不会自动创建状态目录/回收区，也不会触发 Zig 自动修复下载。
 - 多实例并发默认加锁；检测到陈旧锁会优先自动恢复，异常场景可用 `--force` 兜底清理。
 
@@ -302,7 +302,7 @@ wecom-cleaner --service-run
 
 ### 输出与兼容参数
 
-- `--output json|text`：无交互输出格式，默认 `json`。
+- `--output json|text|agent-json`：无交互输出格式，默认 `json`。
 - `--json`：兼容别名，等价于 `--output json`。
 - `--delete-mode direct|recycle|service_recycle`：删除方式。
 - `--direct-delete-ack DIRECT_DELETE`：非交互直删确认词。
@@ -353,8 +353,9 @@ wecom-cleaner --service-run
 - `data.report.matched.rootStats`：按根目录统计（条目数、体积）
 - `data.report.matched.topPaths`：按体积 Top 路径样例
 - `data.report.executed.byCategory/byMonth/byRoot`：真实执行落地统计（成功/跳过/失败 + 体积）
-- `data.taskPhases`：阶段执行明细（预演/执行/复核）
-- `data.taskCard`：面向用户的任务卡片聚合结果
+- `data.protocolVersion`：任务协议版本
+- `data.taskPhases`：阶段执行明细（预演/执行/复核，或单阶段摘要）
+- `data.taskCard`：面向用户与 Agent 的任务卡片聚合结果
 - `data.scanDebug`：扫描诊断（当 `--scan-debug summary|full`）
 
 #### `analysis-only`
@@ -622,6 +623,29 @@ TARGET_OS=windows TARGET_ARCH=x64 ./native/zig/build.sh
 ### 3) 会不会误删企业文档？
 
 默认策略不会把普通业务文档目录（例如 `WeDrive/<企业名>/...`）纳入治理规则；执行前还有分级提示、确认和回收区兜底。
+
+`全量空间治理` 目前还会显式建模并分级展示以下 macOS 目录，便于和“聊天缓存”主线区分：
+
+- `Documents/Profiles/*/Publishsys/pkg`
+- `Library/Application Support/WXDrive/*`
+- `Library/Application Support/Wedoc/cache`
+- `Library/Application Support/WeMail/*`
+- `Library/Application Support/CEF/User Data`
+- `Library/Application Support/com.tencent.WeWorkMac`
+- `Library/Application Support/CrashReporter`
+- `Library/Application Support/WXWork/VoipRecords`
+- `Library/HTTPStorages`
+- `Library/WebKit/WebsiteData`
+- `Library/WebKit/WebsiteDataStore`
+- `Library/Preferences`
+- `Library/WecomPrivate`
+- `Library/Cookies`
+- `Documents/Network`
+- `Documents/local_en`
+- `Documents/local_storage_index.db`
+- `Documents/VoipNNModel`
+
+另外，`WeDrive/<企业名>` 这类微盘业务目录现在也会在全量空间治理中显式展示，但默认按受保护对象处理，不纳入自动删除范围。
 
 ---
 
