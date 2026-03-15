@@ -5,7 +5,7 @@
 ## 目标
 
 - 覆盖高风险动作：年月清理、全量空间治理、恢复、回收站治理、自动服务。
-- 锁定无交互契约：JSON 字段兼容、退出码语义稳定、text 卡片结论可读。
+- 锁定公共 v2 无交互契约：`agent-json` 字段兼容、退出码语义稳定、text 卡片结论可读。
 - 验证边界安全：路径越界、符号链接逃逸、索引异常、权限失败、并发竞争。
 
 ## 维度定义
@@ -13,24 +13,27 @@
 ### 维度 A：入口
 
 - 交互模式（TUI）
-- 无交互 CLI（`--output json|text|agent-json`）
+- 无交互 CLI（公共 v2：`inspect / plan / apply / verify / recover / service / update / skills`，输出 `text|agent-json`）
 - Agent 脚本（`skills/wecom-cleaner-agent/scripts/*.sh`）
 
 ### 维度 B：动作
 
-- `cleanup_monthly`
-- `analysis_only`
-- `space_governance`
-- `restore`
-- `recycle_maintain`
-- `doctor`
-- `check_update`
-- `upgrade`
-- `sync_skills`
-- `service_install`
-- `service_uninstall`
-- `service_status`
-- `service_run`
+- `plan monthly-cleanup`
+- `inspect footprint`
+- `plan space-governance`
+- `apply`
+- `verify`
+- `recover restore`
+- `recover recycle`
+- `inspect doctor`
+- `update check`
+- `update apply`
+- `skills sync`
+- `skills status`
+- `service install`
+- `service uninstall`
+- `service status`
+- `service run`
 
 ### 维度 C：范围组合
 
@@ -42,9 +45,9 @@
 ### 维度 D：执行模式
 
 - dry-run（预演）
-- 真实执行（`--dry-run false --yes`）
-- 真实执行后复核（同条件二次运行）
-- 阶段协议（`--run-task preview|execute|preview-execute-verify`）
+- 真实执行（公共 v2：`apply --ack APPLY`、`recover ... --ack ...`、`service run --ack SERVICE_RUN`、`update apply ... --ack UPGRADE`、`skills sync --ack SKILLS_SYNC`）
+- 真实执行后复核（`verify <run-id>` 或同策略二次只读核对）
+- 阶段协议（仅兼容壳层：`--run-task preview|execute|preview-execute-verify`）
 - 扫描诊断（`--scan-debug summary|full`）
 
 ### 维度 E：异常与边界
@@ -67,7 +70,7 @@
 
 - `0`：动作完成（可含业务失败明细）
 - `2`：参数/用法错误
-- `3`：真实执行缺少 `--yes`
+- `3`：真实执行缺少确认参数（如 `--ack APPLY` / `--ack RESTORE` / `--ack UPGRADE`）
 
 ### 2) JSON 契约（无交互）
 
@@ -97,20 +100,21 @@
 
 ## 最小必跑清单（回归基线）
 
-1. `cleanup_monthly`：`--cutoff-month` + `--output json` + dry-run（有目标 / 无目标）
-2. `cleanup_monthly`：真实执行 + 复核（复核命中应下降或归零）
-3. `cleanup_monthly`：`--run-task preview-execute-verify --yes`（阶段字段稳定）
-4. `cleanup_monthly`：`--scan-debug summary/full`（诊断字段稳定）
-5. `space_governance`：`suggested-only` 与 `allow-recent-active` 组合
-6. `restore`：`skip/overwrite/rename` 三冲突策略
-7. `recycle_maintain`：`disabled` / `no_candidate` / `partial_failed`
-8. `doctor`：只读模式不创建状态目录
-9. `check_update`：npm 正常 / npm 失败回退 GitHub / 全部失败
-10. `upgrade`：未确认拒绝、已是最新不执行、执行失败可返回非 0
-11. `sync_skills`：预演/真实同步、版本匹配状态收敛
-12. `service_install/status/uninstall`：状态链路与 `launchd plist` 稳定
-13. `service_run`：到期缓存处理、服务回收站治理、低空间紧急治理
-14. Agent 报告脚本：成功、无目标、失败三态退出码与卡片完整性
+1. `plan monthly-cleanup`：`--cutoff-month` + `--output agent-json` + 预演（有目标 / 无目标）
+2. `plan monthly-cleanup -> apply -> verify`：真实执行闭环（复核命中应下降或归零）
+3. `plan monthly-cleanup`：`--scan-debug summary/full`（诊断字段稳定）
+4. 兼容壳层 `cleanup_monthly`：`--run-task preview-execute-verify --yes`（阶段字段稳定）
+5. `plan space-governance`：`suggested-only` 与 `allow-recent-active` 组合
+6. `recover restore`：`skip/overwrite/rename` 三冲突策略
+7. `recover recycle`：`disabled` / `no_candidate` / `partial_failed`
+8. `inspect doctor`：只读模式不创建状态目录
+9. `inspect footprint`：严格只读，不创建状态目录且不触发 Zig 自动修复
+10. `update check`：npm 正常 / npm 失败回退 GitHub / 全部失败
+11. `update apply`：未确认拒绝、已是最新不执行、执行失败可返回非 0
+12. `skills sync`：预演/真实同步、版本匹配状态收敛
+13. `service install/status/uninstall`：状态链路与 `launchd plist` 稳定
+14. `service run`：到期缓存处理、服务回收站治理、低空间紧急治理
+15. Agent 报告脚本：成功、无目标、失败三态退出码与卡片完整性
 
 ## 当前门禁（执行顺序）
 
