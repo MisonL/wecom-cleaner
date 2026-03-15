@@ -149,6 +149,87 @@ async function resolveBatchRootFromEntries(recycleRoot, batch) {
   };
 }
 
+export async function deleteRecycleCandidates({ recycleRoot, candidates, dryRun, onProgress }) {
+  const list = Array.isArray(candidates) ? candidates : [];
+  const result = {
+    deletedBatches: 0,
+    deletedBytes: 0,
+    failBatches: 0,
+    operations: [],
+    errors: [],
+  };
+
+  for (let i = 0; i < list.length; i += 1) {
+    const batch = list[i];
+    if (typeof onProgress === 'function') {
+      onProgress(i + 1, list.length);
+    }
+
+    const resolvedBatchRoot = await resolveBatchRootFromEntries(recycleRoot, batch);
+    if (!resolvedBatchRoot.ok) {
+      result.failBatches += 1;
+      result.operations.push({
+        batchId: batch.batchId,
+        status: 'failed_invalid_path',
+        selectedBy: batch.selectedBy || 'unknown',
+        totalBytes: Number(batch.totalBytes || 0),
+        invalidReason: resolvedBatchRoot.invalidReason,
+      });
+      result.errors.push({
+        batchId: batch.batchId,
+        message: `批次路径校验失败: ${resolvedBatchRoot.invalidReason}`,
+        errorType: ERROR_TYPES.PATH_VALIDATION_FAILED,
+        invalidReason: resolvedBatchRoot.invalidReason,
+      });
+      continue;
+    }
+
+    if (dryRun) {
+      result.deletedBatches += 1;
+      result.deletedBytes += Number(batch.totalBytes || 0);
+      result.operations.push({
+        batchId: batch.batchId,
+        status: 'dry_run',
+        selectedBy: batch.selectedBy || 'unknown',
+        totalBytes: Number(batch.totalBytes || 0),
+        batchRoot: resolvedBatchRoot.batchRoot,
+      });
+      continue;
+    }
+
+    try {
+      await fs.rm(resolvedBatchRoot.batchRoot, { recursive: true, force: true });
+      result.deletedBatches += 1;
+      result.deletedBytes += Number(batch.totalBytes || 0);
+      result.operations.push({
+        batchId: batch.batchId,
+        status: 'deleted',
+        selectedBy: batch.selectedBy || 'unknown',
+        totalBytes: Number(batch.totalBytes || 0),
+        batchRoot: resolvedBatchRoot.batchRoot,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      result.failBatches += 1;
+      result.operations.push({
+        batchId: batch.batchId,
+        status: 'failed',
+        selectedBy: batch.selectedBy || 'unknown',
+        totalBytes: Number(batch.totalBytes || 0),
+        batchRoot: resolvedBatchRoot.batchRoot,
+        errorType: classifyErrorType(message),
+      });
+      result.errors.push({
+        batchId: batch.batchId,
+        message,
+        errorType: classifyErrorType(message),
+      });
+    }
+  }
+
+  return result;
+}
+
 export async function collectRecycleStats({ indexPath, recycleRoot, createIfMissing = true }) {
   if (createIfMissing) {
     await ensureDir(recycleRoot);
@@ -317,73 +398,17 @@ export async function maintainRecycleBin({ indexPath, recycleRoot, policy, dryRu
     };
   }
 
-  for (let i = 0; i < selected.candidates.length; i += 1) {
-    const batch = selected.candidates[i];
-    if (typeof onProgress === 'function') {
-      onProgress(i + 1, selected.candidates.length);
-    }
-
-    const resolvedBatchRoot = await resolveBatchRootFromEntries(recycleRoot, batch);
-    if (!resolvedBatchRoot.ok) {
-      summary.failBatches += 1;
-      summary.operations.push({
-        batchId: batch.batchId,
-        status: 'failed_invalid_path',
-        selectedBy: batch.selectedBy || 'unknown',
-        totalBytes: Number(batch.totalBytes || 0),
-        invalidReason: resolvedBatchRoot.invalidReason,
-      });
-      summary.errors.push({
-        batchId: batch.batchId,
-        message: `批次路径校验失败: ${resolvedBatchRoot.invalidReason}`,
-        errorType: ERROR_TYPES.PATH_VALIDATION_FAILED,
-        invalidReason: resolvedBatchRoot.invalidReason,
-      });
-      continue;
-    }
-
-    if (dryRun) {
-      summary.deletedBatches += 1;
-      summary.deletedBytes += Number(batch.totalBytes || 0);
-      summary.operations.push({
-        batchId: batch.batchId,
-        status: 'dry_run',
-        selectedBy: batch.selectedBy || 'unknown',
-        totalBytes: Number(batch.totalBytes || 0),
-        batchRoot: resolvedBatchRoot.batchRoot,
-      });
-      continue;
-    }
-
-    try {
-      await fs.rm(resolvedBatchRoot.batchRoot, { recursive: true, force: true });
-      summary.deletedBatches += 1;
-      summary.deletedBytes += Number(batch.totalBytes || 0);
-      summary.operations.push({
-        batchId: batch.batchId,
-        status: 'deleted',
-        selectedBy: batch.selectedBy || 'unknown',
-        totalBytes: Number(batch.totalBytes || 0),
-        batchRoot: resolvedBatchRoot.batchRoot,
-      });
-    } catch (error) {
-      summary.failBatches += 1;
-      const message = error instanceof Error ? error.message : String(error);
-      summary.operations.push({
-        batchId: batch.batchId,
-        status: 'failed',
-        selectedBy: batch.selectedBy || 'unknown',
-        totalBytes: Number(batch.totalBytes || 0),
-        batchRoot: resolvedBatchRoot.batchRoot,
-        errorType: classifyErrorType(message),
-      });
-      summary.errors.push({
-        batchId: batch.batchId,
-        message,
-        errorType: classifyErrorType(message),
-      });
-    }
-  }
+  const deletion = await deleteRecycleCandidates({
+    recycleRoot,
+    candidates: selected.candidates,
+    dryRun,
+    onProgress,
+  });
+  summary.deletedBatches = deletion.deletedBatches;
+  summary.deletedBytes = deletion.deletedBytes;
+  summary.failBatches = deletion.failBatches;
+  summary.operations = deletion.operations;
+  summary.errors = deletion.errors;
 
   const after = dryRun ? before : await collectRecycleStats({ indexPath, recycleRoot });
   const status = summary.failBatches > 0 ? 'partial_failed' : dryRun ? 'dry_run' : 'success';

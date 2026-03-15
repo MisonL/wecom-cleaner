@@ -926,6 +926,7 @@ export async function collectCleanupTargets({
       for (const child of dirCandidates) {
         const monthKey = normalizeMonthKey(path.basename(child.name));
         const isMonthDir = Boolean(monthKey);
+        const stat = await fs.stat(child.path).catch(() => null);
 
         const includeMonth = isMonthDir && (!monthSet || monthSet.has(monthKey));
         const includeNonMonth = !isMonthDir && Boolean(includeNonMonthDirs);
@@ -948,6 +949,7 @@ export async function collectCleanupTargets({
           directoryName: child.name,
           path: child.path,
           isDirectory: child.isDirectory,
+          mtimeMs: stat?.mtimeMs || 0,
           sizeBytes: 0,
         });
       }
@@ -955,6 +957,7 @@ export async function collectCleanupTargets({
       if (includeNonMonthDirs) {
         const fileCandidates = await collectCategoryDirectFileCandidates(rootPath);
         for (const file of fileCandidates) {
+          const stat = await fs.stat(file.path).catch(() => null);
           candidates.push({
             accountId: account.id,
             accountShortId: account.shortId,
@@ -969,6 +972,7 @@ export async function collectCleanupTargets({
             directoryName: file.name,
             path: file.path,
             isDirectory: false,
+            mtimeMs: stat?.mtimeMs || 0,
             sizeBytes: 0,
           });
         }
@@ -995,6 +999,7 @@ export async function collectCleanupTargets({
       for (const child of dirCandidates) {
         const monthKey = normalizeMonthKey(path.basename(child.name));
         const isMonthDir = Boolean(monthKey);
+        const stat = await fs.stat(child.path).catch(() => null);
 
         const includeMonth = isMonthDir && (!monthSet || monthSet.has(monthKey));
         const includeNonMonth = !isMonthDir && Boolean(includeNonMonthDirs);
@@ -1017,6 +1022,7 @@ export async function collectCleanupTargets({
           directoryName: child.name,
           path: child.path,
           isDirectory: child.isDirectory,
+          mtimeMs: stat?.mtimeMs || 0,
           sizeBytes: 0,
           externalStorageRoot: externalRoot,
           isExternalStorage: true,
@@ -1026,6 +1032,7 @@ export async function collectCleanupTargets({
       if (includeNonMonthDirs) {
         const fileCandidates = await collectCategoryDirectFileCandidates(rootPath);
         for (const file of fileCandidates) {
+          const stat = await fs.stat(file.path).catch(() => null);
           candidates.push({
             accountId: externalId,
             accountShortId: '外部存储',
@@ -1040,6 +1047,7 @@ export async function collectCleanupTargets({
             directoryName: file.name,
             path: file.path,
             isDirectory: false,
+            mtimeMs: stat?.mtimeMs || 0,
             sizeBytes: 0,
             externalStorageRoot: externalRoot,
             isExternalStorage: true,

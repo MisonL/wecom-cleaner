@@ -155,27 +155,27 @@ async function resolveRootsRealpath(rootPaths) {
 async function buildRestoreValidationState({
   profileRoot,
   extraProfileRoots,
-  recycleRoot,
+  recycleRoots,
   governanceRoot,
   extraGovernanceRoots,
 }) {
   const profileRootsRaw = normalizeRootList([profileRoot, ...(extraProfileRoots || [])]);
   const governanceRootsRaw = normalizeRootList([governanceRoot, ...(extraGovernanceRoots || [])]);
-  const recycleRootRaw = normalizeRootList([recycleRoot])[0] || null;
+  const recycleRootsRaw = normalizeRootList(recycleRoots || []);
 
-  const [profileRootsReal, governanceRootsReal, recycleRootReal] = await Promise.all([
+  const [profileRootsReal, governanceRootsReal, recycleRootsReal] = await Promise.all([
     resolveRootsRealpath(profileRootsRaw),
     resolveRootsRealpath(governanceRootsRaw),
-    recycleRootRaw ? safeRealpath(recycleRootRaw) : Promise.resolve(null),
+    resolveRootsRealpath(recycleRootsRaw),
   ]);
 
   return {
     profileRootsRaw,
     governanceRootsRaw,
-    recycleRootRaw,
+    recycleRootsRaw,
     profileRootsReal,
     governanceRootsReal,
-    recycleRootReal,
+    recycleRootsReal,
   };
 }
 
@@ -214,8 +214,8 @@ async function validateRestoreEntryPath({ originalPath, recyclePath, scope, vali
     return 'invalid_path_record';
   }
 
-  if (validationState.recycleRootRaw) {
-    if (!validationState.recycleRootReal) {
+  if (Array.isArray(validationState.recycleRootsRaw) && validationState.recycleRootsRaw.length > 0) {
+    if (!Array.isArray(validationState.recycleRootsReal) || validationState.recycleRootsReal.length === 0) {
       return 'missing_recycle_root';
     }
 
@@ -224,12 +224,12 @@ async function validateRestoreEntryPath({ originalPath, recyclePath, scope, vali
       return 'recycle_path_unresolvable';
     }
 
-    const recycleInside = isPathWithinResolvedRoot(
-      validationState.recycleRootReal,
+    const recycleInside = isPathWithinAnyResolvedRoot(
+      validationState.recycleRootsReal,
       recycleChecked.resolvedPath
     );
     if (!recycleInside) {
-      const rawInside = isPathWithinRoot(validationState.recycleRootRaw, recyclePath);
+      const rawInside = isPathWithinAnyRoot(validationState.recycleRootsRaw, recyclePath);
       return rawInside ? 'recycle_symlink_escape' : 'recycle_outside_recycle_root';
     }
   }
@@ -445,6 +445,11 @@ function finalizeRestoreBreakdown(tracker) {
 
 export async function listRestorableBatches(indexPath, options = {}) {
   const recycleRoot = typeof options.recycleRoot === 'string' ? options.recycleRoot : null;
+  const recycleRoots = Array.isArray(options.recycleRoots)
+    ? normalizeRootList(options.recycleRoots)
+    : recycleRoot
+      ? normalizeRootList([recycleRoot])
+      : [];
   const restoredSet = new Set();
   const cleanupRows = new Map();
 
@@ -457,7 +462,12 @@ export async function listRestorableBatches(indexPath, options = {}) {
       cleanupRows.delete(row.recyclePath);
       return;
     }
-    if (row.action === 'cleanup' && row.status === 'success' && typeof row.recyclePath === 'string') {
+    if (
+      row.action === 'cleanup' &&
+      row.status === 'success' &&
+      row.recoverable !== false &&
+      typeof row.recyclePath === 'string'
+    ) {
       if (!restoredSet.has(row.recyclePath)) {
         cleanupRows.set(row.recyclePath, row);
       }
@@ -467,7 +477,7 @@ export async function listRestorableBatches(indexPath, options = {}) {
   const batches = new Map();
 
   for (const row of cleanupRows.values()) {
-    if (recycleRoot && !isPathWithinRoot(recycleRoot, row.recyclePath)) {
+    if (recycleRoots.length > 0 && !isPathWithinAnyRoot(recycleRoots, row.recyclePath)) {
       continue;
     }
 
@@ -483,12 +493,14 @@ export async function listRestorableBatches(indexPath, options = {}) {
         firstTime: row.time || Date.now(),
         entries: [],
         totalBytes: 0,
+        recycleScope: row.recycleScope || 'manual',
       });
     }
     const batch = batches.get(batchId);
     batch.firstTime = Math.min(batch.firstTime, row.time || batch.firstTime);
     batch.entries.push(row);
     batch.totalBytes += Number(row.sizeBytes || 0);
+    batch.recycleScope = row.recycleScope || batch.recycleScope || 'manual';
   }
 
   return [...batches.values()].sort((a, b) => b.firstTime - a.firstTime);
@@ -503,6 +515,7 @@ export async function restoreBatch({
   profileRoot = null,
   extraProfileRoots = [],
   recycleRoot = null,
+  recycleRoots = [],
   governanceRoot = null,
   extraGovernanceRoots = [],
 }) {
@@ -519,7 +532,7 @@ export async function restoreBatch({
   const validationState = await buildRestoreValidationState({
     profileRoot,
     extraProfileRoots,
-    recycleRoot,
+    recycleRoots: recycleRoots.length > 0 ? recycleRoots : recycleRoot ? [recycleRoot] : [],
     governanceRoot,
     extraGovernanceRoots,
   });

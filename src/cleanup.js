@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { DELETE_MODES } from './constants.js';
 import { appendJsonLine, ensureDir, pathExists } from './utils.js';
 import { classifyErrorType, ERROR_TYPES } from './error-taxonomy.js';
 
@@ -29,6 +30,10 @@ async function movePath(src, dest) {
 
   await fs.cp(src, dest, { recursive: true, force: true });
   await fs.rm(src, { recursive: true, force: true });
+}
+
+async function removePath(targetPath) {
+  await fs.rm(targetPath, { recursive: true, force: true });
 }
 
 function escapePathForName(srcPath) {
@@ -375,9 +380,19 @@ export async function executeCleanup({
   scope = 'cleanup_monthly',
   shouldSkip,
   onProgress,
+  deleteMode = DELETE_MODES.RECYCLE,
+  recycleScope = 'manual',
+  triggerSource = 'interactive',
 }) {
   const batchId = generateBatchId();
-  const batchRoot = dryRun ? null : path.join(recycleRoot, batchId);
+  const normalizedDeleteMode =
+    deleteMode === DELETE_MODES.DIRECT
+      ? DELETE_MODES.DIRECT
+      : deleteMode === DELETE_MODES.SERVICE_RECYCLE
+        ? DELETE_MODES.SERVICE_RECYCLE
+        : DELETE_MODES.RECYCLE;
+  const recoverable = normalizedDeleteMode !== DELETE_MODES.DIRECT;
+  const batchRoot = !dryRun && recoverable ? path.join(recycleRoot, batchId) : null;
   if (batchRoot) {
     await ensureDir(batchRoot);
   }
@@ -385,6 +400,10 @@ export async function executeCleanup({
   const summary = {
     batchId,
     dryRun: Boolean(dryRun),
+    deleteMode: normalizedDeleteMode,
+    recycleScope: recoverable ? recycleScope : null,
+    triggerSource,
+    recoverable,
     successCount: 0,
     skippedCount: 0,
     failedCount: 0,
@@ -429,6 +448,10 @@ export async function executeCleanup({
         status: skipByPolicy,
         error_type: ERROR_TYPES.POLICY_SKIPPED,
         dryRun: Boolean(dryRun),
+        deleteMode: normalizedDeleteMode,
+        recycleScope: recoverable ? recycleScope : null,
+        triggerSource,
+        recoverable,
       });
       continue;
     }
@@ -457,6 +480,10 @@ export async function executeCleanup({
         status: 'skipped_missing_source',
         error_type: ERROR_TYPES.PATH_NOT_FOUND,
         dryRun: Boolean(dryRun),
+        deleteMode: normalizedDeleteMode,
+        recycleScope: recoverable ? recycleScope : null,
+        triggerSource,
+        recoverable,
       });
       continue;
     }
@@ -487,6 +514,10 @@ export async function executeCleanup({
         invalid_reason: invalidPathReason,
         allowed_roots: validationState.allowedRootsRaw,
         dryRun: Boolean(dryRun),
+        deleteMode: normalizedDeleteMode,
+        recycleScope: recoverable ? recycleScope : null,
+        triggerSource,
+        recoverable,
       });
       continue;
     }
@@ -514,15 +545,23 @@ export async function executeCleanup({
         tier: target.tier || null,
         status: 'dry_run',
         dryRun: true,
+        deleteMode: normalizedDeleteMode,
+        recycleScope: recoverable ? recycleScope : null,
+        triggerSource,
+        recoverable,
       });
       continue;
     }
 
     const destName = `${String(i + 1).padStart(4, '0')}_${escapePathForName(target.path)}`;
-    const recyclePath = path.join(batchRoot, destName);
+    const recyclePath = batchRoot ? path.join(batchRoot, destName) : null;
 
     try {
-      await movePath(target.path, recyclePath);
+      if (normalizedDeleteMode === DELETE_MODES.DIRECT) {
+        await removePath(target.path);
+      } else {
+        await movePath(target.path, recyclePath);
+      }
       summary.successCount += 1;
       summary.reclaimedBytes += target.sizeBytes;
       updateCleanupBreakdown(breakdownTracker, target, 'success', 'success');
@@ -547,6 +586,10 @@ export async function executeCleanup({
         tier: target.tier || null,
         status: 'success',
         dryRun: false,
+        deleteMode: normalizedDeleteMode,
+        recycleScope: recoverable ? recycleScope : null,
+        triggerSource,
+        recoverable,
       });
     } catch (error) {
       summary.failedCount += 1;
@@ -577,6 +620,10 @@ export async function executeCleanup({
         error_type: classifyErrorType(message),
         dryRun: false,
         error: message,
+        deleteMode: normalizedDeleteMode,
+        recycleScope: recoverable ? recycleScope : null,
+        triggerSource,
+        recoverable,
       });
     }
   }

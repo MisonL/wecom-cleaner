@@ -8,6 +8,7 @@ import { checkbox, confirm, input, select } from '@inquirer/prompts';
 import {
   CACHE_CATEGORIES,
   DEFAULT_PROFILE_ROOT,
+  DELETE_MODES,
   MODES,
   SPACE_GOVERNANCE_TARGETS,
   SPACE_GOVERNANCE_TIERS,
@@ -32,7 +33,32 @@ import { printAnalysisSummary } from './analysis.js';
 import { runDoctor } from './doctor.js';
 import { acquireLock, breakLock, LockHeldError } from './lock.js';
 import { classifyErrorType, errorTypeToLabel } from './error-taxonomy.js';
-import { collectRecycleStats, maintainRecycleBin, normalizeRecycleRetention } from './recycle-maintenance.js';
+import {
+  collectRecycleStats,
+  deleteRecycleCandidates,
+  maintainRecycleBin,
+  normalizeRecycleRetention,
+} from './recycle-maintenance.js';
+import {
+  SERVICE_DIRECT_DELETE_ACK,
+  SERVICE_LOGIN_TRIGGER,
+  SERVICE_LOW_SPACE_TRIGGER,
+  SERVICE_MANUAL_TRIGGER,
+  SERVICE_SCHEDULE_TRIGGER,
+  computeNextTriggerAt,
+  defaultServiceConfig,
+  defaultServiceState,
+  installServiceLaunchAgents,
+  loadServiceConfig,
+  loadServiceState,
+  normalizeServiceConfig,
+  normalizeTriggerTimes,
+  queryServiceStatus,
+  readFilesystemUsage,
+  saveServiceConfig,
+  saveServiceState,
+  uninstallServiceLaunchAgents,
+} from './service-manager.js';
 import {
   applyUpdateCheckResult,
   channelLabel,
@@ -55,6 +81,7 @@ import {
   monthByDaysBefore,
   normalizeMonthKey,
   padToWidth,
+  pathExists,
   printProgress,
   printSection,
   renderTable,
@@ -107,6 +134,10 @@ const NON_INTERACTIVE_ACTIONS = new Set([
   MODES.CHECK_UPDATE,
   MODES.UPGRADE,
   MODES.SYNC_SKILLS,
+  MODES.SERVICE_INSTALL,
+  MODES.SERVICE_UNINSTALL,
+  MODES.SERVICE_STATUS,
+  MODES.SERVICE_RUN,
 ]);
 const INTERACTIVE_MODE_ALIASES = new Map([
   ['start', MODES.START],
@@ -124,6 +155,15 @@ const INTERACTIVE_MODE_ALIASES = new Map([
   ['check-update', MODES.CHECK_UPDATE],
   ['sync_skills', MODES.SYNC_SKILLS],
   ['sync-skills', MODES.SYNC_SKILLS],
+  ['service', MODES.SERVICE],
+  ['service_install', MODES.SERVICE_INSTALL],
+  ['service-install', MODES.SERVICE_INSTALL],
+  ['service_uninstall', MODES.SERVICE_UNINSTALL],
+  ['service-uninstall', MODES.SERVICE_UNINSTALL],
+  ['service_status', MODES.SERVICE_STATUS],
+  ['service-status', MODES.SERVICE_STATUS],
+  ['service_run', MODES.SERVICE_RUN],
+  ['service-run', MODES.SERVICE_RUN],
   ['settings', MODES.SETTINGS],
 ]);
 const OUTPUT_JSON = 'json';
@@ -141,10 +181,12 @@ const DESTRUCTIVE_ACTIONS = new Set([
   MODES.SPACE_GOVERNANCE,
   MODES.RESTORE,
   MODES.RECYCLE_MAINTAIN,
+  MODES.SERVICE_RUN,
 ]);
 const UPDATE_REPO_OWNER = 'MisonL';
 const UPDATE_REPO_NAME = 'wecom-cleaner';
 const UPDATE_TIMEOUT_MS = 2500;
+const CLI_FILE_PATH = fileURLToPath(import.meta.url);
 
 function allowAutoUpdateByEnv() {
   const raw = String(process.env.WECOM_CLEANER_AUTO_UPDATE || 'true')
@@ -1962,7 +2004,7 @@ function resolveActionFromCli(cliArgs, hasAnyArgs) {
     throw new UsageError(
       [
         '无交互模式必须指定一个动作参数：',
-        '--cleanup-monthly | --analysis-only | --space-governance | --restore-batch <batchId> | --recycle-maintain | --doctor | --check-update | --upgrade <npm|github-script> | --sync-skills',
+        '--cleanup-monthly | --analysis-only | --space-governance | --restore-batch <batchId> | --recycle-maintain | --doctor | --check-update | --upgrade <npm|github-script> | --sync-skills | --service-install | --service-uninstall | --service-status | --service-run',
       ].join('\n')
     );
   }
@@ -1988,11 +2030,18 @@ function printCliUsage(appMeta) {
     '  --check-update',
     '  --upgrade <npm|github-script>',
     '  --sync-skills',
+    '  --service-install',
+    '  --service-uninstall',
+    '  --service-status',
+    '  --service-run',
     '',
     '常用选项：',
     '  --output json|text',
     '  --dry-run true|false',
     '  --yes',
+    '  --delete-mode direct|recycle|service_recycle',
+    '  --direct-delete-ack DIRECT_DELETE',
+    '  --recycle-scope manual|service|all',
     '  --run-task preview|execute|preview-execute-verify',
     '  --scan-debug off|summary|full',
     '  --accounts all|current|id1,id2',
@@ -2005,6 +2054,16 @@ function printCliUsage(appMeta) {
     '  --upgrade-sync-skills true|false',
     '  --skill-sync-method npm|github-script',
     '  --skill-sync-ref x.y.z',
+    '  --service-retain-days <days>',
+    '  --service-delete-mode service_recycle|direct',
+    '  --service-direct-delete-ack SERVICE_DIRECT_DELETE',
+    '  --service-recycle-retention-days <days>',
+    '  --service-recycle-min-keep-batches <n>',
+    '  --service-recycle-threshold-gb <n>',
+    '  --service-low-space-threshold-gb <n>',
+    '  --service-low-space-threshold-percent <n>',
+    '  --service-trigger-times HH:MM,HH:MM,HH:MM',
+    '  --service-cooldown-minutes <n>',
     '  --root <path>',
     '  --state-root <path>',
     '',
@@ -2017,6 +2076,8 @@ function printCliUsage(appMeta) {
     '  wecom-cleaner --cleanup-monthly --accounts all --cutoff-month 2024-04',
     '  wecom-cleaner --cleanup-monthly --cutoff-month 2024-04 --accounts all --run-task preview-execute-verify --yes',
     '  wecom-cleaner --cleanup-monthly --accounts all --cutoff-month 2024-04 --dry-run false --yes',
+    '  wecom-cleaner --cleanup-monthly --accounts all --cutoff-month 2024-04 --dry-run false --delete-mode direct --direct-delete-ack DIRECT_DELETE --yes',
+    '  wecom-cleaner --service-install --service-retain-days 180 --accounts all --service-trigger-times 09:30,13:30,18:30',
     '  wecom-cleaner --sync-skills --skill-sync-method npm',
   ];
   console.log(lines.join('\n'));
@@ -2051,6 +2112,60 @@ function resolveDestructiveDryRun(cliArgs) {
     return cliArgs.dryRun;
   }
   return !cliArgs.yes;
+}
+
+function normalizeDeleteMode(rawValue, fallback = DELETE_MODES.RECYCLE) {
+  const value = String(rawValue || '')
+    .trim()
+    .toLowerCase();
+  if (value === DELETE_MODES.DIRECT) {
+    return DELETE_MODES.DIRECT;
+  }
+  if (value === DELETE_MODES.SERVICE_RECYCLE) {
+    return DELETE_MODES.SERVICE_RECYCLE;
+  }
+  if (value === DELETE_MODES.RECYCLE) {
+    return DELETE_MODES.RECYCLE;
+  }
+  return fallback;
+}
+
+function deleteModeLabel(deleteMode) {
+  const normalized = normalizeDeleteMode(deleteMode, DELETE_MODES.RECYCLE);
+  if (normalized === DELETE_MODES.DIRECT) {
+    return '直接删除（不可恢复）';
+  }
+  if (normalized === DELETE_MODES.SERVICE_RECYCLE) {
+    return '移动到服务回收站';
+  }
+  return '移动到回收区（可恢复）';
+}
+
+function deleteModeRecoverable(deleteMode) {
+  return normalizeDeleteMode(deleteMode, DELETE_MODES.RECYCLE) !== DELETE_MODES.DIRECT;
+}
+
+function resolveNonInteractiveDeleteMode(cliArgs, fallback = DELETE_MODES.RECYCLE) {
+  return normalizeDeleteMode(cliArgs.deleteMode, fallback);
+}
+
+function assertDirectDeleteAck(deleteMode, ackValue, expectedValue = 'DIRECT_DELETE') {
+  if (normalizeDeleteMode(deleteMode, DELETE_MODES.RECYCLE) !== DELETE_MODES.DIRECT) {
+    return;
+  }
+  if (String(ackValue || '').trim() !== expectedValue) {
+    throw new ConfirmationRequiredError(`检测到直接删除请求，但未提供 ${expectedValue} 确认参数。`);
+  }
+}
+
+function normalizeRecycleScope(rawValue) {
+  const value = String(rawValue || 'manual')
+    .trim()
+    .toLowerCase();
+  if (value === 'service' || value === 'all') {
+    return value;
+  }
+  return 'manual';
 }
 
 function categoryDefaultSelection(config) {
@@ -2343,6 +2458,9 @@ function buildActionScopeNotes(action, result) {
     if (summary.cutoffMonth) {
       notes.push(`时间筛选使用“截至 ${summary.cutoffMonth}（含）”。`);
     }
+    if (summary.deleteMode === DELETE_MODES.DIRECT) {
+      notes.push('本次为直接删除模式，不会进入回收区，也无法按批次恢复。');
+    }
     if (summary.noTarget) {
       notes.push('当前筛选命中为 0，已按安全策略跳过真实删除。');
     }
@@ -2357,6 +2475,9 @@ function buildActionScopeNotes(action, result) {
   if (action === MODES.SPACE_GOVERNANCE && Number(summary.matchedTargets || 0) === 0) {
     notes.push('当前治理筛选命中为 0，本次未执行任何删除。');
   }
+  if (action === MODES.SPACE_GOVERNANCE && summary.deleteMode === DELETE_MODES.DIRECT) {
+    notes.push('本次治理为直接删除模式，不会进入回收区。');
+  }
 
   if (action === MODES.RESTORE) {
     if (result?.dryRun) {
@@ -2368,6 +2489,11 @@ function buildActionScopeNotes(action, result) {
     const method = result?.summary?.method || 'npm';
     notes.push(`本次仅处理 Agent Skills 目录，不会扫描或清理企业微信缓存。`);
     notes.push(`同步方式：${skillSyncMethodLabel(method)}。`);
+  }
+
+  if (action === MODES.SERVICE_RUN) {
+    notes.push(`服务触发源：${serviceTriggerLabel(summary.triggerSource)}。`);
+    notes.push(`服务删除方式：${serviceDeleteModeLabel(summary.deleteMode)}。`);
   }
 
   return uniqueStrings(notes);
@@ -2475,6 +2601,202 @@ async function inspectSkillBindingSafe(context, appVersion = '') {
   }
 }
 
+async function loadServiceConfigSafe(context) {
+  try {
+    return await loadServiceConfig(context.config.serviceConfigPath);
+  } catch {
+    return defaultServiceConfig();
+  }
+}
+
+async function loadServiceStateSafe(context) {
+  try {
+    return await loadServiceState(context.config.serviceStatePath);
+  } catch {
+    return defaultServiceState();
+  }
+}
+
+function serviceTriggerLabel(triggerSource) {
+  const key = String(triggerSource || '').trim();
+  if (key === SERVICE_LOGIN_TRIGGER) {
+    return '登录后触发';
+  }
+  if (key === SERVICE_SCHEDULE_TRIGGER) {
+    return '定时触发';
+  }
+  if (key === SERVICE_LOW_SPACE_TRIGGER) {
+    return '低空间紧急治理';
+  }
+  if (key === SERVICE_MANUAL_TRIGGER) {
+    return '手动触发';
+  }
+  return key || '-';
+}
+
+function filesystemLowSpaceTargetBytes(usage, serviceConfig) {
+  const totalBytes = Number(usage?.totalBytes || 0);
+  const byGb = Math.max(1, Number(serviceConfig.lowSpaceThresholdGB || 20)) * 1024 * 1024 * 1024;
+  const byPercent = Math.floor(
+    totalBytes * (Math.max(1, Number(serviceConfig.lowSpaceThresholdPercent || 10)) / 100)
+  );
+  return Math.max(byGb, byPercent);
+}
+
+function serviceMonthExpiredByDays(monthKey, retainDays, now = Date.now()) {
+  const normalized = normalizeMonthKey(monthKey);
+  if (!normalized) {
+    return false;
+  }
+  const [year, month] = normalized.split('-').map(Number);
+  const monthEnd = new Date(year, month, 0, 23, 59, 59, 999).getTime();
+  const ageMs = Math.max(0, now - monthEnd);
+  return ageMs >= Number(retainDays || 0) * 24 * 3600 * 1000;
+}
+
+function filterServiceExpiredTargets(targets, serviceConfig, now = Date.now()) {
+  const retainDays = Math.max(1, Number(serviceConfig.retainDays || 30));
+  return (Array.isArray(targets) ? targets : []).filter((target) => {
+    if (target.monthKey) {
+      return serviceMonthExpiredByDays(target.monthKey, retainDays, now);
+    }
+    const mtimeMs = Number(target.mtimeMs || 0);
+    if (!mtimeMs) {
+      return false;
+    }
+    return now - mtimeMs >= retainDays * 24 * 3600 * 1000;
+  });
+}
+
+function serviceRecyclePolicy(serviceConfig) {
+  return normalizeRecycleRetention({
+    enabled: true,
+    maxAgeDays: serviceConfig.recycleRetentionDays,
+    minKeepBatches: serviceConfig.recycleMinKeepBatches,
+    sizeThresholdGB: serviceConfig.recycleThresholdGB,
+    lastRunAt: 0,
+  });
+}
+
+function serviceTriggerTimesText(triggerTimes) {
+  return normalizeTriggerTimes(triggerTimes).join(', ');
+}
+
+function serviceDeleteModeLabel(deleteMode) {
+  const normalized = normalizeDeleteMode(deleteMode, DELETE_MODES.SERVICE_RECYCLE);
+  return normalized === DELETE_MODES.DIRECT ? '服务直接删除' : '移动到服务回收站';
+}
+
+function resolveServiceConfigFromCli(context, cliArgs, existingConfig = defaultServiceConfig()) {
+  const nextConfig = normalizeServiceConfig({
+    ...existingConfig,
+    enabled: true,
+    accounts:
+      Array.isArray(cliArgs.accounts) && cliArgs.accounts.length > 0
+        ? cliArgs.accounts
+        : existingConfig.accounts,
+    categories:
+      Array.isArray(cliArgs.categories) && cliArgs.categories.length > 0
+        ? cliArgs.categories
+        : existingConfig.categories,
+    includeNonMonthDirs:
+      typeof cliArgs.includeNonMonthDirs === 'boolean'
+        ? cliArgs.includeNonMonthDirs
+        : existingConfig.includeNonMonthDirs,
+    externalRootsSource:
+      Array.isArray(cliArgs.externalRootsSource) && cliArgs.externalRootsSource.length > 0
+        ? cliArgs.externalRootsSource
+        : existingConfig.externalRootsSource,
+    retainDays:
+      typeof cliArgs.serviceRetainDays === 'number' ? cliArgs.serviceRetainDays : existingConfig.retainDays,
+    deleteMode:
+      typeof cliArgs.serviceDeleteMode === 'string' ? cliArgs.serviceDeleteMode : existingConfig.deleteMode,
+    directDeleteApproved:
+      normalizeDeleteMode(
+        typeof cliArgs.serviceDeleteMode === 'string' ? cliArgs.serviceDeleteMode : existingConfig.deleteMode,
+        DELETE_MODES.SERVICE_RECYCLE
+      ) === DELETE_MODES.DIRECT
+        ? String(cliArgs.serviceDirectDeleteAck || '').trim() === SERVICE_DIRECT_DELETE_ACK
+        : false,
+    recycleRetentionDays:
+      typeof cliArgs.serviceRecycleRetentionDays === 'number'
+        ? cliArgs.serviceRecycleRetentionDays
+        : existingConfig.recycleRetentionDays,
+    recycleMinKeepBatches:
+      typeof cliArgs.serviceRecycleMinKeepBatches === 'number'
+        ? cliArgs.serviceRecycleMinKeepBatches
+        : existingConfig.recycleMinKeepBatches,
+    recycleThresholdGB:
+      typeof cliArgs.serviceRecycleThresholdGB === 'number'
+        ? cliArgs.serviceRecycleThresholdGB
+        : existingConfig.recycleThresholdGB,
+    lowSpaceThresholdGB:
+      typeof cliArgs.serviceLowSpaceThresholdGB === 'number'
+        ? cliArgs.serviceLowSpaceThresholdGB
+        : existingConfig.lowSpaceThresholdGB,
+    lowSpaceThresholdPercent:
+      typeof cliArgs.serviceLowSpaceThresholdPercent === 'number'
+        ? cliArgs.serviceLowSpaceThresholdPercent
+        : existingConfig.lowSpaceThresholdPercent,
+    triggerTimes:
+      Array.isArray(cliArgs.serviceTriggerTimes) && cliArgs.serviceTriggerTimes.length > 0
+        ? cliArgs.serviceTriggerTimes
+        : existingConfig.triggerTimes,
+    cooldownMinutes:
+      typeof cliArgs.serviceCooldownMinutes === 'number'
+        ? cliArgs.serviceCooldownMinutes
+        : existingConfig.cooldownMinutes,
+    updatedAt: Date.now(),
+    installedAt: existingConfig.installedAt || Date.now(),
+  });
+
+  if (!Number.isFinite(Number(nextConfig.retainDays)) || Number(nextConfig.retainDays) < 1) {
+    throw new UsageError('安装自动服务时必须提供 --service-retain-days，且值必须 >= 1。');
+  }
+  if (
+    normalizeDeleteMode(nextConfig.deleteMode, DELETE_MODES.SERVICE_RECYCLE) === DELETE_MODES.DIRECT &&
+    nextConfig.directDeleteApproved !== true
+  ) {
+    throw new ConfirmationRequiredError(
+      `检测到服务直接删除模式，但未提供 ${SERVICE_DIRECT_DELETE_ACK} 确认参数。`
+    );
+  }
+
+  return nextConfig;
+}
+
+function mergeRecycleResults(scopeResults, dryRun) {
+  const results = Array.isArray(scopeResults) ? scopeResults : [];
+  const aggregate = {
+    status: results.every((item) => item.status === 'skipped_no_candidate')
+      ? 'skipped_no_candidate'
+      : results.some((item) => item.failBatches > 0)
+        ? 'partial_failed'
+        : dryRun
+          ? 'dry_run'
+          : 'success',
+    candidateCount: 0,
+    selectedByAge: 0,
+    selectedBySize: 0,
+    deletedBatches: 0,
+    deletedBytes: 0,
+    failedBatches: 0,
+    remainingBatches: 0,
+    remainingBytes: 0,
+  };
+  for (const item of results) {
+    aggregate.candidateCount += Number(item.candidateCount || 0);
+    aggregate.selectedByAge += Number(item.selectedByAge || 0);
+    aggregate.selectedBySize += Number(item.selectedBySize || 0);
+    aggregate.deletedBatches += Number(item.deletedBatches || 0);
+    aggregate.deletedBytes += Number(item.deletedBytes || 0);
+    aggregate.failedBatches += Number(item.failBatches || 0);
+    aggregate.remainingBatches += Number(item.after?.totalBatches || 0);
+    aggregate.remainingBytes += Number(item.after?.totalBytes || 0);
+  }
+  return aggregate;
+}
+
 function buildUserFacingSummary(action, result) {
   const summary = result?.summary || {};
   const report = result?.data?.report || {};
@@ -2496,6 +2818,8 @@ function buildUserFacingSummary(action, result) {
       },
       result: {
         noTarget: Boolean(summary.noTarget),
+        deleteMode: summary.deleteMode || DELETE_MODES.RECYCLE,
+        recoverable: summary.recoverable !== false,
         matchedTargets: Number(summary.matchedTargets || 0),
         matchedBytes: Number(summary.matchedBytes || 0),
         reclaimedBytes: Number(summary.reclaimedBytes || 0),
@@ -2540,6 +2864,8 @@ function buildUserFacingSummary(action, result) {
       },
       result: {
         noTarget: Boolean(summary.noTarget),
+        deleteMode: summary.deleteMode || DELETE_MODES.RECYCLE,
+        recoverable: summary.recoverable !== false,
         matchedTargets: Number(summary.matchedTargets || 0),
         matchedBytes: Number(summary.matchedBytes || 0),
         reclaimedBytes: Number(summary.reclaimedBytes || 0),
@@ -2670,6 +2996,51 @@ function buildUserFacingSummary(action, result) {
     };
   }
 
+  if (action === MODES.SERVICE_STATUS) {
+    return {
+      scopeNotes: ['自动服务状态查询不会执行任何清理动作。'],
+      result: {
+        installed: Boolean(summary.installed),
+        loginLoaded: Boolean(summary.loginLoaded),
+        scheduleLoaded: Boolean(summary.scheduleLoaded),
+        nextRunAt: summary.nextRunAt || null,
+        deleteMode: summary.deleteMode || null,
+        retainDays: Number(summary.retainDays || 0),
+      },
+    };
+  }
+
+  if (action === MODES.SERVICE_INSTALL || action === MODES.SERVICE_UNINSTALL) {
+    return {
+      scopeNotes: ['自动服务安装状态已更新。'],
+      result: summary,
+    };
+  }
+
+  if (action === MODES.SERVICE_RUN) {
+    return {
+      scopeNotes: buildActionScopeNotes(action, result),
+      scope: {
+        accountCount: Array.isArray(data.selectedAccounts) ? data.selectedAccounts.length : 0,
+        categoryCount: Array.isArray(data.selectedCategories) ? data.selectedCategories.length : 0,
+        externalRootCount: Array.isArray(data.selectedExternalRoots) ? data.selectedExternalRoots.length : 0,
+      },
+      result: {
+        triggerSource: summary.triggerSource || null,
+        deleteMode: summary.deleteMode || null,
+        retainDays: Number(summary.retainDays || 0),
+        matchedTargets: Number(summary.matchedTargets || 0),
+        reclaimedBytes: Number(summary.reclaimedBytes || 0),
+        serviceRecycleDeletedBytes: Number(summary.serviceRecycleDeletedBytes || 0),
+        lowSpaceTriggered: Boolean(summary.lowSpaceTriggered),
+        lowSpaceDeletedBytes: Number(summary.lowSpaceDeletedBytes || 0),
+      },
+      byMonth: summarizeDimensionRows(matched.monthStats, { labelKey: 'monthKey' }),
+      byCategory: summarizeDimensionRows(matched.categoryStats, { labelKey: 'categoryLabel' }),
+      byRoot: summarizeDimensionRows(matched.rootStats, { labelKey: 'rootPath' }),
+    };
+  }
+
   return {
     scopeNotes: buildActionScopeNotes(action, result),
     result: summary,
@@ -2686,6 +3057,11 @@ const ACTION_DISPLAY_NAMES = new Map([
   [MODES.CHECK_UPDATE, '检查更新'],
   [MODES.UPGRADE, '程序升级'],
   [MODES.SYNC_SKILLS, '同步 Agent Skills'],
+  [MODES.SERVICE, '自动服务'],
+  [MODES.SERVICE_INSTALL, '安装自动服务'],
+  [MODES.SERVICE_UNINSTALL, '卸载自动服务'],
+  [MODES.SERVICE_STATUS, '自动服务状态'],
+  [MODES.SERVICE_RUN, '执行自动服务任务'],
 ]);
 
 const CONFLICT_STRATEGY_DISPLAY = new Map([
@@ -2903,6 +3279,8 @@ function printCleanupTextResult(payload) {
     conclusion = '已完成预演，本次未执行真实删除。';
   } else if (summary.failedCount > 0) {
     conclusion = '已执行真实清理，但存在失败项，建议查看错误明细。';
+  } else if (summary.deleteMode === DELETE_MODES.DIRECT) {
+    conclusion = '已执行真实清理，命中目录已直接删除且无法恢复。';
   } else {
     conclusion = '已执行真实清理，命中目录已移动到回收区。';
   }
@@ -2912,8 +3290,12 @@ function printCleanupTextResult(payload) {
     { label: '结果', value: payload.ok ? '成功' : '部分失败' },
     {
       label: '执行方式',
-      value: payload.dryRun ? '预演（dry-run）' : '真实清理（移动到回收区）',
-      note: payload.dryRun ? '不会删除数据，仅预估结果' : '可按批次恢复',
+      value: payload.dryRun ? '预演（dry-run）' : deleteModeLabel(summary.deleteMode),
+      note: payload.dryRun
+        ? '不会删除数据，仅预估结果'
+        : deleteModeRecoverable(summary.deleteMode)
+          ? '可按批次恢复'
+          : '直接删除后不可恢复',
     },
     { label: '结论', value: conclusion },
   ]);
@@ -2944,7 +3326,11 @@ function printCleanupTextResult(payload) {
     {
       label: payload.dryRun ? '预计可释放' : '实际已释放',
       value: formatBytesSafe(summary.reclaimedBytes),
-      note: payload.dryRun ? '若执行真实清理，理论可回收空间' : '已移动到回收区的体积',
+      note: payload.dryRun
+        ? '若执行真实清理，理论可回收空间'
+        : deleteModeRecoverable(summary.deleteMode)
+          ? '已移动到回收区的体积'
+          : '已直接删除并释放的体积',
     },
     { label: '成功', value: `${formatCount(summary.successCount)} 项` },
     { label: '跳过', value: `${formatCount(summary.skippedCount)} 项` },
@@ -3062,6 +3448,8 @@ function printSpaceGovernanceTextResult(payload) {
     conclusion = '已完成治理预演，尚未执行真实清理。';
   } else if (summary.failedCount > 0) {
     conclusion = '治理已执行，但存在失败项，请查看错误明细。';
+  } else if (summary.deleteMode === DELETE_MODES.DIRECT) {
+    conclusion = '治理已执行，目标目录已直接删除且不可恢复。';
   } else {
     conclusion = '治理已执行，目标目录已移动到回收区。';
   }
@@ -3069,7 +3457,10 @@ function printSpaceGovernanceTextResult(payload) {
   printTextRows('任务结论', [
     { label: '动作', value: actionDisplayName(payload.action) },
     { label: '结果', value: payload.ok ? '成功' : '部分失败' },
-    { label: '执行方式', value: payload.dryRun ? '预演（dry-run）' : '真实治理（移动到回收区）' },
+    {
+      label: '执行方式',
+      value: payload.dryRun ? '预演（dry-run）' : deleteModeLabel(summary.deleteMode),
+    },
     { label: '结论', value: conclusion },
   ]);
 
@@ -3091,7 +3482,15 @@ function printSpaceGovernanceTextResult(payload) {
   printTextRows('结果统计', [
     { label: '命中目录', value: `${formatCount(summary.matchedTargets)} 项` },
     { label: '命中体积', value: formatBytesSafe(summary.matchedBytes) },
-    { label: payload.dryRun ? '预计可释放' : '实际已释放', value: formatBytesSafe(summary.reclaimedBytes) },
+    {
+      label: payload.dryRun ? '预计可释放' : '实际已释放',
+      value: formatBytesSafe(summary.reclaimedBytes),
+      note: payload.dryRun
+        ? '若执行真实治理，理论可回收空间'
+        : deleteModeRecoverable(summary.deleteMode)
+          ? '已移动到回收区的体积'
+          : '已直接删除并释放的体积',
+    },
     { label: '成功', value: `${formatCount(summary.successCount)} 项` },
     { label: '跳过', value: `${formatCount(summary.skippedCount)} 项` },
     { label: '失败', value: `${formatCount(summary.failedCount)} 项` },
@@ -3224,8 +3623,9 @@ function recycleStatusLabel(status) {
 function printRecycleMaintainTextResult(payload) {
   const summary = payload.summary || {};
   const report = payload.data?.report || {};
-  const policy = payload.data?.policy || {};
-  const operations = Array.isArray(report.operations) ? report.operations : [];
+  const scopeResults = Array.isArray(report.scopeResults) ? report.scopeResults : [];
+  const policy = scopeResults.length === 1 ? scopeResults[0].policy || {} : {};
+  const operations = scopeResults.flatMap((item) => item.operations || []);
   const operationStatus = operations.reduce((acc, item) => {
     const key = String(item?.status || 'unknown');
     acc.set(key, (acc.get(key) || 0) + 1);
@@ -3248,12 +3648,22 @@ function printRecycleMaintainTextResult(payload) {
   ]);
 
   printTextRows('处理范围', [
+    { label: '治理范围', value: summary.recycleScope || 'manual' },
     { label: '候选批次', value: `${formatCount(summary.candidateCount)} 个` },
     { label: '按年龄选中', value: `${formatCount(summary.selectedByAge)} 个` },
     { label: '按容量选中', value: `${formatCount(summary.selectedBySize)} 个` },
-    { label: '保留天数阈值', value: `${formatCount(policy.maxAgeDays)} 天` },
-    { label: '最少保留批次', value: `${formatCount(policy.minKeepBatches)} 个` },
-    { label: '容量阈值', value: `${formatCount(policy.sizeThresholdGB)} GB` },
+    {
+      label: '保留天数阈值',
+      value: policy.maxAgeDays ? `${formatCount(policy.maxAgeDays)} 天` : '多策略汇总',
+    },
+    {
+      label: '最少保留批次',
+      value: policy.minKeepBatches ? `${formatCount(policy.minKeepBatches)} 个` : '多策略汇总',
+    },
+    {
+      label: '容量阈值',
+      value: policy.sizeThresholdGB ? `${formatCount(policy.sizeThresholdGB)} GB` : '多策略汇总',
+    },
   ]);
 
   printTextRows('结果统计', [
@@ -3465,6 +3875,132 @@ function printSyncSkillsTextResult(payload) {
   printRuntimeAndRisk(payload);
 }
 
+function printServiceStatusTextResult(payload) {
+  const summary = payload.summary || {};
+  printTextRows('任务结论', [
+    { label: '动作', value: actionDisplayName(payload.action) },
+    { label: '是否已安装', value: formatYesNo(summary.installed) },
+    {
+      label: '结论',
+      value: summary.installed ? '自动服务已安装。' : '当前未安装自动服务。',
+    },
+  ]);
+  printTextRows('服务状态', [
+    { label: '登录触发', value: formatYesNo(summary.loginLoaded) },
+    { label: '定时触发', value: formatYesNo(summary.scheduleLoaded) },
+    { label: '清理方式', value: serviceDeleteModeLabel(summary.deleteMode) },
+    { label: '保留天数', value: `${formatCount(summary.retainDays)} 天` },
+    { label: '触发时间', value: serviceTriggerTimesText(summary.triggerTimes) },
+    {
+      label: '下一次定时',
+      value: summary.nextRunAt ? formatLocalDate(summary.nextRunAt) : '-',
+    },
+  ]);
+  printTextRows('最近运行', [
+    {
+      label: '上次执行',
+      value: summary.lastRunAt ? formatLocalDate(summary.lastRunAt) : '从未执行',
+    },
+    { label: '上次状态', value: summary.lastStatus || '-' },
+    { label: '触发源', value: serviceTriggerLabel(summary.lastTriggerSource) },
+    { label: '服务回收站可用空间', value: formatBytesSafe(summary.serviceRecycleAvailableBytes) },
+  ]);
+  printRuntimeAndRisk(payload);
+}
+
+function printServiceInstallTextResult(payload) {
+  const summary = payload.summary || {};
+  printTextRows('任务结论', [
+    { label: '动作', value: actionDisplayName(payload.action) },
+    { label: '结果', value: payload.ok ? '成功' : '失败' },
+    { label: '结论', value: payload.ok ? '自动服务已安装并启用。' : '自动服务安装失败。' },
+  ]);
+  printTextRows('服务配置', [
+    { label: '删除方式', value: serviceDeleteModeLabel(summary.deleteMode) },
+    { label: '保留天数', value: `${formatCount(summary.retainDays)} 天` },
+    { label: '触发时间', value: serviceTriggerTimesText(summary.triggerTimes) },
+    { label: '下一次定时', value: summary.nextRunAt ? formatLocalDate(summary.nextRunAt) : '-' },
+  ]);
+  printRuntimeAndRisk(payload);
+}
+
+function printServiceUninstallTextResult(payload) {
+  const summary = payload.summary || {};
+  printTextRows('任务结论', [
+    { label: '动作', value: actionDisplayName(payload.action) },
+    { label: '结果', value: payload.ok ? '成功' : '失败' },
+    { label: '已卸载', value: formatYesNo(!summary.installed) },
+  ]);
+  printRuntimeAndRisk(payload);
+}
+
+function printServiceRunTextResult(payload) {
+  const summary = payload.summary || {};
+  const matched = payload.data?.report?.matched || {};
+  const executed = payload.data?.report?.executed || null;
+  printTextRows('任务结论', [
+    { label: '动作', value: actionDisplayName(payload.action) },
+    { label: '触发源', value: serviceTriggerLabel(summary.triggerSource) },
+    {
+      label: '执行方式',
+      value: payload.dryRun ? '预演（dry-run）' : serviceDeleteModeLabel(summary.deleteMode),
+    },
+    {
+      label: '结论',
+      value:
+        summary.status === 'skipped_cooldown'
+          ? '本次处于冷却窗口，自动服务已跳过执行。'
+          : summary.matchedTargets > 0
+            ? '自动服务已按策略处理到期缓存。'
+            : '当前未发现超过保留天数的缓存目录。',
+    },
+  ]);
+  printTextRows('处理范围', [
+    { label: '保留天数', value: `${formatCount(summary.retainDays)} 天` },
+    { label: '命中目录', value: `${formatCount(summary.matchedTargets)} 项` },
+    { label: '命中体积', value: formatBytesSafe(summary.matchedBytes) },
+    { label: '释放体积', value: formatBytesSafe(summary.reclaimedBytes) },
+    {
+      label: '服务回收站治理',
+      value: `${formatCount(summary.serviceRecycleDeletedBatches)} 批 / ${formatBytesSafe(summary.serviceRecycleDeletedBytes)}`,
+    },
+    {
+      label: '低空间紧急治理',
+      value: summary.lowSpaceTriggered
+        ? `${formatCount(summary.lowSpaceDeletedBatches)} 批 / ${formatBytesSafe(summary.lowSpaceDeletedBytes)}`
+        : '未触发',
+    },
+    {
+      label: '下一次定时',
+      value: summary.nextRunAt ? formatLocalDate(summary.nextRunAt) : '-',
+    },
+  ]);
+  printScopeNotes(payload);
+  printTopRows(
+    '分类统计（按到期范围）',
+    matched.categoryStats,
+    (row) =>
+      `${row.categoryLabel || row.categoryKey}：${formatCount(row.targetCount)} 项，${formatBytesSafe(row.sizeBytes)}`,
+    10
+  );
+  printTopRows(
+    '月份统计（按到期范围）',
+    matched.monthStats,
+    (row) =>
+      `${row.monthKey || '非月份目录'}：${formatCount(row.targetCount)} 项，${formatBytesSafe(row.sizeBytes)}`,
+    10
+  );
+  if (executed) {
+    printTopRows(
+      payload.dryRun ? '预演分布（按类别）' : '执行分布（按类别）',
+      executed.byCategory,
+      (row) => formatExecutedBreakdownLine(row, row.categoryLabel || row.categoryKey || '-'),
+      8
+    );
+  }
+  printRuntimeAndRisk(payload);
+}
+
 function printGenericTextResult(payload) {
   printTextRows('任务结论', [
     { label: '动作', value: actionDisplayName(payload.action) },
@@ -3545,6 +4081,22 @@ function printNonInteractiveTextResult(payload) {
     printSyncSkillsTextResult(payload);
     return;
   }
+  if (payload.action === MODES.SERVICE_STATUS) {
+    printServiceStatusTextResult(payload);
+    return;
+  }
+  if (payload.action === MODES.SERVICE_INSTALL) {
+    printServiceInstallTextResult(payload);
+    return;
+  }
+  if (payload.action === MODES.SERVICE_UNINSTALL) {
+    printServiceUninstallTextResult(payload);
+    return;
+  }
+  if (payload.action === MODES.SERVICE_RUN) {
+    printServiceRunTextResult(payload);
+    return;
+  }
   printGenericTextResult(payload);
 }
 
@@ -3583,6 +4135,10 @@ async function runCleanupModeNonInteractive(context, cliArgs, warnings = []) {
   const monthFilters = resolveMonthFilters(cliArgs, availableMonths);
   const includeNonMonthDirs = Boolean(cliArgs.includeNonMonthDirs);
   const dryRun = resolveDestructiveDryRun(cliArgs);
+  const deleteMode = resolveNonInteractiveDeleteMode(cliArgs, DELETE_MODES.RECYCLE);
+  if (!dryRun) {
+    assertDirectDeleteAck(deleteMode, cliArgs.directDeleteAck);
+  }
   const cleanupScopeSummary = {
     accountCount: accountResolved.selectedAccountIds.length,
     monthCount: monthFilters.length,
@@ -3590,6 +4146,8 @@ async function runCleanupModeNonInteractive(context, cliArgs, warnings = []) {
     externalRootCount: externalResolved.roots.length,
     cutoffMonth: cliArgs.cutoffMonth || null,
     explicitMonthCount: Array.isArray(cliArgs.months) ? cliArgs.months.length : 0,
+    deleteMode,
+    recoverable: deleteModeRecoverable(deleteMode),
   };
 
   const scan = await collectCleanupTargets({
@@ -3663,6 +4221,7 @@ async function runCleanupModeNonInteractive(context, cliArgs, warnings = []) {
         selectedMonths: monthFilters,
         selectedCategories: categoryKeys,
         selectedExternalRoots: externalResolved.roots,
+        deleteMode,
         engineUsed: scan.engineUsed || 'node',
         report: {
           matched: matchedReport,
@@ -3679,6 +4238,9 @@ async function runCleanupModeNonInteractive(context, cliArgs, warnings = []) {
     indexPath: config.indexPath,
     dryRun,
     allowedRoots: [config.rootDir, ...externalResolved.roots],
+    deleteMode,
+    recycleScope: 'manual',
+    triggerSource: 'cli',
   });
   return {
     ok: result.failedCount === 0,
@@ -3703,6 +4265,7 @@ async function runCleanupModeNonInteractive(context, cliArgs, warnings = []) {
       selectedCategories: categoryKeys,
       selectedExternalRoots: externalResolved.roots,
       includeNonMonthDirs,
+      deleteMode,
       engineUsed: scan.engineUsed || 'node',
       report: {
         matched: matchedReport,
@@ -3850,6 +4413,10 @@ async function runSpaceGovernanceModeNonInteractive(context, cliArgs, warnings =
   }
   const allowRecentActive = cliArgs.allowRecentActive === true;
   const dryRun = resolveDestructiveDryRun(cliArgs);
+  const deleteMode = resolveNonInteractiveDeleteMode(cliArgs, DELETE_MODES.RECYCLE);
+  if (!dryRun) {
+    assertDirectDeleteAck(deleteMode, cliArgs.directDeleteAck);
+  }
   const matchedReport = buildGovernanceTargetReport(selectedTargets, { topPathLimit: 20 });
   const scanDebugSummary = {
     action: MODES.SPACE_GOVERNANCE,
@@ -3864,6 +4431,7 @@ async function runSpaceGovernanceModeNonInteractive(context, cliArgs, warnings =
     selectedByCliTargets: selectedById.length,
     allowRecentActive,
     matchedBytes: matchedReport.totalBytes,
+    deleteMode,
   };
   const scanDebugFull = {
     selectedAccounts: accountResolved.selectedAccountIds,
@@ -3898,6 +4466,8 @@ async function runSpaceGovernanceModeNonInteractive(context, cliArgs, warnings =
         tierCount: 0,
         targetTypeCount: 0,
         rootPathCount: 0,
+        deleteMode,
+        recoverable: deleteModeRecoverable(deleteMode),
       },
       warnings,
       errors: [],
@@ -3905,6 +4475,7 @@ async function runSpaceGovernanceModeNonInteractive(context, cliArgs, warnings =
         selectedAccounts: accountResolved.selectedAccountIds,
         selectedExternalRoots: externalResolved.roots,
         selectedTargetIds: [],
+        deleteMode,
         engineUsed: scan.engineUsed || 'node',
         report: {
           matched: matchedReport,
@@ -3931,6 +4502,9 @@ async function runSpaceGovernanceModeNonInteractive(context, cliArgs, warnings =
       }
       return null;
     },
+    deleteMode,
+    recycleScope: 'manual',
+    triggerSource: 'cli',
   });
 
   return {
@@ -3944,6 +4518,8 @@ async function runSpaceGovernanceModeNonInteractive(context, cliArgs, warnings =
       tierCount: matchedReport.byTier.length,
       targetTypeCount: matchedReport.byTargetType.length,
       rootPathCount: matchedReport.byRoot.length,
+      deleteMode,
+      recoverable: deleteModeRecoverable(deleteMode),
     }),
     warnings,
     errors: result.errors.map((item) => toStructuredError(item)),
@@ -3951,6 +4527,7 @@ async function runSpaceGovernanceModeNonInteractive(context, cliArgs, warnings =
       selectedAccounts: accountResolved.selectedAccountIds,
       selectedExternalRoots: externalResolved.roots,
       selectedTargetIds: selectedTargets.map((item) => item.id),
+      deleteMode,
       engineUsed: scan.engineUsed || 'node',
       report: {
         matched: matchedReport,
@@ -3984,7 +4561,8 @@ async function runRestoreModeNonInteractive(context, cliArgs, warnings = []) {
     ? [...externalResolved.roots]
     : [config.rootDir, ...externalResolved.roots];
 
-  const batches = await listRestorableBatches(config.indexPath, { recycleRoot: config.recycleRoot });
+  const recycleRoots = [config.recycleRoot, config.serviceRecycleRoot];
+  const batches = await listRestorableBatches(config.indexPath, { recycleRoots });
   const batch = batches.find((item) => item.batchId === cliArgs.restoreBatchId);
   if (!batch) {
     throw new UsageError(`未找到可恢复批次: ${cliArgs.restoreBatchId}`);
@@ -3996,7 +4574,7 @@ async function runRestoreModeNonInteractive(context, cliArgs, warnings = []) {
     dryRun,
     profileRoot: config.rootDir,
     extraProfileRoots: externalResolved.roots,
-    recycleRoot: config.recycleRoot,
+    recycleRoots,
     governanceRoot,
     extraGovernanceRoots: governanceAllowRoots,
     onConflict: async () => ({ action: conflictStrategy, applyToAll: true }),
@@ -4056,93 +4634,512 @@ async function runRestoreModeNonInteractive(context, cliArgs, warnings = []) {
 async function runRecycleMaintainModeNonInteractive(context, cliArgs, warnings = []) {
   const { config } = context;
   const dryRun = resolveDestructiveDryRun(cliArgs);
+  const recycleScope = normalizeRecycleScope(cliArgs.recycleScope);
+  const serviceConfig = await loadServiceConfigSafe(context);
+  const selectedScopes =
+    recycleScope === 'all' ? ['manual', 'service'] : recycleScope === 'service' ? ['service'] : ['manual'];
+  const scopeResults = [];
 
-  const policy = normalizeRecycleRetention({
-    ...config.recycleRetention,
-    enabled:
-      typeof cliArgs.retentionEnabled === 'boolean'
-        ? cliArgs.retentionEnabled
-        : config.recycleRetention?.enabled,
-    maxAgeDays:
-      typeof cliArgs.retentionMaxAgeDays === 'number'
-        ? cliArgs.retentionMaxAgeDays
-        : config.recycleRetention?.maxAgeDays,
-    minKeepBatches:
-      typeof cliArgs.retentionMinKeepBatches === 'number'
-        ? cliArgs.retentionMinKeepBatches
-        : config.recycleRetention?.minKeepBatches,
-    sizeThresholdGB:
-      typeof cliArgs.retentionSizeThresholdGB === 'number'
-        ? cliArgs.retentionSizeThresholdGB
-        : config.recycleRetention?.sizeThresholdGB,
-  });
-  const result = await maintainRecycleBin({
-    indexPath: config.indexPath,
-    recycleRoot: config.recycleRoot,
-    policy,
-    dryRun,
-  });
+  for (const scopeKey of selectedScopes) {
+    const basePolicy =
+      scopeKey === 'service'
+        ? serviceRecyclePolicy(serviceConfig)
+        : normalizeRecycleRetention(config.recycleRetention);
+    const policy = normalizeRecycleRetention({
+      ...basePolicy,
+      enabled: typeof cliArgs.retentionEnabled === 'boolean' ? cliArgs.retentionEnabled : basePolicy.enabled,
+      maxAgeDays:
+        typeof cliArgs.retentionMaxAgeDays === 'number' ? cliArgs.retentionMaxAgeDays : basePolicy.maxAgeDays,
+      minKeepBatches:
+        typeof cliArgs.retentionMinKeepBatches === 'number'
+          ? cliArgs.retentionMinKeepBatches
+          : basePolicy.minKeepBatches,
+      sizeThresholdGB:
+        typeof cliArgs.retentionSizeThresholdGB === 'number'
+          ? cliArgs.retentionSizeThresholdGB
+          : basePolicy.sizeThresholdGB,
+    });
+    const recycleRoot = scopeKey === 'service' ? config.serviceRecycleRoot : config.recycleRoot;
+    const result = await maintainRecycleBin({
+      indexPath: config.indexPath,
+      recycleRoot,
+      policy,
+      dryRun,
+    });
+    scopeResults.push({
+      scope: scopeKey,
+      recycleRoot,
+      policy,
+      ...result,
+    });
+    if (!dryRun && scopeKey === 'manual') {
+      config.recycleRetention = {
+        ...policy,
+        lastRunAt: Date.now(),
+      };
+    }
+  }
 
   if (!dryRun) {
-    config.recycleRetention = {
-      ...policy,
-      lastRunAt: Date.now(),
-    };
     await saveConfig(config);
   }
+  const aggregate = mergeRecycleResults(scopeResults, dryRun);
   const scanDebugSummary = {
     action: MODES.RECYCLE_MAINTAIN,
     dryRun,
-    candidateCount: result.candidateCount,
-    selectedByAge: result.selectedByAge,
-    selectedBySize: result.selectedBySize,
-    deletedBatches: result.deletedBatches,
-    deletedBytes: result.deletedBytes,
-    failedBatches: result.failBatches,
+    candidateCount: aggregate.candidateCount,
+    selectedByAge: aggregate.selectedByAge,
+    selectedBySize: aggregate.selectedBySize,
+    deletedBatches: aggregate.deletedBatches,
+    deletedBytes: aggregate.deletedBytes,
+    failedBatches: aggregate.failedBatches,
   };
   const scanDebugFull = {
-    policy,
-    before: result.before || null,
-    after: result.after || null,
-    thresholdBytes: result.thresholdBytes,
-    overThreshold: result.overThreshold,
-    selectedCandidates: result.selectedCandidates || [],
-    operations: result.operations || [],
+    recycleScope,
+    scopeResults,
   };
+  const compatibilitySelectedCandidates = scopeResults.flatMap((item) =>
+    (item.selectedCandidates || []).map((row) => ({ scope: item.scope, ...row }))
+  );
+  const compatibilityOperations = scopeResults.flatMap((item) =>
+    (item.operations || []).map((row) => ({ scope: item.scope, ...row }))
+  );
+  const compatibilityBefore =
+    scopeResults.length === 1
+      ? scopeResults[0].before
+      : {
+          totalBatches: scopeResults.reduce(
+            (total, item) => total + Number(item.before?.totalBatches || 0),
+            0
+          ),
+          totalBytes: scopeResults.reduce((total, item) => total + Number(item.before?.totalBytes || 0), 0),
+        };
+  const compatibilityAfter =
+    scopeResults.length === 1
+      ? scopeResults[0].after
+      : {
+          totalBatches: aggregate.remainingBatches,
+          totalBytes: aggregate.remainingBytes,
+        };
 
   return {
-    ok: result.failBatches === 0,
+    ok: aggregate.failedBatches === 0,
     action: MODES.RECYCLE_MAINTAIN,
     dryRun,
     summary: {
-      status: result.status,
-      candidateCount: result.candidateCount,
-      selectedByAge: result.selectedByAge,
-      selectedBySize: result.selectedBySize,
-      deletedBatches: result.deletedBatches,
-      deletedBytes: result.deletedBytes,
-      failedBatches: result.failBatches,
-      remainingBatches: result.after?.totalBatches || 0,
-      remainingBytes: result.after?.totalBytes || 0,
+      status: aggregate.status,
+      recycleScope,
+      candidateCount: aggregate.candidateCount,
+      selectedByAge: aggregate.selectedByAge,
+      selectedBySize: aggregate.selectedBySize,
+      deletedBatches: aggregate.deletedBatches,
+      deletedBytes: aggregate.deletedBytes,
+      failedBatches: aggregate.failedBatches,
+      remainingBatches: aggregate.remainingBatches,
+      remainingBytes: aggregate.remainingBytes,
     },
     warnings,
-    errors: result.errors.map((item) => ({
-      code: item.errorType || 'E_RECYCLE_MAINTAIN_FAILED',
-      message: item.message || 'unknown_error',
-      batchId: item.batchId || null,
-      invalidReason: item.invalidReason || null,
-    })),
+    errors: scopeResults.flatMap((item) =>
+      (item.errors || []).map((row) => ({
+        code: row.errorType || 'E_RECYCLE_MAINTAIN_FAILED',
+        message: row.message || 'unknown_error',
+        batchId: row.batchId || null,
+        invalidReason: row.invalidReason || null,
+      }))
+    ),
     data: {
-      policy,
+      policy: scopeResults.length === 1 ? scopeResults[0].policy : null,
       report: {
-        before: result.before,
-        after: result.after,
-        thresholdBytes: result.thresholdBytes,
-        overThreshold: result.overThreshold,
-        selectedCandidates: result.selectedCandidates || [],
-        operations: result.operations || [],
+        before: compatibilityBefore,
+        after: compatibilityAfter,
+        selectedCandidates: compatibilitySelectedCandidates,
+        operations: compatibilityOperations,
+        scopeResults,
       },
       ...attachScanDebugData({}, cliArgs, scanDebugSummary, scanDebugFull),
+    },
+  };
+}
+
+async function runServiceStatusModeNonInteractive(context, _cliArgs, warnings = []) {
+  const status = await queryServiceStatus({
+    stateRoot: context.config.stateRoot,
+    serviceConfigPath: context.config.serviceConfigPath,
+    serviceStatePath: context.config.serviceStatePath,
+  });
+  const filesystemUsage = readFilesystemUsage(context.config.serviceRecycleRoot);
+  return {
+    ok: true,
+    action: MODES.SERVICE_STATUS,
+    dryRun: null,
+    summary: {
+      installed: Boolean(status.installed),
+      loginLoaded: Boolean(status.login.loaded),
+      scheduleLoaded: Boolean(status.schedule.loaded),
+      nextRunAt: status.nextTriggerAt,
+      deleteMode: status.config.deleteMode,
+      retainDays: status.config.retainDays,
+      triggerTimes: status.config.triggerTimes,
+      lastRunAt: status.state.lastRunAt || 0,
+      lastStatus: status.state.lastStatus || 'never',
+      lastTriggerSource: status.state.lastTriggerSource || '',
+      serviceRecycleAvailableBytes: Number(filesystemUsage?.availableBytes || 0),
+      serviceRecycleTotalBytes: Number(filesystemUsage?.totalBytes || 0),
+    },
+    warnings,
+    errors: [],
+    data: {
+      service: status,
+      filesystemUsage,
+    },
+  };
+}
+
+async function runServiceInstallModeNonInteractive(context, cliArgs, warnings = []) {
+  const existingConfig = await loadServiceConfigSafe(context);
+  const nextConfig = resolveServiceConfigFromCli(context, cliArgs, existingConfig);
+  await saveServiceConfig(context.config.serviceConfigPath, nextConfig);
+  if (!(await pathExists(context.config.serviceStatePath))) {
+    await saveServiceState(context.config.serviceStatePath, defaultServiceState());
+  }
+  const installResult = await installServiceLaunchAgents({
+    nodePath: process.execPath,
+    cliPath: CLI_FILE_PATH,
+    stateRoot: context.config.stateRoot,
+    triggerTimes: nextConfig.triggerTimes,
+  });
+  const status = await queryServiceStatus({
+    stateRoot: context.config.stateRoot,
+    serviceConfigPath: context.config.serviceConfigPath,
+    serviceStatePath: context.config.serviceStatePath,
+  });
+  return {
+    ok: installResult.ok,
+    action: MODES.SERVICE_INSTALL,
+    dryRun: null,
+    summary: {
+      installed: Boolean(status.installed),
+      loginLoaded: Boolean(status.login.loaded),
+      scheduleLoaded: Boolean(status.schedule.loaded),
+      deleteMode: nextConfig.deleteMode,
+      retainDays: nextConfig.retainDays,
+      triggerTimes: nextConfig.triggerTimes,
+      nextRunAt: status.nextTriggerAt,
+    },
+    warnings,
+    errors: installResult.ok
+      ? []
+      : [
+          {
+            code: 'E_SERVICE_INSTALL_FAILED',
+            message:
+              installResult.loginLoad.stderr || installResult.scheduleLoad.stderr || 'service_install_failed',
+          },
+        ],
+    data: {
+      service: status,
+    },
+  };
+}
+
+async function runServiceUninstallModeNonInteractive(context, _cliArgs, warnings = []) {
+  const currentConfig = await loadServiceConfigSafe(context);
+  await uninstallServiceLaunchAgents({});
+  await saveServiceConfig(context.config.serviceConfigPath, {
+    ...currentConfig,
+    enabled: false,
+    updatedAt: Date.now(),
+  });
+  const status = await queryServiceStatus({
+    stateRoot: context.config.stateRoot,
+    serviceConfigPath: context.config.serviceConfigPath,
+    serviceStatePath: context.config.serviceStatePath,
+  });
+  return {
+    ok: true,
+    action: MODES.SERVICE_UNINSTALL,
+    dryRun: null,
+    summary: {
+      installed: Boolean(status.installed),
+      loginLoaded: Boolean(status.login.loaded),
+      scheduleLoaded: Boolean(status.schedule.loaded),
+    },
+    warnings,
+    errors: [],
+    data: {
+      service: status,
+    },
+  };
+}
+
+async function runServiceRunModeNonInteractive(context, cliArgs, warnings = []) {
+  const { config, aliases, nativeCorePath } = context;
+  const serviceConfig = await loadServiceConfigSafe(context);
+  const serviceState = await loadServiceStateSafe(context);
+  if (!serviceConfig.enabled) {
+    throw new UsageError('自动服务未安装或已停用，请先执行 --service-install。');
+  }
+
+  const dryRun = typeof cliArgs.dryRun === 'boolean' ? cliArgs.dryRun : false;
+  const triggerSource =
+    typeof cliArgs.serviceTriggerSource === 'string' && cliArgs.serviceTriggerSource.trim()
+      ? cliArgs.serviceTriggerSource.trim()
+      : SERVICE_MANUAL_TRIGGER;
+  const cooldownMs = Math.max(1, Number(serviceConfig.cooldownMinutes || 15)) * 60 * 1000;
+  const now = Date.now();
+  if (
+    !dryRun &&
+    triggerSource !== SERVICE_MANUAL_TRIGGER &&
+    Number(serviceState.lastRunAt || 0) > 0 &&
+    now - Number(serviceState.lastRunAt || 0) < cooldownMs
+  ) {
+    return {
+      ok: true,
+      action: MODES.SERVICE_RUN,
+      dryRun,
+      summary: {
+        status: 'skipped_cooldown',
+        triggerSource,
+        deleteMode: serviceConfig.deleteMode,
+        cooldownMinutes: serviceConfig.cooldownMinutes,
+        matchedTargets: 0,
+        reclaimedBytes: 0,
+        deletedBatches: 0,
+        deletedBytes: 0,
+        lowSpaceTriggered: false,
+        lowSpaceDeletedBytes: 0,
+      },
+      warnings: uniqueStrings([...warnings, '处于冷却窗口，已跳过本次自动服务执行。']),
+      errors: [],
+      data: {
+        serviceConfig,
+        serviceState,
+      },
+    };
+  }
+
+  const accounts = await discoverAccounts(config.rootDir, aliases);
+  const accountResolved = resolveAccountSelection(accounts, serviceConfig.accounts);
+  warnings.push(...accountResolved.warnings);
+
+  const detectedExternalStorage = await detectExternalStorageRoots({
+    configuredRoots: config.externalStorageRoots,
+    profilesRoot: config.rootDir,
+    autoDetect: config.externalStorageAutoDetect !== false,
+    returnMeta: true,
+  });
+  const externalResolved = resolveExternalStorageForAction(
+    detectedExternalStorage,
+    { externalRootsSource: serviceConfig.externalRootsSource },
+    {
+      defaultSources: ['all'],
+    }
+  );
+  warnings.push(...externalResolved.warnings);
+
+  const categoryKeys =
+    Array.isArray(serviceConfig.categories) && serviceConfig.categories.length > 0
+      ? resolveCategoryKeys(serviceConfig.categories, MODES.CLEANUP_MONTHLY, config)
+      : categoryDefaultSelection(config);
+
+  const scan = await collectCleanupTargets({
+    accounts,
+    selectedAccountIds: accountResolved.selectedAccountIds,
+    categoryKeys,
+    monthFilters: [],
+    includeNonMonthDirs: Boolean(serviceConfig.includeNonMonthDirs),
+    externalStorageRoots: externalResolved.roots,
+    nativeCorePath,
+  });
+  context.lastRunEngineUsed = scan.engineUsed;
+  if (scan.nativeFallbackReason) {
+    warnings.push(scan.nativeFallbackReason);
+  }
+
+  const expiredTargets = filterServiceExpiredTargets(scan.targets, serviceConfig, now);
+  const matchedReport = buildCleanupTargetReport(expiredTargets, { topPathLimit: 20 });
+  const deleteMode = normalizeDeleteMode(serviceConfig.deleteMode, DELETE_MODES.SERVICE_RECYCLE);
+  const cleanupResult =
+    expiredTargets.length > 0
+      ? await executeCleanup({
+          targets: expiredTargets,
+          recycleRoot: config.serviceRecycleRoot,
+          indexPath: config.indexPath,
+          dryRun,
+          allowedRoots: [config.rootDir, ...externalResolved.roots],
+          deleteMode,
+          recycleScope: 'service',
+          triggerSource,
+        })
+      : {
+          batchId: null,
+          dryRun,
+          deleteMode,
+          recycleScope: deleteModeRecoverable(deleteMode) ? 'service' : null,
+          triggerSource,
+          recoverable: deleteModeRecoverable(deleteMode),
+          successCount: 0,
+          skippedCount: 0,
+          failedCount: 0,
+          reclaimedBytes: 0,
+          errors: [],
+          breakdown: null,
+        };
+
+  const recyclePolicy = serviceRecyclePolicy(serviceConfig);
+  const recycleMaintainResult = await maintainRecycleBin({
+    indexPath: config.indexPath,
+    recycleRoot: config.serviceRecycleRoot,
+    policy: recyclePolicy,
+    dryRun,
+  });
+
+  const filesystemUsage = readFilesystemUsage(config.serviceRecycleRoot);
+  const lowSpaceThresholdBytes = filesystemUsage
+    ? filesystemLowSpaceTargetBytes(filesystemUsage, serviceConfig)
+    : 0;
+  let lowSpaceTriggered = Boolean(
+    filesystemUsage && Number(filesystemUsage.availableBytes || 0) < lowSpaceThresholdBytes
+  );
+  let lowSpaceDeletedBytes = 0;
+  let lowSpaceDeletedBatches = 0;
+  let emergencyResult = null;
+
+  if (lowSpaceTriggered) {
+    const beforeEmergency = await collectRecycleStats({
+      indexPath: config.indexPath,
+      recycleRoot: config.serviceRecycleRoot,
+      createIfMissing: !dryRun,
+    });
+    const ordered = [...beforeEmergency.batches].sort((a, b) => a.firstTime - b.firstTime);
+    const targetAvailableBytes = lowSpaceThresholdBytes + 2 * 1024 * 1024 * 1024;
+    let projectedAvailableBytes = Number(filesystemUsage?.availableBytes || 0);
+    const emergencyCandidates = [];
+    for (const batch of ordered) {
+      if (projectedAvailableBytes >= targetAvailableBytes) {
+        break;
+      }
+      emergencyCandidates.push({
+        ...batch,
+        selectedBy: 'low_space',
+      });
+      projectedAvailableBytes += Number(batch.totalBytes || 0);
+    }
+
+    if (emergencyCandidates.length > 0) {
+      emergencyResult = await deleteRecycleCandidates({
+        recycleRoot: config.serviceRecycleRoot,
+        candidates: emergencyCandidates,
+        dryRun,
+      });
+      lowSpaceDeletedBytes = Number(emergencyResult.deletedBytes || 0);
+      lowSpaceDeletedBatches = Number(emergencyResult.deletedBatches || 0);
+      const afterEmergency = dryRun
+        ? beforeEmergency
+        : await collectRecycleStats({
+            indexPath: config.indexPath,
+            recycleRoot: config.serviceRecycleRoot,
+            createIfMissing: true,
+          });
+      await appendJsonLine(config.indexPath, {
+        action: 'recycle_maintain',
+        time: Date.now(),
+        status:
+          Number(emergencyResult.failBatches || 0) > 0 ? 'partial_failed' : dryRun ? 'dry_run' : 'success',
+        dryRun: Boolean(dryRun),
+        recycle_root: config.serviceRecycleRoot,
+        trigger_source: SERVICE_LOW_SPACE_TRIGGER,
+        policy: recyclePolicy,
+        threshold_bytes: lowSpaceThresholdBytes,
+        before_batches: beforeEmergency.totalBatches,
+        before_bytes: beforeEmergency.totalBytes,
+        deleted_batches: emergencyResult.deletedBatches,
+        deleted_bytes: emergencyResult.deletedBytes,
+        failed_batches: emergencyResult.failBatches,
+        remaining_batches: afterEmergency.totalBatches,
+        remaining_bytes: afterEmergency.totalBytes,
+      });
+    }
+  }
+
+  const nextRunAt = computeNextTriggerAt(serviceConfig.triggerTimes, now);
+  const nextState = {
+    ...serviceState,
+    lastRunAt: now,
+    lastCompletedAt: Date.now(),
+    lastStatus:
+      cleanupResult.failedCount > 0 ||
+      recycleMaintainResult.failBatches > 0 ||
+      Number(emergencyResult?.failBatches || 0) > 0
+        ? 'partial_failed'
+        : 'success',
+    lastTriggerSource: triggerSource,
+    lastMessage: expiredTargets.length > 0 ? '服务清理已执行。' : '本次无到期缓存目录。',
+    lastDeletedMode: deleteMode,
+    lastDeletedTargets: Number(cleanupResult.successCount || 0),
+    lastDeletedBytes: Number(cleanupResult.reclaimedBytes || 0),
+    lastServiceRecycleDeletedBytes: Number(recycleMaintainResult.deletedBytes || 0),
+    lastLowSpaceTriggered: lowSpaceTriggered,
+    lastLowSpaceDeletedBytes: lowSpaceDeletedBytes,
+    lastWarnings: uniqueStrings(warnings),
+  };
+  if (!dryRun) {
+    await saveServiceState(config.serviceStatePath, nextState);
+  }
+
+  return {
+    ok:
+      cleanupResult.failedCount === 0 &&
+      recycleMaintainResult.failBatches === 0 &&
+      Number(emergencyResult?.failBatches || 0) === 0,
+    action: MODES.SERVICE_RUN,
+    dryRun,
+    summary: {
+      status: nextState.lastStatus,
+      triggerSource,
+      deleteMode,
+      recoverable: deleteModeRecoverable(deleteMode),
+      retainDays: serviceConfig.retainDays,
+      matchedTargets: expiredTargets.length,
+      matchedBytes: matchedReport.totalBytes,
+      reclaimedBytes: cleanupResult.reclaimedBytes,
+      successCount: cleanupResult.successCount,
+      skippedCount: cleanupResult.skippedCount,
+      failedCount: cleanupResult.failedCount,
+      batchId: cleanupResult.batchId,
+      serviceRecycleDeletedBatches: recycleMaintainResult.deletedBatches,
+      serviceRecycleDeletedBytes: recycleMaintainResult.deletedBytes,
+      lowSpaceTriggered,
+      lowSpaceDeletedBatches,
+      lowSpaceDeletedBytes,
+      nextRunAt,
+    },
+    warnings,
+    errors: [
+      ...cleanupResult.errors.map((item) => toStructuredError(item)),
+      ...(recycleMaintainResult.errors || []).map((item) => ({
+        code: item.errorType || 'E_SERVICE_RECYCLE_MAINTAIN_FAILED',
+        message: item.message || 'unknown_error',
+        batchId: item.batchId || null,
+      })),
+      ...((emergencyResult?.errors || []).map((item) => ({
+        code: item.errorType || 'E_SERVICE_LOW_SPACE_FAILED',
+        message: item.message || 'unknown_error',
+        batchId: item.batchId || null,
+      })) || []),
+    ],
+    data: {
+      selectedAccounts: accountResolved.selectedAccountIds,
+      selectedCategories: categoryKeys,
+      selectedExternalRoots: externalResolved.roots,
+      serviceConfig,
+      filesystemUsage,
+      report: {
+        matched: matchedReport,
+        executed: cleanupResult.breakdown || null,
+        serviceRecycle: recycleMaintainResult,
+        emergencyRecycle: emergencyResult,
+      },
     },
   };
 }
@@ -4676,7 +5673,15 @@ async function maybeRunStartupUpdateCheck(context, cliArgs, action, interactiveM
   if (!selfUpdate.enabled) {
     return null;
   }
-  if (action === MODES.CHECK_UPDATE || action === MODES.UPGRADE || action === MODES.SYNC_SKILLS) {
+  if (
+    action === MODES.CHECK_UPDATE ||
+    action === MODES.UPGRADE ||
+    action === MODES.SYNC_SKILLS ||
+    action === MODES.SERVICE_INSTALL ||
+    action === MODES.SERVICE_UNINSTALL ||
+    action === MODES.SERVICE_STATUS ||
+    action === MODES.SERVICE_RUN
+  ) {
     return null;
   }
   if (!interactiveMode && action === MODES.DOCTOR) {
@@ -4846,6 +5851,18 @@ async function runNonInteractiveAction(action, context, cliArgs) {
   }
   if (action === MODES.SYNC_SKILLS) {
     return runSyncSkillsModeNonInteractive(context, cliArgs, warnings);
+  }
+  if (action === MODES.SERVICE_INSTALL) {
+    return runServiceInstallModeNonInteractive(context, cliArgs, warnings);
+  }
+  if (action === MODES.SERVICE_UNINSTALL) {
+    return runServiceUninstallModeNonInteractive(context, cliArgs, warnings);
+  }
+  if (action === MODES.SERVICE_STATUS) {
+    return runServiceStatusModeNonInteractive(context, cliArgs, warnings);
+  }
+  if (action === MODES.SERVICE_RUN) {
+    return runServiceRunModeNonInteractive(context, cliArgs, warnings);
   }
   throw new UsageError(`不支持的无交互动作: ${action}`);
 }
@@ -5129,8 +6146,14 @@ async function runNonInteractiveTask(action, context, cliArgs) {
     return runNonInteractiveAction(action, context, cliArgs);
   }
 
-  if (action === MODES.SYNC_SKILLS) {
-    throw new UsageError('动作 同步 Agent Skills 不支持 --run-task，请直接使用 --dry-run true|false。');
+  if (
+    action === MODES.SYNC_SKILLS ||
+    action === MODES.SERVICE_INSTALL ||
+    action === MODES.SERVICE_UNINSTALL ||
+    action === MODES.SERVICE_STATUS ||
+    action === MODES.SERVICE_RUN
+  ) {
+    throw new UsageError(`动作 ${actionDisplayName(action)} 不支持 --run-task，请直接使用对应参数。`);
   }
 
   if (!isDestructiveAction(action) && runTaskMode !== RUN_TASK_PREVIEW) {
@@ -5216,10 +6239,11 @@ async function runCleanupMode(context) {
   let selectedMonths = [];
   let selectedCategories = [];
   let includeNonMonthDirs = false;
-  let dryRun = Boolean(config.dryRunDefault);
+  let deleteMode = DELETE_MODES.DIRECT;
+  let dryRun = false;
 
   let step = 0;
-  while (step < 6) {
+  while (step < 7) {
     if (step === 0) {
       const selected = await chooseAccounts(accounts, '年月清理', {
         allowBack: false,
@@ -5315,22 +6339,50 @@ async function runCleanupMode(context) {
       continue;
     }
 
+    if (step === 5) {
+      printSection('删除方式');
+      printGuideBlock('步骤 6/7 · 删除策略', [
+        { label: '默认', value: '直接删除，立即释放空间，不可恢复' },
+        { label: '回收区', value: '可改为“移动到回收区”，便于后续恢复' },
+        { label: '回退', value: '可选“← 返回上一步”' },
+      ]);
+      const selected = await askSelect({
+        message: '请选择删除方式',
+        default: DELETE_MODES.DIRECT,
+        choices: [
+          { name: '直接删除（默认，不可恢复）', value: DELETE_MODES.DIRECT },
+          { name: '移动到回收区（可恢复）', value: DELETE_MODES.RECYCLE },
+          { name: '← 返回上一步', value: PROMPT_BACK },
+        ],
+      });
+      if (isPromptBack(selected)) {
+        step = Math.max(0, step - 1);
+        continue;
+      }
+      deleteMode = normalizeDeleteMode(selected, DELETE_MODES.DIRECT);
+      step = 6;
+      continue;
+    }
+
     printSection('执行方式');
-    printGuideBlock('步骤 6/6 · 预览与执行', [
+    printGuideBlock('步骤 7/7 · 预览与执行', [
       { label: 'dry-run', value: '只预览命中结果，不执行删除' },
-      { label: '真实删', value: '移动到程序回收区，可按批次恢复' },
+      {
+        label: '真实删',
+        value: deleteMode === DELETE_MODES.DIRECT ? '直接删除，不可恢复' : '移动到程序回收区，可按批次恢复',
+      },
       { label: '回退', value: '可选“← 返回上一步”' },
     ]);
     const selected = await askConfirmWithBack({
       message: '先 dry-run 预览（不执行删除）？',
-      default: Boolean(config.dryRunDefault),
+      default: deleteMode === DELETE_MODES.DIRECT ? false : Boolean(config.dryRunDefault),
     });
     if (isPromptBack(selected)) {
       step = Math.max(0, step - 1);
       continue;
     }
     dryRun = selected;
-    step = 6;
+    step = 7;
   }
 
   printSection('向导配置确认');
@@ -5346,6 +6398,7 @@ async function runCleanupMode(context) {
       label: '类型',
       value: selectedCategoryText || '-',
     },
+    { label: '删除方式', value: deleteModeLabel(deleteMode) },
     {
       label: '文件存储',
       value:
@@ -5354,7 +6407,7 @@ async function runCleanupMode(context) {
           : '未纳入额外文件存储目录',
     },
     { label: '非月份', value: includeNonMonthDirs ? '包含' : '不包含' },
-    { label: '模式', value: dryRun ? 'dry-run（预览）' : '真实删除（回收区）' },
+    { label: '模式', value: dryRun ? 'dry-run（预览）' : deleteModeLabel(deleteMode) },
   ]);
 
   printSection('扫描目录并计算大小');
@@ -5410,7 +6463,7 @@ async function runCleanupMode(context) {
   let executeDryRun = dryRun;
   if (dryRun) {
     const continueDelete = await askConfirm({
-      message: '当前为 dry-run 预览。是否继续执行真实删除（移动到程序回收区）？',
+      message: `当前为 dry-run 预览。是否继续执行真实删除（${deleteModeLabel(deleteMode)}）？`,
       default: false,
     });
     if (!continueDelete) {
@@ -5420,30 +6473,37 @@ async function runCleanupMode(context) {
     executeDryRun = false;
   }
 
+  const confirmToken = deleteMode === DELETE_MODES.DIRECT ? 'DIRECT_DELETE' : 'DELETE';
   const confirmText = await askInput({
-    message: `将删除 ${targets.length} 项并移动到回收区，请输入 DELETE 确认`,
-    validate: (value) => (value === 'DELETE' ? true : '请输入大写 DELETE'),
+    message:
+      deleteMode === DELETE_MODES.DIRECT
+        ? `将直接删除 ${targets.length} 项且无法恢复，请输入 ${confirmToken} 确认`
+        : `将删除 ${targets.length} 项并移动到回收区，请输入 ${confirmToken} 确认`,
+    validate: (value) => (value === confirmToken ? true : `请输入大写 ${confirmToken}`),
   });
 
-  if (confirmText !== 'DELETE') {
+  if (confirmText !== confirmToken) {
     console.log('未确认，已取消。');
     return;
   }
 
-  printSection('开始删除（移动到回收区）');
+  printSection(deleteMode === DELETE_MODES.DIRECT ? '开始直接删除' : '开始删除（移动到回收区）');
   const result = await executeCleanup({
     targets,
     recycleRoot: config.recycleRoot,
     indexPath: config.indexPath,
     dryRun: executeDryRun,
     allowedRoots: [config.rootDir, ...selectedExternalStorageRoots],
+    deleteMode,
+    recycleScope: 'manual',
+    triggerSource: 'interactive',
     onProgress: (current, total) => printProgress('移动目录', current, total),
   });
 
   printSection('删除结果');
   printGuideBlock('结果摘要', [
     { label: '批次', value: result.batchId },
-    { label: '模式', value: executeDryRun ? 'dry-run（预览）' : '真实删除（回收区）' },
+    { label: '模式', value: executeDryRun ? 'dry-run（预览）' : deleteModeLabel(deleteMode) },
     { label: '成功', value: `${result.successCount} 项` },
     { label: '跳过', value: `${result.skippedCount} 项` },
     { label: '失败', value: `${result.failedCount} 项` },
@@ -5665,6 +6725,7 @@ async function runSpaceGovernanceMode(context) {
 
   const recentTargets = selectedTargets.filter((item) => item.recentlyActive);
   let allowRecentActive = false;
+  let deleteMode = DELETE_MODES.DIRECT;
   if (recentTargets.length > 0) {
     allowRecentActive = await askConfirm({
       message: `有 ${recentTargets.length} 项在最近 ${scan.suggestIdleDays} 天内仍有写入，默认会跳过。是否允许继续处理这些活跃目录？`,
@@ -5677,14 +6738,22 @@ async function runSpaceGovernanceMode(context) {
   await saveConfig(config);
 
   printSection('执行确认');
-  printGuideBlock('治理步骤 5/5 · 执行策略', [
+  printGuideBlock('治理步骤 5/6 · 执行策略', [
     { label: '目标', value: `已选 ${selectedTargets.length} 项（谨慎层 ${cautionTargets.length} 项）` },
-    { label: '模式', value: '可先 dry-run，再决定是否真实治理' },
+    { label: '模式', value: '默认直删，可先预演，也可切回回收区模式' },
     { label: '保护', value: '真实治理包含冷静期 + CLEAN 确认词' },
   ]);
+  deleteMode = await askSelect({
+    message: '请选择治理删除方式',
+    default: DELETE_MODES.DIRECT,
+    choices: [
+      { name: '直接删除（默认，不可恢复）', value: DELETE_MODES.DIRECT },
+      { name: '移动到回收区（可恢复）', value: DELETE_MODES.RECYCLE },
+    ],
+  });
   const dryRun = await askConfirm({
     message: '先 dry-run 预览（不执行删除）？',
-    default: Boolean(config.dryRunDefault),
+    default: deleteMode === DELETE_MODES.DIRECT ? false : Boolean(config.dryRunDefault),
   });
 
   if (!dryRun) {
@@ -5705,16 +6774,29 @@ async function runSpaceGovernanceMode(context) {
     process.stdout.write('\n');
 
     const confirmText = await askInput({
-      message: '请输入 CLEAN 确认执行治理删除',
-      validate: (value) => (value === 'CLEAN' ? true : '请输入大写 CLEAN'),
+      message:
+        deleteMode === DELETE_MODES.DIRECT
+          ? '请输入 DIRECT_DELETE 确认执行直接治理删除'
+          : '请输入 CLEAN 确认执行治理删除',
+      validate: (value) =>
+        deleteMode === DELETE_MODES.DIRECT
+          ? value === 'DIRECT_DELETE'
+            ? true
+            : '请输入大写 DIRECT_DELETE'
+          : value === 'CLEAN'
+            ? true
+            : '请输入大写 CLEAN',
     });
-    if (confirmText !== 'CLEAN') {
+    if (
+      (deleteMode === DELETE_MODES.DIRECT && confirmText !== 'DIRECT_DELETE') ||
+      (deleteMode !== DELETE_MODES.DIRECT && confirmText !== 'CLEAN')
+    ) {
       console.log('未确认，已取消。');
       return;
     }
   }
 
-  printSection('开始全量空间治理');
+  printSection(deleteMode === DELETE_MODES.DIRECT ? '开始全量空间治理（直接删除）' : '开始全量空间治理');
   const governanceAllowedRoots = scan.dataRoot
     ? [scan.dataRoot, ...selectedExternalStorageRoots]
     : [config.rootDir, ...selectedExternalStorageRoots];
@@ -5734,13 +6816,16 @@ async function runSpaceGovernanceMode(context) {
       }
       return null;
     },
+    deleteMode,
+    recycleScope: 'manual',
+    triggerSource: 'interactive',
     onProgress: (current, total) => printProgress('治理目录', current, total),
   });
 
   printSection('治理结果');
   printGuideBlock('结果摘要', [
     { label: '批次', value: result.batchId },
-    { label: '模式', value: dryRun ? 'dry-run（预览）' : '真实治理（回收区）' },
+    { label: '模式', value: dryRun ? 'dry-run（预览）' : deleteModeLabel(deleteMode) },
     { label: '成功', value: `${result.successCount} 项` },
     { label: '跳过', value: `${result.skippedCount} 项` },
     { label: '失败', value: `${result.failedCount} 项` },
@@ -5771,6 +6856,7 @@ function batchTableRows(batches) {
   return batches.map((batch, idx) => [
     String(idx + 1),
     batch.batchId,
+    batch.recycleScope === 'service' ? '服务回收站' : '手动回收站',
     formatLocalDate(batch.firstTime),
     String(batch.entries.length),
     formatBytes(batch.totalBytes),
@@ -5822,7 +6908,8 @@ async function runRestoreMode(context) {
     ? [...externalStorageRoots]
     : [config.rootDir, ...externalStorageRoots];
 
-  const batches = await listRestorableBatches(config.indexPath, { recycleRoot: config.recycleRoot });
+  const recycleRoots = [config.recycleRoot, config.serviceRecycleRoot];
+  const batches = await listRestorableBatches(config.indexPath, { recycleRoots });
   if (batches.length === 0) {
     console.log('\n暂无可恢复批次。');
     return;
@@ -5834,7 +6921,7 @@ async function runRestoreMode(context) {
     { label: '建议', value: '优先恢复最近批次，便于问题回滚' },
     { label: '确认', value: 'Enter 选中后进入恢复确认' },
   ]);
-  console.log(renderTable(['序号', '批次ID', '时间', '目录数', '大小'], batchTableRows(batches)));
+  console.log(renderTable(['序号', '批次ID', '来源', '时间', '目录数', '大小'], batchTableRows(batches)));
 
   const batchId = await askSelect({
     message: '请选择要恢复的批次',
@@ -5869,6 +6956,7 @@ async function runRestoreMode(context) {
         ? `Data 根目录 + 文件存储目录(${externalStorageRoots.length}项)`
         : `Profile 根目录 + 文件存储目录(${externalStorageRoots.length}项)`,
     },
+    { label: '来源', value: batch.recycleScope === 'service' ? '服务回收站' : '手动回收站' },
     { label: '冲突', value: '若目标已存在，将询问 跳过/覆盖/重命名' },
     { label: '安全', value: '路径越界会自动拦截并记审计状态' },
   ]);
@@ -5901,7 +6989,7 @@ async function runRestoreMode(context) {
       dryRun,
       profileRoot: config.rootDir,
       extraProfileRoots: externalStorageRoots,
-      recycleRoot: config.recycleRoot,
+      recycleRoots,
       governanceRoot,
       extraGovernanceRoots: governanceAllowRoots,
     });
@@ -6062,6 +7150,21 @@ async function runCheckUpdateMode(context, cliArgs = {}) {
   }
 }
 
+function buildTextPayloadFromResult(context, result) {
+  return {
+    ...result,
+    meta: {
+      app: APP_NAME,
+      package: PACKAGE_NAME,
+      version: context.appMeta?.version || '0.0.0',
+      timestamp: Date.now(),
+      durationMs: 0,
+      output: OUTPUT_TEXT,
+      engine: context.lastRunEngineUsed || (context.nativeCorePath ? 'zig_ready' : 'node'),
+    },
+  };
+}
+
 async function runSyncSkillsMode(context, cliArgs = {}) {
   const method =
     typeof cliArgs.skillSyncMethod === 'string' && cliArgs.skillSyncMethod.trim()
@@ -6117,6 +7220,126 @@ async function runSyncSkillsMode(context, cliArgs = {}) {
     },
   };
   printSyncSkillsTextResult(payload);
+}
+
+async function runServiceMode(context) {
+  while (true) {
+    const status = await runServiceStatusModeNonInteractive(context, {}, []);
+    printServiceStatusTextResult(buildTextPayloadFromResult(context, status));
+
+    const choice = await askSelect({
+      message: '自动服务：请选择操作',
+      default: 'install',
+      choices: [
+        { name: '安装/更新自动服务', value: 'install' },
+        { name: '立即执行一次服务任务', value: 'run' },
+        { name: '查看自动服务状态', value: 'status' },
+        { name: '卸载自动服务', value: 'uninstall' },
+        { name: '返回主菜单', value: 'back' },
+      ],
+    });
+
+    if (choice === 'back') {
+      return;
+    }
+    if (choice === 'status') {
+      continue;
+    }
+
+    if (choice === 'uninstall') {
+      const sure = await askConfirm({
+        message: '确认卸载自动服务？',
+        default: false,
+      });
+      if (!sure) {
+        console.log('已取消卸载。');
+        continue;
+      }
+      const result = await runServiceUninstallModeNonInteractive(context, {}, []);
+      printServiceUninstallTextResult(buildTextPayloadFromResult(context, result));
+      continue;
+    }
+
+    if (choice === 'run') {
+      const result = await runServiceRunModeNonInteractive(
+        context,
+        {
+          dryRun: false,
+          serviceTriggerSource: SERVICE_MANUAL_TRIGGER,
+        },
+        []
+      );
+      printServiceRunTextResult(buildTextPayloadFromResult(context, result));
+      continue;
+    }
+
+    const accounts = await discoverAccounts(context.config.rootDir, context.aliases);
+    const selectedAccountIds = await chooseAccounts(accounts, '自动服务配置', {
+      guideTitle: '服务配置步骤 1/6 · 账号范围',
+      guideRows: [
+        { label: '默认', value: '建议选择常用账号或直接全选' },
+        { label: '执行', value: '服务会按计划自动处理这些账号的到期缓存' },
+      ],
+    });
+    const selectedCategories = await askCheckbox({
+      message: '服务配置步骤 2/6 · 选择缓存类型',
+      required: true,
+      choices: categoryChoices(context.config.defaultCategories),
+      validate: (values) => (values.length > 0 ? true : '至少选择一个类型'),
+    });
+    const includeNonMonthDirs = await askConfirm({
+      message: '服务配置步骤 3/6 · 是否纳入非月份目录？',
+      default: false,
+    });
+    const retainDays = await askInput({
+      message: '服务配置步骤 4/6 · 请输入源缓存保留天数',
+      default: '180',
+      validate: (value) => {
+        const num = Number.parseInt(value, 10);
+        return Number.isFinite(num) && num >= 1 ? true : '请输入 >= 1 的整数';
+      },
+    });
+    const serviceDeleteMode = await askSelect({
+      message: '服务配置步骤 5/6 · 请选择自动服务删除方式',
+      default: DELETE_MODES.SERVICE_RECYCLE,
+      choices: [
+        { name: '移动到服务回收站（默认）', value: DELETE_MODES.SERVICE_RECYCLE },
+        { name: '服务直接删除', value: DELETE_MODES.DIRECT },
+      ],
+    });
+    const triggerTimes = await askInput({
+      message: '服务配置步骤 6/6 · 触发时间（HH:MM,HH:MM,HH:MM）',
+      default: '09:30,13:30,18:30',
+    });
+
+    let serviceDirectDeleteAck = '';
+    if (serviceDeleteMode === DELETE_MODES.DIRECT) {
+      serviceDirectDeleteAck = await askInput({
+        message: `服务直接删除不可恢复，请输入 ${SERVICE_DIRECT_DELETE_ACK} 确认`,
+        validate: (value) =>
+          value === SERVICE_DIRECT_DELETE_ACK ? true : `请输入大写 ${SERVICE_DIRECT_DELETE_ACK}`,
+      });
+    }
+
+    const result = await runServiceInstallModeNonInteractive(
+      context,
+      {
+        accounts: selectedAccountIds,
+        categories: selectedCategories,
+        includeNonMonthDirs,
+        externalRootsSource: ['all'],
+        serviceRetainDays: Number.parseInt(retainDays, 10),
+        serviceDeleteMode,
+        serviceDirectDeleteAck,
+        serviceTriggerTimes: triggerTimes
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean),
+      },
+      []
+    );
+    printServiceInstallTextResult(buildTextPayloadFromResult(context, result));
+  }
 }
 
 async function runRecycleMaintainMode(context, options = {}) {
@@ -6487,6 +7710,30 @@ async function runMode(mode, context, options = {}) {
     await runSyncSkillsMode(context, options.cliArgs || {});
     return;
   }
+  if (mode === MODES.SERVICE) {
+    await runServiceMode(context);
+    return;
+  }
+  if (mode === MODES.SERVICE_STATUS) {
+    const result = await runServiceStatusModeNonInteractive(context, options.cliArgs || {}, []);
+    printServiceStatusTextResult(buildTextPayloadFromResult(context, result));
+    return;
+  }
+  if (mode === MODES.SERVICE_INSTALL) {
+    const result = await runServiceInstallModeNonInteractive(context, options.cliArgs || {}, []);
+    printServiceInstallTextResult(buildTextPayloadFromResult(context, result));
+    return;
+  }
+  if (mode === MODES.SERVICE_UNINSTALL) {
+    const result = await runServiceUninstallModeNonInteractive(context, options.cliArgs || {}, []);
+    printServiceUninstallTextResult(buildTextPayloadFromResult(context, result));
+    return;
+  }
+  if (mode === MODES.SERVICE_RUN) {
+    const result = await runServiceRunModeNonInteractive(context, options.cliArgs || {}, []);
+    printServiceRunTextResult(buildTextPayloadFromResult(context, result));
+    return;
+  }
   if (mode === MODES.RECYCLE_MAINTAIN) {
     await runRecycleMaintainMode(context, options);
     return;
@@ -6580,6 +7827,7 @@ async function runInteractiveLoop(context) {
         { name: '全量空间治理（分级，安全优先）', value: MODES.SPACE_GOVERNANCE },
         { name: '恢复已删除批次', value: MODES.RESTORE },
         { name: '回收区治理（保留策略）', value: MODES.RECYCLE_MAINTAIN },
+        { name: '自动服务', value: MODES.SERVICE },
         { name: '系统自检（doctor）', value: MODES.DOCTOR },
         { name: '检查更新与升级', value: MODES.CHECK_UPDATE },
         { name: '同步 Agent Skills', value: MODES.SYNC_SKILLS },

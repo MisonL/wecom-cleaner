@@ -109,7 +109,18 @@ export const MODES = {
   CHECK_UPDATE: 'check_update',
   UPGRADE: 'upgrade',
   SYNC_SKILLS: 'sync_skills',
+  SERVICE: 'service',
+  SERVICE_INSTALL: 'service_install',
+  SERVICE_UNINSTALL: 'service_uninstall',
+  SERVICE_STATUS: 'service_status',
+  SERVICE_RUN: 'service_run',
   SETTINGS: 'settings',
+};
+
+export const DELETE_MODES = {
+  DIRECT: 'direct',
+  RECYCLE: 'recycle',
+  SERVICE_RECYCLE: 'service_recycle',
 };
 
 export const SPACE_GOVERNANCE_TIERS = {

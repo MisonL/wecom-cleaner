@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { DEFAULT_PROFILE_ROOT, DEFAULT_STATE_ROOT } from './constants.js';
+import { DEFAULT_PROFILE_ROOT, DEFAULT_STATE_ROOT, DELETE_MODES } from './constants.js';
 import { ensureDir, expandHome, readJson, writeJson } from './utils.js';
 import { normalizeRecycleRetention } from './recycle-maintenance.js';
 import { normalizeSelfUpdateConfig } from './updater.js';
@@ -14,6 +14,13 @@ const ALLOWED_UPGRADE_CHANNELS = new Set(['stable', 'pre']);
 const ALLOWED_SKILL_SYNC_METHODS = new Set(['npm', 'github-script']);
 const ALLOWED_RUN_TASK_MODES = new Set(['preview', 'execute', 'preview-execute-verify']);
 const ALLOWED_SCAN_DEBUG_LEVELS = new Set(['off', 'summary', 'full']);
+const ALLOWED_DELETE_MODES = new Set([
+  DELETE_MODES.DIRECT,
+  DELETE_MODES.RECYCLE,
+  DELETE_MODES.SERVICE_RECYCLE,
+]);
+const ALLOWED_RECYCLE_SCOPES = new Set(['manual', 'service', 'all']);
+const ALLOWED_SERVICE_DELETE_MODES = new Set([DELETE_MODES.DIRECT, DELETE_MODES.SERVICE_RECYCLE]);
 const ACTION_FLAG_MAP = new Map([
   ['--cleanup-monthly', 'cleanup_monthly'],
   ['--analysis-only', 'analysis_only'],
@@ -22,6 +29,10 @@ const ACTION_FLAG_MAP = new Map([
   ['--doctor', 'doctor'],
   ['--check-update', 'check_update'],
   ['--sync-skills', 'sync_skills'],
+  ['--service-install', 'service_install'],
+  ['--service-uninstall', 'service_uninstall'],
+  ['--service-status', 'service_status'],
+  ['--service-run', 'service_run'],
 ]);
 const MODE_TO_ACTION_MAP = new Map([
   ['cleanup_monthly', 'cleanup_monthly'],
@@ -33,6 +44,10 @@ const MODE_TO_ACTION_MAP = new Map([
   ['check_update', 'check_update'],
   ['upgrade', 'upgrade'],
   ['sync_skills', 'sync_skills'],
+  ['service_install', 'service_install'],
+  ['service_uninstall', 'service_uninstall'],
+  ['service_status', 'service_status'],
+  ['service_run', 'service_run'],
 ]);
 
 export class CliArgError extends Error {
@@ -104,8 +119,11 @@ export function defaultConfig() {
     externalStorageAutoDetect: true,
     stateRoot,
     recycleRoot: path.join(stateRoot, 'recycle-bin'),
+    serviceRecycleRoot: path.join(stateRoot, 'service-recycle-bin'),
     indexPath: path.join(stateRoot, 'index.jsonl'),
     aliasPath: path.join(stateRoot, 'account-aliases.json'),
+    serviceConfigPath: path.join(stateRoot, 'service-config.json'),
+    serviceStatePath: path.join(stateRoot, 'service-state.json'),
     dryRunDefault: true,
     defaultCategories: [],
     spaceGovernance: {
@@ -206,6 +224,20 @@ export function parseCliArgs(argv) {
     skillSyncRef: null,
     runTask: null,
     scanDebug: 'off',
+    deleteMode: null,
+    directDeleteAck: null,
+    recycleScope: null,
+    serviceTriggerSource: null,
+    serviceRetainDays: null,
+    serviceDeleteMode: null,
+    serviceDirectDeleteAck: null,
+    serviceRecycleRetentionDays: null,
+    serviceRecycleMinKeepBatches: null,
+    serviceRecycleThresholdGB: null,
+    serviceLowSpaceThresholdGB: null,
+    serviceLowSpaceThresholdPercent: null,
+    serviceTriggerTimes: null,
+    serviceCooldownMinutes: null,
   };
   const actionValues = [];
 
@@ -456,6 +488,21 @@ export function parseCliArgs(argv) {
       i += 1;
       continue;
     }
+    if (token === '--delete-mode') {
+      parsed.deleteMode = parseEnumValue(token, takeValue(token, i), ALLOWED_DELETE_MODES);
+      i += 1;
+      continue;
+    }
+    if (token === '--direct-delete-ack') {
+      parsed.directDeleteAck = takeValue(token, i);
+      i += 1;
+      continue;
+    }
+    if (token === '--recycle-scope') {
+      parsed.recycleScope = parseEnumValue(token, takeValue(token, i), ALLOWED_RECYCLE_SCOPES);
+      i += 1;
+      continue;
+    }
     if (token === '--retention-enabled') {
       parsed.retentionEnabled = parseBooleanFlag(token, takeValue(token, i));
       i += 1;
@@ -473,6 +520,61 @@ export function parseCliArgs(argv) {
     }
     if (token === '--retention-size-threshold-gb') {
       parsed.retentionSizeThresholdGB = parsePositiveInteger(token, takeValue(token, i));
+      i += 1;
+      continue;
+    }
+    if (token === '--service-trigger-source') {
+      parsed.serviceTriggerSource = takeValue(token, i);
+      i += 1;
+      continue;
+    }
+    if (token === '--service-retain-days') {
+      parsed.serviceRetainDays = parsePositiveInteger(token, takeValue(token, i));
+      i += 1;
+      continue;
+    }
+    if (token === '--service-delete-mode') {
+      parsed.serviceDeleteMode = parseEnumValue(token, takeValue(token, i), ALLOWED_SERVICE_DELETE_MODES);
+      i += 1;
+      continue;
+    }
+    if (token === '--service-direct-delete-ack') {
+      parsed.serviceDirectDeleteAck = takeValue(token, i);
+      i += 1;
+      continue;
+    }
+    if (token === '--service-recycle-retention-days') {
+      parsed.serviceRecycleRetentionDays = parsePositiveInteger(token, takeValue(token, i));
+      i += 1;
+      continue;
+    }
+    if (token === '--service-recycle-min-keep-batches') {
+      parsed.serviceRecycleMinKeepBatches = parsePositiveInteger(token, takeValue(token, i));
+      i += 1;
+      continue;
+    }
+    if (token === '--service-recycle-threshold-gb') {
+      parsed.serviceRecycleThresholdGB = parsePositiveInteger(token, takeValue(token, i));
+      i += 1;
+      continue;
+    }
+    if (token === '--service-low-space-threshold-gb') {
+      parsed.serviceLowSpaceThresholdGB = parsePositiveInteger(token, takeValue(token, i));
+      i += 1;
+      continue;
+    }
+    if (token === '--service-low-space-threshold-percent') {
+      parsed.serviceLowSpaceThresholdPercent = parsePositiveInteger(token, takeValue(token, i));
+      i += 1;
+      continue;
+    }
+    if (token === '--service-trigger-times') {
+      parsed.serviceTriggerTimes = parseCsvList(takeValue(token, i));
+      i += 1;
+      continue;
+    }
+    if (token === '--service-cooldown-minutes') {
+      parsed.serviceCooldownMinutes = parsePositiveInteger(token, takeValue(token, i));
       i += 1;
       continue;
     }
@@ -567,13 +669,23 @@ export async function loadConfig(cliArgs = {}, options = {}) {
   merged.selfUpdate = normalizeSelfUpdateConfig(fileConfig.selfUpdate, base.selfUpdate);
 
   merged.recycleRoot = expandHome(fileConfig.recycleRoot || path.join(stateRoot, 'recycle-bin'));
+  merged.serviceRecycleRoot = expandHome(
+    fileConfig.serviceRecycleRoot || path.join(stateRoot, 'service-recycle-bin')
+  );
   merged.indexPath = expandHome(fileConfig.indexPath || path.join(stateRoot, 'index.jsonl'));
   merged.aliasPath = expandHome(fileConfig.aliasPath || path.join(stateRoot, 'account-aliases.json'));
+  merged.serviceConfigPath = expandHome(
+    fileConfig.serviceConfigPath || path.join(stateRoot, 'service-config.json')
+  );
+  merged.serviceStatePath = expandHome(
+    fileConfig.serviceStatePath || path.join(stateRoot, 'service-state.json')
+  );
   merged.configPath = configPath;
 
   if (!options.readOnly) {
     await ensureDir(merged.stateRoot);
     await ensureDir(merged.recycleRoot);
+    await ensureDir(merged.serviceRecycleRoot);
   }
 
   return merged;
@@ -587,8 +699,11 @@ export async function saveConfig(config) {
       typeof config.externalStorageAutoDetect === 'boolean' ? config.externalStorageAutoDetect : true,
     stateRoot: config.stateRoot,
     recycleRoot: config.recycleRoot,
+    serviceRecycleRoot: config.serviceRecycleRoot,
     indexPath: config.indexPath,
     aliasPath: config.aliasPath,
+    serviceConfigPath: config.serviceConfigPath,
+    serviceStatePath: config.serviceStatePath,
     dryRunDefault: Boolean(config.dryRunDefault),
     defaultCategories: Array.isArray(config.defaultCategories) ? config.defaultCategories : [],
     spaceGovernance: normalizeSpaceGovernance(config.spaceGovernance, defaultConfig().spaceGovernance),
