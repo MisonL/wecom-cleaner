@@ -14,7 +14,7 @@ description: 用于执行和编排 wecom-cleaner 的无交互 Agent 技能。当
 ## 强制规则
 
 1. 全程只用无交互命令（禁止直接运行 `wecom-cleaner` 进入 TUI）。
-2. 优先脚本入口，禁止手写三步命令流（除非脚本失败或缺失）。
+2. v2 主控制面优先使用新 CLI 子命令；现有脚本入口属于兼容壳层，优先用于报告呈现。
 3. 破坏性动作（清理/治理/恢复/回收区治理）默认预演；真实执行必须有明确授权。
 4. 回退到 CLI 时，破坏性动作必须使用 `--run-task` 协议（`preview` 或 `preview-execute-verify`），禁止手工串联多次命令。
 5. 升级动作默认只做检查或预演（`--execute false`）；真实升级必须有明确授权。
@@ -32,13 +32,13 @@ description: 用于执行和编排 wecom-cleaner 的无交互 Agent 技能。当
 - 系统自检：`scripts/doctor_report.sh`
 - 检查更新：`scripts/check_update_report.sh`
 - 程序升级：`scripts/upgrade_report.sh`
-- skills 同步：回退到 `wecom-cleaner --sync-skills --output agent-json`
+- skills 同步：回退到 `wecom-cleaner skills sync --ack SKILLS_SYNC --output agent-json`
 
 调用顺序：
 
 1. 先判断用户意图对应哪个动作。
 2. 直接调用对应脚本。
-3. 脚本失败时，才回退到 `wecom-cleaner --<action> --output agent-json` 手工流程。
+3. 脚本失败时，才回退到 v2 子命令（如 `wecom-cleaner inspect ...` / `plan ...` / `recover ...` / `update ...` / `skills ...`）手工流程。
 4. 回退流程里优先读取 `data.taskCard` 与 `data.taskPhases`，再读取 `summary/data.report` 细节。
 
 ## 脚本调用约定

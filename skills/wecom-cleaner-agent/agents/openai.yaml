@@ -1,5 +1,5 @@
 interface:
   display_name: 'WeCom Cleaner Agent'
   short_description: '面向AI Agent的企业微信缓存清理与恢复无交互执行技能'
-  default_prompt: '请使用 $wecom-cleaner-agent 执行任务：按用户意图自动选择 scripts/ 下对应报告脚本（cleanup/analysis/space/restore/recycle/doctor/check-update/upgrade），需要 skills 同步时回退 wecom-cleaner --sync-skills --output agent-json；优先输出中文用户任务卡片；仅在脚本不可用时回退 wecom-cleaner --output agent-json，并在破坏性动作中使用 --run-task（preview 或 preview-execute-verify）读取 data.taskCard/taskPhases。'
+  default_prompt: '请使用 $wecom-cleaner-agent 执行任务：优先选择 scripts/ 下对应报告脚本输出中文任务卡片；脚本不可用时回退到 wecom-cleaner v2 子命令（inspect/plan/apply/verify/recover/service/update/skills）并使用 --output agent-json；优先读取 data.taskCard、data.taskPhases、data.userFacingSummary。'
   brand_color: '#0EA5E9'

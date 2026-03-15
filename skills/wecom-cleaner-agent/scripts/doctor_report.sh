@@ -58,7 +58,7 @@ if [[ -n "$STATE_ROOT" ]]; then
   cmd+=(--state-root "$STATE_ROOT")
 fi
 
-if ! wecom-cleaner "${cmd[@]}" >"$REPORT_JSON" 2>"$REPORT_ERR"; then
+if ! env WECOM_CLEANER_ALLOW_INTERNAL_LEGACY=true wecom-cleaner "${cmd[@]}" >"$REPORT_JSON" 2>"$REPORT_ERR"; then
   err_head="$(head -n 3 "$REPORT_ERR" 2>/dev/null || true)"
   echo "执行失败：${err_head:-未知错误}" >&2
   exit 1

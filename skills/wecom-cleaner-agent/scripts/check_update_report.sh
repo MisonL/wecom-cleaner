@@ -72,7 +72,7 @@ if [[ -n "$STATE_ROOT" ]]; then
   cmd+=(--state-root "$STATE_ROOT")
 fi
 
-if ! wecom-cleaner "${cmd[@]}" >"$REPORT_JSON" 2>"$REPORT_ERR"; then
+if ! env WECOM_CLEANER_ALLOW_INTERNAL_LEGACY=true wecom-cleaner "${cmd[@]}" >"$REPORT_JSON" 2>"$REPORT_ERR"; then
   err_head="$(head -n 3 "$REPORT_ERR" 2>/dev/null || true)"
   echo "执行失败：${err_head:-未知错误}" >&2
   exit 1
@@ -137,11 +137,11 @@ printf -- '- skills 目录：%s\n' "$skills_target_dir"
 
 if [[ "$has_update" == "true" && "$skipped_by_user" != "true" ]]; then
   printf '\n建议下一步（需你确认后执行）\n'
-  printf -- '- 默认升级方式（npm）：wecom-cleaner --upgrade npm --upgrade-version %s --upgrade-yes\n' "$latest_version"
-  printf -- '- 备选方式（GitHub 脚本）：wecom-cleaner --upgrade github-script --upgrade-version %s --upgrade-yes\n' "$latest_version"
+  printf -- '- 默认升级方式（npm）：wecom-cleaner update apply npm --upgrade-version %s --ack UPGRADE\n' "$latest_version"
+  printf -- '- 备选方式（GitHub 脚本）：wecom-cleaner update apply github-script --upgrade-version %s --ack UPGRADE\n' "$latest_version"
 fi
 if [[ "$skills_matched" != "true" ]]; then
-  printf -- '- 同步 skills（推荐）：wecom-cleaner --sync-skills --skill-sync-method npm\n'
+  printf -- '- 同步 skills（推荐）：wecom-cleaner skills sync --skill-sync-method npm --ack SKILLS_SYNC\n'
 fi
 
 printf '\n运行状态\n'

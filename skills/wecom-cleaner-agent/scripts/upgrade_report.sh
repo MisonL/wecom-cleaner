@@ -107,7 +107,7 @@ if [[ -n "$STATE_ROOT" ]]; then
 fi
 
 check_ok="true"
-if ! wecom-cleaner "${check_cmd[@]}" >"$CHECK_JSON" 2>"$CHECK_ERR"; then
+if ! env WECOM_CLEANER_ALLOW_INTERNAL_LEGACY=true wecom-cleaner "${check_cmd[@]}" >"$CHECK_JSON" 2>"$CHECK_ERR"; then
   check_ok="false"
 fi
 
@@ -127,11 +127,11 @@ if [[ -z "$plan_target" && "$check_ok" == "true" && "$latest_version" != "-" ]];
   plan_target="$latest_version"
 fi
 
-plan_cmd=(wecom-cleaner --upgrade "$METHOD")
+plan_cmd=(wecom-cleaner update apply "$METHOD")
 if [[ -n "$plan_target" ]]; then
   plan_cmd+=(--upgrade-version "$plan_target")
 fi
-plan_cmd+=(--upgrade-channel "$CHANNEL" --upgrade-yes)
+plan_cmd+=(--upgrade-channel "$CHANNEL" --ack UPGRADE)
 if [[ -n "$ROOT" ]]; then
   plan_cmd+=(--root "$ROOT")
 fi
@@ -179,7 +179,7 @@ if [[ -n "$STATE_ROOT" ]]; then
 fi
 
 upgrade_ok="true"
-if ! wecom-cleaner "${upgrade_cmd[@]}" >"$EXEC_JSON" 2>"$EXEC_ERR"; then
+if ! env WECOM_CLEANER_ALLOW_INTERNAL_LEGACY=true wecom-cleaner "${upgrade_cmd[@]}" >"$EXEC_JSON" 2>"$EXEC_ERR"; then
   upgrade_ok="false"
 fi
 
@@ -204,7 +204,7 @@ duration_ms="$(jq -r '.meta.durationMs // 0' "$EXEC_JSON")"
 warnings_count="$(jq -r '(.warnings // []) | length' "$EXEC_JSON")"
 errors_count="$(jq -r '(.errors // []) | length' "$EXEC_JSON")"
 
-installed_version="$(wecom-cleaner --version 2>/dev/null || true)"
+installed_version="$(env WECOM_CLEANER_ALLOW_INTERNAL_LEGACY=true wecom-cleaner --version 2>/dev/null || true)"
 if [[ -z "$installed_version" ]]; then
   installed_version="-"
 fi

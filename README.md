@@ -16,6 +16,12 @@
 - 仓库：<https://github.com/MisonL/wecom-cleaner>
 
 > 定位：手动清理默认立即释放空间；自动服务按规则治理到期缓存，并用服务专用回收站承接自动任务的可恢复需求。
+>
+> v2 cutover:
+>
+> - 主 CLI 入口已切换为 `inspect / plan / apply / verify / recover / service / update / skills`
+> - 旧顶层旗标（如 `--cleanup-monthly`、`--doctor`）已从公共接口移除
+> - skills 报告脚本当前作为兼容壳层保留，主控制面以 v2 CLI 和 `agent-json` 为准
 
 ## 目录
 
@@ -177,10 +183,10 @@ GitHub 备选方式（无 npm 包依赖）：
 curl -fsSL https://raw.githubusercontent.com/MisonL/wecom-cleaner/main/scripts/install-skill.sh | bash
 ```
 
-若需安装指定版本标签（例如 `v1.3.3`）：
+若需安装指定版本标签（例如 `v1.3.4`）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MisonL/wecom-cleaner/main/scripts/install-skill.sh | bash -s -- --ref v1.3.3
+curl -fsSL https://raw.githubusercontent.com/MisonL/wecom-cleaner/main/scripts/install-skill.sh | bash -s -- --ref v1.3.4
 ```
 
 Agent 侧统一任务入口脚本（位于 `skills/wecom-cleaner-agent/scripts/`）：
@@ -203,21 +209,20 @@ Agent 侧统一任务入口脚本（位于 `skills/wecom-cleaner-agent/scripts/`
 - 带参数但需交互：可追加 `--interactive` 强制进入交互流程（支持配合 `--mode` 直达功能）。
 - 完整契约文档：[`docs/NON_INTERACTIVE_SPEC.md`](./docs/NON_INTERACTIVE_SPEC.md)。
 
-### 无交互动作参数（互斥，必须且只能一个）
+### 公共 v2 子命令
 
-- `--cleanup-monthly`
-- `--analysis-only`
-- `--space-governance`
-- `--restore-batch <batchId>`
-- `--recycle-maintain`
-- `--doctor`
-- `--check-update`
-- `--upgrade <npm|github-script>`
-- `--sync-skills`
-- `--service-install`
-- `--service-uninstall`
-- `--service-status`
-- `--service-run`
+- `inspect footprint`
+- `inspect doctor`
+- `plan monthly-cleanup`
+- `plan space-governance`
+- `apply <plan-id>`
+- `verify <run-id>`
+- `recover restore <batchId>`
+- `recover recycle`
+- `service install|status|run|uninstall`
+- `update check`
+- `update apply <npm|github-script>`
+- `skills status|sync`
 
 ### 无交互安全规则
 
@@ -230,74 +235,75 @@ Agent 侧统一任务入口脚本（位于 `skills/wecom-cleaner-agent/scripts/`
 
 ```bash
 # 年月清理（默认 dry-run）
-wecom-cleaner --cleanup-monthly \
+wecom-cleaner plan monthly-cleanup \
   --accounts current \
   --cutoff-month 2024-02 \
-  --categories files,images
+  --categories files,images \
+  --output agent-json
 
-# 年月清理（真实执行）
-wecom-cleaner --cleanup-monthly \
+# 年月清理（真实执行：先 plan，再 apply）
+wecom-cleaner plan monthly-cleanup \
   --accounts all \
   --months 2023-01,2023-02 \
   --categories files \
-  --dry-run false \
-  --yes
+  --output agent-json
 
-# 年月清理（非交互直删）
-wecom-cleaner --cleanup-monthly \
-  --accounts all \
-  --cutoff-month 2024-04 \
-  --dry-run false \
-  --delete-mode direct \
-  --direct-delete-ack DIRECT_DELETE \
-  --yes
+wecom-cleaner apply <plan-id> \
+  --ack APPLY \
+  --state-root <path> \
+  --output agent-json
 
-# 全量空间治理（仅建议项，真实执行）
-wecom-cleaner --space-governance \
+# 年月清理（复核）
+wecom-cleaner verify <run-id> \
+  --state-root <path> \
+  --output agent-json
+
+# 全量空间治理（预演）
+wecom-cleaner plan space-governance \
   --suggested-only true \
   --tiers safe,caution \
-  --dry-run false \
-  --yes
+  --output agent-json
 
-# 回收区治理（按策略执行）
-wecom-cleaner --recycle-maintain --dry-run false --yes
+# 回收区治理（按策略预演）
+wecom-cleaner recover recycle --output agent-json
 
-# 服务回收站治理
-wecom-cleaner --recycle-maintain --recycle-scope service --dry-run false --yes
+# 回收区治理（真实执行）
+wecom-cleaner recover recycle --ack RECYCLE --output agent-json
 
-# 年月清理（三阶段协议：预演 -> 执行 -> 复核）
-wecom-cleaner --cleanup-monthly --accounts all --cutoff-month 2024-04 --run-task preview-execute-verify --yes
+# 批次恢复（冲突策略：重命名，默认预演）
+wecom-cleaner recover restore 20260226-105009-ffa098 --conflict rename --output agent-json
 
-# 批次恢复（冲突策略：重命名）
-wecom-cleaner --restore-batch 20260226-105009-ffa098 --conflict rename
+# 批次恢复（真实执行）
+wecom-cleaner recover restore 20260226-105009-ffa098 --conflict rename --ack RESTORE --output agent-json
 
 # 系统自检（默认 JSON 输出）
-wecom-cleaner --doctor
+wecom-cleaner inspect doctor --output agent-json
 
 # 检查更新（不执行升级）
-wecom-cleaner --check-update --output text
+wecom-cleaner update check --output text
 
 # 执行升级（npm 默认方式）
-wecom-cleaner --upgrade npm --upgrade-yes
+wecom-cleaner update apply npm --ack UPGRADE --output agent-json
 
 # 执行升级（GitHub 托管脚本方式）
-wecom-cleaner --upgrade github-script --upgrade-version 1.3.3 --upgrade-yes
+wecom-cleaner update apply github-script --upgrade-version 1.3.4 --ack UPGRADE --output agent-json
 
 # 单独同步 skills（修复版本不匹配）
-wecom-cleaner --sync-skills --skill-sync-method npm --dry-run false
+wecom-cleaner skills sync --skill-sync-method npm --ack SKILLS_SYNC --output agent-json
 
 # 安装自动服务
-wecom-cleaner --service-install \
+wecom-cleaner service install \
   --accounts all \
   --categories files,images,videos \
   --service-retain-days 180 \
-  --service-trigger-times 09:30,13:30,18:30
+  --service-trigger-times 09:30,13:30,18:30 \
+  --output agent-json
 
 # 查看自动服务状态
-wecom-cleaner --service-status
+wecom-cleaner service status --output agent-json
 
 # 手动触发一次自动服务任务
-wecom-cleaner --service-run
+wecom-cleaner service run --ack SERVICE_RUN --output agent-json
 ```
 
 ### 输出与兼容参数
@@ -483,6 +489,7 @@ wecom-cleaner --service-run
 - `service-recycle-bin/`：自动服务专用回收站
 - `service-config.json`：自动服务配置
 - `service-state.json`：自动服务最近运行状态
+- `latest-task.json`：最近一次任务摘要（供首页驾驶舱与 Agent 协议复用）
 - `.wecom-cleaner.lock`：运行锁文件（防并发误操作）
 
 `index.jsonl` 常见字段：

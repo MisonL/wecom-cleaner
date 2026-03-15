@@ -173,7 +173,7 @@ run_cmd_to_file() {
   if [[ "$task_mode" == "preview-execute-verify" ]]; then
     cmd_parts+=(--yes)
   fi
-  if ! wecom-cleaner "${cmd_parts[@]}" >"$output_file" 2>"$err_file"; then
+  if ! env WECOM_CLEANER_ALLOW_INTERNAL_LEGACY=true wecom-cleaner "${cmd_parts[@]}" >"$output_file" 2>"$err_file"; then
     local err_head
     err_head="$(head -n 3 "$err_file" 2>/dev/null || true)"
     echo "执行失败（run-task=${task_mode}）：${err_head:-未知错误}" >&2

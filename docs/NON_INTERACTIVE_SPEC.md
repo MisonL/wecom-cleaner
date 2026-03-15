@@ -2,6 +2,12 @@
 
 本文档定义 `wecom-cleaner` 的无交互 CLI 契约，供 AI Agent/脚本稳定调用。
 
+> v2 cutover:
+>
+> - 公共入口以子命令为准：`inspect / plan / apply / verify / recover / service / update / skills`
+> - 旧顶层动作旗标仅保留内部测试/兼容壳层，不再属于公共 CLI 契约
+> - 自动化调用默认应使用 `--output agent-json`
+
 ## 1. 运行入口
 
 - `wecom-cleaner`（不带参数）：进入交互模式（TUI）。
@@ -10,49 +16,48 @@
 - `wecom-cleaner --help` / `wecom-cleaner -h`：输出命令帮助并退出（`0`）。
 - `wecom-cleaner --version` / `wecom-cleaner -v`：输出版本号并退出（`0`）。
 
-## 2. 动作选择（必填且互斥）
+## 2. 公共 v2 子命令
 
-无交互模式必须且只能提供一个动作参数：
+公共 CLI 入口以 v2 子命令为准：
 
-- `--cleanup-monthly`
-- `--analysis-only`
-- `--space-governance`
-- `--restore-batch <batchId>`
-- `--recycle-maintain`
-- `--doctor`
-- `--check-update`
-- `--upgrade <npm|github-script>`
-- `--sync-skills`
-- `--service-install`
-- `--service-uninstall`
-- `--service-status`
-- `--service-run`
+- `inspect footprint`
+- `inspect doctor`
+- `plan monthly-cleanup`
+- `plan space-governance`
+- `apply <planId>`
+- `verify <runId>`
+- `recover restore <batchId>`
+- `recover recycle`
+- `service install|status|run|uninstall`
+- `update check`
+- `update apply <npm|github-script>`
+- `skills status|sync`
 
 若缺少动作或动作冲突，退出码为 `2`。
 
 ## 3. 安全确认与 dry-run
 
-破坏性动作：`cleanup-monthly`、`space-governance`、`restore-batch`、`recycle-maintain`、`service-run`。
+破坏性动作：`apply`、`recover restore`、`recover recycle`、`service run`、`update apply`、`skills sync`。
 
 规则：
 
-- 默认 `dry-run`（不执行真实删除/恢复）。
-- 真实执行需显式传 `--yes`。
-- 若传 `--dry-run false` 且未传 `--yes`，退出码为 `3`。
-- 非交互直删需同时满足：
-  - `--delete-mode direct`
-  - `--direct-delete-ack DIRECT_DELETE`
-  - `--yes`
-- 可通过 `--run-task` 启用阶段协议：
-  - `preview`：仅预演阶段。
-  - `execute`：仅真实执行阶段（破坏性动作需 `--yes`）。
-  - `preview-execute-verify`：预演 -> 真实执行 -> 同条件复核（预演命中 `0` 时自动跳过执行与复核）。
+- `plan monthly-cleanup` / `plan space-governance` 默认仅预演，不执行真实删除。
+- 真实执行通过显式确认子命令触发：
+  - `apply <planId> --ack APPLY`
+  - `recover restore <batchId> --ack RESTORE`
+  - `recover recycle --ack RECYCLE`
+  - `service run --ack SERVICE_RUN`
+  - `update apply <method> --ack UPGRADE`
+  - `skills sync --ack SKILLS_SYNC`
+- 若缺少确认参数，退出码为 `3`。
+- 非交互直删仍需额外显式传：`--delete-mode direct --direct-delete-ack DIRECT_DELETE`。
+- 旧兼容壳层仍可通过 `--run-task` 触发阶段协议，但不再属于公共 CLI 契约。
 
 ## 4. 输出协议
 
-无交互默认输出 JSON，可通过 `--output text` 切换文本任务卡片（中文结论 + 范围 + 统计 + 风险提示）。
+公共 v2 子命令默认输出 `agent-json`，可通过 `--output text` 切换文本任务卡片（中文结论 + 范围 + 统计 + 风险提示）。
 
-- `--output json|text|agent-json`（默认 `json`）
+- `--output json|text|agent-json`（公共 v2 默认 `agent-json`）
 - `--json` 为兼容别名（等价 `--output json`）
 - `--run-task preview|execute|preview-execute-verify`（推荐破坏性动作使用）
 - `--scan-debug off|summary|full`（默认 `off`）
@@ -299,9 +304,9 @@ JSON 顶层字段：
 - `--run-task preview|execute|preview-execute-verify`：无交互阶段协议
 - `--scan-debug off|summary|full`：扫描诊断输出等级
 
-## 7. 动作参数
+## 7. v2 子命令参数
 
-### 7.1 `--cleanup-monthly`
+### 7.1 `plan monthly-cleanup`
 
 - `--accounts <all|current|id1,id2...>`
 - `--months <YYYY-MM,...>` 或 `--cutoff-month <YYYY-MM>`（二选一）
@@ -309,16 +314,16 @@ JSON 顶层字段：
 - `--include-non-month-dirs <true|false>`
 - `--dry-run <true|false>`
 
-### 7.2 `--analysis-only`
+### 7.2 `inspect footprint`
 
 - `--accounts <all|current|id1,id2...>`
 - `--categories <all|key1,key2...>`
 
 说明：
 
-- `analysis-only` 默认按 `external-roots-source=all` 读取外部目录来源（只读动作，避免漏扫）。
+- `inspect footprint` 默认按 `external-roots-source=all` 读取外部目录来源（只读动作，避免漏扫）。
 
-### 7.3 `--space-governance`
+### 7.3 `plan space-governance`
 
 - `--accounts <all|current|id1,id2...>`
 - `--targets <targetId1,targetId2...>`
@@ -329,15 +334,21 @@ JSON 顶层字段：
 
 说明：
 
-- `cleanup-monthly` / `space-governance` 默认 `external-roots-source=all`，优先减少漏扫。
+- `plan monthly-cleanup` / `plan space-governance` 默认 `external-roots-source=all`，优先减少漏扫。
 - 若需更保守范围，可显式设置 `--external-roots-source preset`（仅默认+手动配置来源）。
 
-### 7.4 `--restore-batch <batchId>`
+### 7.4 `apply <planId>` / `verify <runId>`
+
+- `apply <planId> --ack APPLY`
+- `verify <runId>`
+- 通常与 `plan monthly-cleanup` / `plan space-governance` 配套使用
+
+### 7.5 `recover restore <batchId>`
 
 - `--conflict <skip|overwrite|rename>`（默认 `skip`）
 - `--dry-run <true|false>`
 
-### 7.5 `--recycle-maintain`
+### 7.6 `recover recycle`
 
 - `--retention-enabled <true|false>`
 - `--retention-max-age-days <int>`
@@ -345,11 +356,11 @@ JSON 顶层字段：
 - `--retention-size-threshold-gb <int>`
 - `--dry-run <true|false>`
 
-### 7.6 `--doctor`
+### 7.7 `inspect doctor`
 
 - 无动作专属参数；只读执行，返回健康报告。
 
-### 7.7 `--check-update`
+### 7.8 `update check`
 
 - `--upgrade-channel <stable|pre>`（可选，默认读取配置）
 
@@ -358,11 +369,11 @@ JSON 顶层字段：
 - 手动触发版本检查，不执行升级动作。
 - 检测优先 npm，失败自动回退 GitHub。
 
-### 7.8 `--upgrade <npm|github-script>`
+### 7.9 `update apply <npm|github-script>`
 
 - `--upgrade-version <x.y.z>`（可选；缺省时先检查更新并升级到最新）
 - `--upgrade-channel <stable|pre>`（可选）
-- `--upgrade-yes`（必填确认）
+- `--ack UPGRADE`（必填确认）
 
 说明：
 
@@ -370,11 +381,12 @@ JSON 顶层字段：
 - `github-script`：执行 GitHub 托管脚本 `scripts/upgrade.sh`
 - 默认会联动同步 skills，可通过 `--upgrade-sync-skills false` 关闭。
 
-### 7.9 `--sync-skills`
+### 7.10 `skills status|sync`
 
-- `--skill-sync-method <npm|github-script>`（可选，默认 `npm`）
-- `--skill-sync-ref <x.y.z>`（可选）
-- `--dry-run <true|false>`（可选，默认 `false`）
+- `skills status`
+- `skills sync --skill-sync-method <npm|github-script>`（可选，默认 `npm`）
+- `skills sync --skill-sync-ref <x.y.z>`（可选）
+- `skills sync --ack SKILLS_SYNC`（真实同步确认）
 
 说明：
 
