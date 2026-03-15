@@ -1,16 +1,16 @@
 {
   "schemaVersion": 1,
-  "version": "1.3.3",
+  "version": "1.3.4",
   "targets": {
     "darwin-x64": {
       "binaryName": "wecom-cleaner-core",
-      "sha256": "e803a1d480895f3edc2350151611a20390ae01401c179aa3f58b5773fed011a8",
-      "url": "https://github.com/MisonL/wecom-cleaner/releases/download/v1.3.3/wecom-cleaner-core-v1.3.3-darwin-x64"
+      "sha256": "eb3c6de10dc886a85db7f616c02aa468cf34de9856d911881f5ddf692890e215",
+      "url": "https://github.com/MisonL/wecom-cleaner/releases/download/v1.3.4/wecom-cleaner-core-v1.3.4-darwin-x64"
     },
     "darwin-arm64": {
       "binaryName": "wecom-cleaner-core",
-      "sha256": "0bee4994c39ec66690a1effa2acc4178a581567750577c5caa9ba4e495dd3b1d",
-      "url": "https://github.com/MisonL/wecom-cleaner/releases/download/v1.3.3/wecom-cleaner-core-v1.3.3-darwin-arm64"
+      "sha256": "99cd977436bb50380cb60e35bc2407857ecc05e3e5ae8af692279581599f9f40",
+      "url": "https://github.com/MisonL/wecom-cleaner/releases/download/v1.3.4/wecom-cleaner-core-v1.3.4-darwin-arm64"
     }
   }
 }

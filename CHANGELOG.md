@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [1.3.4] - 2026-03-15
+
 ### Added
 
 - 新增一键发布脚本 `scripts/release.sh`，统一执行“门禁、打包、推送标签、npm 发布、GitHub Release 上传”。
@@ -20,6 +22,7 @@
   - `--service-run`
 - 新增任务协议模块 `src/task-protocol.js`，统一生成 `userFacingSummary`、`taskPhases`、`taskCard`。
 - 新增无交互输出模式 `--output agent-json`，面向 Agent 提供稳定任务协议载荷。
+- 新增 v2 controller façade：`inspect / plan / apply / verify / recover / service / update / skills` 子命令入口，以及 `plans/`、`runs/`、`events.jsonl` 状态仓。
 
 ### Changed
 
@@ -35,12 +38,19 @@
 - macOS 全量空间治理补充对 `Documents/local_storage_index.db`、`WeMail/load_encrypted` 的受保护建模，并将 `WeDrive/<企业名>` 动态业务目录纳入“可见但不自动删除”的展示范围。
 - Agent skills 报告脚本与命令参考统一切换到 `agent-json`，优先消费 `data.taskCard` / `data.taskPhases`。
 - 交互首页头部增加自动服务状态徽章与计划摘要，提升“驾驶舱”可见性。
+- 状态目录新增 `latest-task.json`，将最近一次任务摘要沉淀到状态面，供首页驾驶舱与后续 Agent 复用。
+- 公共 CLI 帮助与迁移提示切换到 v2 子命令体系；旧顶层动作旗标默认返回迁移错误。
 
 ### Fixed
 
 - 修复“手动清理后空间未立即释放”的体验偏差：手动默认不再先搬运到回收区。
 - 修复回收站治理在多回收站语义下的无交互兼容字段缺口，保持旧 JSON 契约可读。
 - 修复 macOS 平台下部分企业微信目录“实际存在但不在扫描/体检模型内”的盲区，新增显式治理目标与保护分级。
+- 修复 `inspect footprint` 仍会创建状态目录与审计文件的只读语义缺口，确保盘点链路不再触发锁、状态落盘与 Zig 自动修复下载。
+- 修复 `plan/apply/verify` 会因动态重扫导致范围漂移的问题，改为冻结计划范围并在执行前做一致性校验。
+- 修复 `controller-state` 更新运行记录时重复写入 `run_saved` 事件的问题，更新事件现单独记录为 `run_updated`。
+- 修复公共 CLI、README、无交互规范与 Agent skill 文档中的 v2 契约漂移，统一切换到 `inspect / plan / apply / verify / recover / service / update / skills` 子命令入口。
+- 修复 `update apply` 缺少确认时仍提示旧 `--upgrade-yes` 的错误文案，改为要求 `--ack UPGRADE`。
 
 ## [1.3.3] - 2026-02-27
 
