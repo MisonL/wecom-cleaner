@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
+import { DELETE_MODES } from '../src/constants.js';
 import { executeCleanup } from '../src/cleanup.js';
 import { pathExists, readJsonLines } from '../src/utils.js';
 import { ERROR_TYPES } from '../src/error-taxonomy.js';
@@ -141,6 +142,50 @@ test('executeCleanup 真删模式支持策略跳过、缺失跳过和移动回�
 
   const movedContent = await fs.readFile(path.join(moved.recyclePath, 'payload.txt'), 'utf-8');
   assert.equal(movedContent, 'move');
+});
+
+test('executeCleanup 支持 direct 直接删除且不生成 recyclePath', async (t) => {
+  const root = await makeTempDir('wecom-cleanup-direct-');
+  t.after(async () => removeDir(root));
+
+  const source = path.join(root, 'source-direct');
+  const recycleRoot = path.join(root, 'recycle-bin');
+  const indexPath = path.join(root, 'index.jsonl');
+
+  await ensureFile(path.join(source, 'payload.txt'), 'direct');
+
+  const result = await executeCleanup({
+    targets: [
+      {
+        path: source,
+        accountId: 'acc001',
+        accountShortId: 'acc001',
+        userName: '用户A',
+        corpName: '企业A',
+        categoryKey: 'files',
+        categoryLabel: '聊天文件',
+        monthKey: '2024-01',
+        sizeBytes: 6,
+      },
+    ],
+    recycleRoot,
+    indexPath,
+    dryRun: false,
+    allowedRoots: [root],
+    deleteMode: DELETE_MODES.DIRECT,
+  });
+
+  assert.equal(result.successCount, 1);
+  assert.equal(result.deleteMode, DELETE_MODES.DIRECT);
+  assert.equal(result.recoverable, false);
+  assert.equal(await pathExists(source), false);
+
+  const rows = await readJsonLines(indexPath);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].status, 'success');
+  assert.equal(rows[0].deleteMode, DELETE_MODES.DIRECT);
+  assert.equal(rows[0].recoverable, false);
+  assert.equal(rows[0].recyclePath, null);
 });
 
 test('executeCleanup 在移动失败时写入 failed 与 error_type', async (t) => {

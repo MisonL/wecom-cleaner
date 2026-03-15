@@ -184,7 +184,7 @@ log_user 0
 log_file -noappend $logfile
 spawn node src/cli.js --interactive --root $root --state-root $state --external-storage-root $ext --external-storage-auto-detect false
 expect "开始菜单"
-send "\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\r"
+send "\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\033\[B\r"
 expect {
   "已退出。" { exit 0 }
   timeout { exit 11 }
@@ -215,10 +215,12 @@ expect "选择要清理的缓存类型"
 send "\r"
 expect "是否包含非月份目录"
 send "y\r"
+expect "请选择删除方式"
+send "\r"
 expect "先 dry-run 预览"
-send "\r"
+send "\033\[A\r"
 expect "是否继续执行真实删除"
-send "\r"
+send "n\r"
 expect {
   "已结束：仅预览，无删除。" { exit 0 }
   timeout { exit 21 }
@@ -249,10 +251,12 @@ expect "选择要清理的缓存类型"
 send "\r"
 expect "是否包含非月份目录"
 send "y\r"
+expect "请选择删除方式"
+send "\r"
 expect "先 dry-run 预览"
 send "n\r"
-expect "请输入 DELETE 确认"
-send "DELETE\r"
+expect "请输入 DIRECT_DELETE 确认"
+send "DIRECT_DELETE\r"
 expect {
   "=== 删除结果 ===" {}
   timeout { exit 31 }
@@ -302,8 +306,10 @@ expect "已选择谨慎层目录"
 send "y\r"
 expect "默认会跳过"
 send "y\r"
-expect "先 dry-run 预览"
+expect "请选择治理删除方式"
 send "\r"
+expect "先 dry-run 预览"
+send "y\r"
 expect {
   "=== 治理结果 ===" {}
   timeout { exit 51 }

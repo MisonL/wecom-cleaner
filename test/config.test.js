@@ -163,6 +163,54 @@ test('parseCliArgs 可解析同步 skills 动作', () => {
   assert.equal(parsed.dryRun, true);
 });
 
+test('parseCliArgs 可解析删除模式与自动服务参数', () => {
+  const parsed = parseCliArgs([
+    '--service-install',
+    '--accounts',
+    'all',
+    '--categories',
+    'files,images',
+    '--delete-mode',
+    'direct',
+    '--direct-delete-ack',
+    'DIRECT_DELETE',
+    '--service-retain-days',
+    '180',
+    '--service-delete-mode',
+    'service_recycle',
+    '--service-recycle-retention-days',
+    '30',
+    '--service-recycle-min-keep-batches',
+    '3',
+    '--service-recycle-threshold-gb',
+    '20',
+    '--service-low-space-threshold-gb',
+    '20',
+    '--service-low-space-threshold-percent',
+    '10',
+    '--service-trigger-times',
+    '09:30,13:30,18:30',
+    '--service-cooldown-minutes',
+    '15',
+    '--recycle-scope',
+    'all',
+  ]);
+
+  assert.equal(parsed.action, 'service_install');
+  assert.equal(parsed.deleteMode, 'direct');
+  assert.equal(parsed.directDeleteAck, 'DIRECT_DELETE');
+  assert.equal(parsed.serviceRetainDays, 180);
+  assert.equal(parsed.serviceDeleteMode, 'service_recycle');
+  assert.equal(parsed.serviceRecycleRetentionDays, 30);
+  assert.equal(parsed.serviceRecycleMinKeepBatches, 3);
+  assert.equal(parsed.serviceRecycleThresholdGB, 20);
+  assert.equal(parsed.serviceLowSpaceThresholdGB, 20);
+  assert.equal(parsed.serviceLowSpaceThresholdPercent, 10);
+  assert.deepEqual(parsed.serviceTriggerTimes, ['09:30', '13:30', '18:30']);
+  assert.equal(parsed.serviceCooldownMinutes, 15);
+  assert.equal(parsed.recycleScope, 'all');
+});
+
 test('loadConfig/saveConfig/aliases 读写链路正常', async (t) => {
   const root = await makeTempDir('wecom-config-');
   t.after(async () => removeDir(root));
@@ -216,6 +264,9 @@ test('defaultConfig 输出基础字段完整', () => {
   assert.equal(typeof cfg.rootDir, 'string');
   assert.equal(typeof cfg.stateRoot, 'string');
   assert.equal(typeof cfg.recycleRoot, 'string');
+  assert.equal(typeof cfg.serviceRecycleRoot, 'string');
+  assert.equal(typeof cfg.serviceConfigPath, 'string');
+  assert.equal(typeof cfg.serviceStatePath, 'string');
   assert.equal(cfg.theme, 'auto');
   assert.equal(typeof cfg.recycleRetention, 'object');
   assert.equal(cfg.recycleRetention.enabled, true);

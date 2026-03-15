@@ -176,6 +176,27 @@ MOCK_SCRIPT
   return binDir;
 }
 
+async function createMockLaunchctlBin(root) {
+  const binDir = path.join(root, 'fake-launchctl-bin');
+  await fs.mkdir(binDir, { recursive: true });
+  const launchctlPath = path.join(binDir, 'launchctl');
+  await fs.writeFile(
+    launchctlPath,
+    `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == "print" ]]; then
+  echo "mock launchctl print: $*" >&2
+  exit 0
+fi
+echo "mock launchctl: $*" >&2
+exit 0
+`,
+    'utf-8'
+  );
+  await fs.chmod(launchctlPath, 0o755);
+  return binDir;
+}
+
 function assertCommonPayloadEnvelope(payload, action, expectedDryRun) {
   assert.equal(typeof payload, 'object');
   assert.equal(payload.action, action);
@@ -863,6 +884,58 @@ test('无交互 --sync-skills 支持预演与真实同步', async (t) => {
   assert.equal(execPayload.action, 'sync_skills');
   assert.equal(execPayload.ok, true);
   assert.equal(execPayload.summary.skillsMatchedAfter, true);
+});
+
+test('无交互 service-install/status/uninstall 形成完整管理链路', async (t) => {
+  const root = await makeTempDir('wecom-cli-service-mode-');
+  t.after(async () => removeDir(root));
+
+  const profilesRoot = await prepareFixture(root);
+  const stateRoot = path.join(root, 'state');
+  const fakeBin = await createMockLaunchctlBin(root);
+
+  const install = runCli(
+    [
+      '--service-install',
+      '--root',
+      profilesRoot,
+      '--state-root',
+      stateRoot,
+      '--accounts',
+      'all',
+      '--categories',
+      'files',
+      '--service-retain-days',
+      '180',
+    ],
+    {
+      HOME: root,
+      PATH: `${fakeBin}:${process.env.PATH || ''}`,
+    }
+  );
+  assert.equal(install.status, 0);
+  const installPayload = JSON.parse(String(install.stdout || '{}'));
+  assert.equal(installPayload.action, 'service_install');
+  assert.equal(installPayload.ok, true);
+  assert.equal(installPayload.summary.installed, true);
+
+  const status = runCli(['--service-status', '--root', profilesRoot, '--state-root', stateRoot], {
+    HOME: root,
+    PATH: `${fakeBin}:${process.env.PATH || ''}`,
+  });
+  assert.equal(status.status, 0);
+  const statusPayload = JSON.parse(String(status.stdout || '{}'));
+  assert.equal(statusPayload.action, 'service_status');
+  assert.equal(statusPayload.summary.installed, true);
+
+  const uninstall = runCli(['--service-uninstall', '--root', profilesRoot, '--state-root', stateRoot], {
+    HOME: root,
+    PATH: `${fakeBin}:${process.env.PATH || ''}`,
+  });
+  assert.equal(uninstall.status, 0);
+  const uninstallPayload = JSON.parse(String(uninstall.stdout || '{}'));
+  assert.equal(uninstallPayload.action, 'service_uninstall');
+  assert.equal(uninstallPayload.summary.installed, false);
 });
 
 test('无交互 analysis 返回用户报告统计结构', async (t) => {
