@@ -3,6 +3,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { collectRecycleStats, normalizeRecycleRetention } from './recycle-maintenance.js';
 import { detectExternalStorageRoots, discoverAccounts } from './scanner.js';
+import { computeNextTriggerAt, queryServiceStatus, readFilesystemUsage } from './service-manager.js';
 import { inspectSkillBinding, skillBindingStatusLabel } from './skill-installer.js';
 import { normalizeSelfUpdateConfig } from './updater.js';
 
@@ -397,6 +398,43 @@ export async function runDoctor({ config, aliases, projectRoot, appVersion }) {
     )
   );
 
+  const serviceStatus = await queryServiceStatus({
+    stateRoot,
+    serviceConfigPath: config.serviceConfigPath,
+    serviceStatePath: config.serviceStatePath,
+  });
+  const serviceRecycleRoot = path.resolve(
+    String(config.serviceRecycleRoot || path.join(stateRoot, 'service-recycle-bin'))
+  );
+  const serviceRecycleStats = await collectRecycleStats({
+    indexPath: config.indexPath,
+    recycleRoot: serviceRecycleRoot,
+    createIfMissing: false,
+  });
+  const serviceFilesystemUsage = readFilesystemUsage(serviceRecycleRoot);
+  checks.push(
+    buildCheck(
+      'service_status',
+      '自动服务状态',
+      serviceStatus.installed && serviceStatus.login.loaded && serviceStatus.schedule.loaded
+        ? STATUS_PASS
+        : STATUS_WARN,
+      serviceStatus.installed
+        ? `已安装 | 登录触发 ${serviceStatus.login.loaded ? '已载入' : '未载入'} | 定时触发 ${serviceStatus.schedule.loaded ? '已载入' : '未载入'}`
+        : '未安装自动服务',
+      serviceStatus.installed ? '' : '如需自动治理，请执行 wecom-cleaner --service-install 安装自动服务。'
+    )
+  );
+  checks.push(
+    buildCheck(
+      'service_recycle_health',
+      '服务回收站健康',
+      STATUS_PASS,
+      `批次 ${serviceRecycleStats.totalBatches} 个，容量 ${serviceRecycleStats.totalBytes} bytes`,
+      ''
+    )
+  );
+
   const summary = {
     pass: checks.filter((item) => item.status === STATUS_PASS).length,
     warn: checks.filter((item) => item.status === STATUS_WARN).length,
@@ -422,6 +460,18 @@ export async function runDoctor({ config, aliases, projectRoot, appVersion }) {
       recycleBytes: recycleStats.totalBytes,
       recycleThresholdBytes: thresholdBytes,
       recycleOverThreshold,
+      serviceInstalled: Boolean(serviceStatus.installed),
+      serviceLoginLoaded: Boolean(serviceStatus.login.loaded),
+      serviceScheduleLoaded: Boolean(serviceStatus.schedule.loaded),
+      serviceNextRunAt:
+        serviceStatus.nextTriggerAt || computeNextTriggerAt(serviceStatus.config.triggerTimes),
+      serviceDeleteMode: serviceStatus.config.deleteMode,
+      serviceRecycleBatchCount: serviceRecycleStats.totalBatches,
+      serviceRecycleBytes: serviceRecycleStats.totalBytes,
+      serviceLastRunAt: serviceStatus.state.lastRunAt || 0,
+      serviceLastStatus: serviceStatus.state.lastStatus || 'never',
+      serviceLastTriggerSource: serviceStatus.state.lastTriggerSource || '',
+      serviceFilesystemAvailableBytes: Number(serviceFilesystemUsage?.availableBytes || 0),
       skillsStatus: skillBinding?.status || 'unknown',
       skillsMatched: Boolean(skillBinding?.matched),
       skillsInstalled: Boolean(skillBinding?.installed),

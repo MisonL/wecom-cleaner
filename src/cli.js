@@ -2799,6 +2799,7 @@ function mergeRecycleResults(scopeResults, dryRun) {
 
 function buildUserFacingSummary(action, result) {
   const summary = result?.summary || {};
+  const data = result?.data || {};
   const report = result?.data?.report || {};
   const matched = report?.matched || {};
 
@@ -4880,7 +4881,7 @@ async function runServiceRunModeNonInteractive(context, cliArgs, warnings = []) 
     throw new UsageError('自动服务未安装或已停用，请先执行 --service-install。');
   }
 
-  const dryRun = typeof cliArgs.dryRun === 'boolean' ? cliArgs.dryRun : false;
+  const dryRun = resolveDestructiveDryRun(cliArgs);
   const triggerSource =
     typeof cliArgs.serviceTriggerSource === 'string' && cliArgs.serviceTriggerSource.trim()
       ? cliArgs.serviceTriggerSource.trim()
@@ -7265,6 +7266,7 @@ async function runServiceMode(context) {
         context,
         {
           dryRun: false,
+          yes: true,
           serviceTriggerSource: SERVICE_MANUAL_TRIGGER,
         },
         []
@@ -7275,24 +7277,33 @@ async function runServiceMode(context) {
 
     const accounts = await discoverAccounts(context.config.rootDir, context.aliases);
     const selectedAccountIds = await chooseAccounts(accounts, '自动服务配置', {
-      guideTitle: '服务配置步骤 1/6 · 账号范围',
+      guideTitle: '服务配置步骤 1/11 · 账号范围',
       guideRows: [
         { label: '默认', value: '建议选择常用账号或直接全选' },
         { label: '执行', value: '服务会按计划自动处理这些账号的到期缓存' },
       ],
     });
     const selectedCategories = await askCheckbox({
-      message: '服务配置步骤 2/6 · 选择缓存类型',
+      message: '服务配置步骤 2/11 · 选择缓存类型',
       required: true,
       choices: categoryChoices(context.config.defaultCategories),
       validate: (values) => (values.length > 0 ? true : '至少选择一个类型'),
     });
     const includeNonMonthDirs = await askConfirm({
-      message: '服务配置步骤 3/6 · 是否纳入非月份目录？',
+      message: '服务配置步骤 3/11 · 是否纳入非月份目录？',
       default: false,
     });
+    const externalRootsSourceChoice = await askSelect({
+      message: '服务配置步骤 4/11 · 文件存储目录来源',
+      default: 'all',
+      choices: [
+        { name: '全部（默认/手动/自动）', value: 'all' },
+        { name: '仅默认与手动目录', value: 'preset' },
+        { name: '仅自动探测目录', value: 'auto' },
+      ],
+    });
     const retainDays = await askInput({
-      message: '服务配置步骤 4/6 · 请输入源缓存保留天数',
+      message: '服务配置步骤 5/11 · 请输入源缓存保留天数',
       default: '180',
       validate: (value) => {
         const num = Number.parseInt(value, 10);
@@ -7300,16 +7311,64 @@ async function runServiceMode(context) {
       },
     });
     const serviceDeleteMode = await askSelect({
-      message: '服务配置步骤 5/6 · 请选择自动服务删除方式',
+      message: '服务配置步骤 6/11 · 请选择自动服务删除方式',
       default: DELETE_MODES.SERVICE_RECYCLE,
       choices: [
         { name: '移动到服务回收站（默认）', value: DELETE_MODES.SERVICE_RECYCLE },
         { name: '服务直接删除', value: DELETE_MODES.DIRECT },
       ],
     });
+    const serviceRecycleRetentionDays = await askInput({
+      message: '服务配置步骤 7/11 · 服务回收站保留天数',
+      default: '30',
+      validate: (value) => {
+        const num = Number.parseInt(value, 10);
+        return Number.isFinite(num) && num >= 1 ? true : '请输入 >= 1 的整数';
+      },
+    });
+    const serviceRecycleMinKeepBatches = await askInput({
+      message: '服务配置步骤 8/11 · 服务回收站至少保留批次数',
+      default: '3',
+      validate: (value) => {
+        const num = Number.parseInt(value, 10);
+        return Number.isFinite(num) && num >= 1 ? true : '请输入 >= 1 的整数';
+      },
+    });
+    const serviceRecycleThresholdGB = await askInput({
+      message: '服务配置步骤 9/11 · 服务回收站容量阈值（GB）',
+      default: '20',
+      validate: (value) => {
+        const num = Number.parseInt(value, 10);
+        return Number.isFinite(num) && num >= 1 ? true : '请输入 >= 1 的整数';
+      },
+    });
+    const serviceLowSpaceThresholdGB = await askInput({
+      message: '服务配置步骤 10/11 · 系统低空间阈值（GB）',
+      default: '20',
+      validate: (value) => {
+        const num = Number.parseInt(value, 10);
+        return Number.isFinite(num) && num >= 1 ? true : '请输入 >= 1 的整数';
+      },
+    });
+    const serviceLowSpaceThresholdPercent = await askInput({
+      message: '服务配置步骤 11/11 · 系统低空间阈值（百分比）',
+      default: '10',
+      validate: (value) => {
+        const num = Number.parseInt(value, 10);
+        return Number.isFinite(num) && num >= 1 ? true : '请输入 >= 1 的整数';
+      },
+    });
     const triggerTimes = await askInput({
-      message: '服务配置步骤 6/6 · 触发时间（HH:MM,HH:MM,HH:MM）',
+      message: '服务配置补充 · 触发时间（HH:MM,HH:MM,HH:MM）',
       default: '09:30,13:30,18:30',
+    });
+    const serviceCooldownMinutes = await askInput({
+      message: '服务配置补充 · 冷却窗口（分钟）',
+      default: '15',
+      validate: (value) => {
+        const num = Number.parseInt(value, 10);
+        return Number.isFinite(num) && num >= 1 ? true : '请输入 >= 1 的整数';
+      },
     });
 
     let serviceDirectDeleteAck = '';
@@ -7327,10 +7386,16 @@ async function runServiceMode(context) {
         accounts: selectedAccountIds,
         categories: selectedCategories,
         includeNonMonthDirs,
-        externalRootsSource: ['all'],
+        externalRootsSource: [externalRootsSourceChoice],
         serviceRetainDays: Number.parseInt(retainDays, 10),
         serviceDeleteMode,
         serviceDirectDeleteAck,
+        serviceRecycleRetentionDays: Number.parseInt(serviceRecycleRetentionDays, 10),
+        serviceRecycleMinKeepBatches: Number.parseInt(serviceRecycleMinKeepBatches, 10),
+        serviceRecycleThresholdGB: Number.parseInt(serviceRecycleThresholdGB, 10),
+        serviceLowSpaceThresholdGB: Number.parseInt(serviceLowSpaceThresholdGB, 10),
+        serviceLowSpaceThresholdPercent: Number.parseInt(serviceLowSpaceThresholdPercent, 10),
+        serviceCooldownMinutes: Number.parseInt(serviceCooldownMinutes, 10),
         serviceTriggerTimes: triggerTimes
           .split(',')
           .map((item) => item.trim())
