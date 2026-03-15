@@ -23,18 +23,26 @@
 - `--check-update`
 - `--upgrade <npm|github-script>`
 - `--sync-skills`
+- `--service-install`
+- `--service-uninstall`
+- `--service-status`
+- `--service-run`
 
 若缺少动作或动作冲突，退出码为 `2`。
 
 ## 3. 安全确认与 dry-run
 
-破坏性动作：`cleanup-monthly`、`space-governance`、`restore-batch`、`recycle-maintain`。
+破坏性动作：`cleanup-monthly`、`space-governance`、`restore-batch`、`recycle-maintain`、`service-run`。
 
 规则：
 
 - 默认 `dry-run`（不执行真实删除/恢复）。
 - 真实执行需显式传 `--yes`。
 - 若传 `--dry-run false` 且未传 `--yes`，退出码为 `3`。
+- 非交互直删需同时满足：
+  - `--delete-mode direct`
+  - `--direct-delete-ack DIRECT_DELETE`
+  - `--yes`
 - 可通过 `--run-task` 启用阶段协议：
   - `preview`：仅预演阶段。
   - `execute`：仅真实执行阶段（破坏性动作需 `--yes`）。
@@ -64,6 +72,10 @@ JSON 顶层字段：
 - `data.taskPhases`：阶段协议明细（仅在 `--run-task` 时返回）
 - `data.taskCard`：阶段任务卡片（仅在 `--run-task` 时返回）
 - `data.scanDebug`：扫描诊断信息（仅在 `--scan-debug summary|full` 时返回）
+- 破坏性清理类动作新增：
+  - `summary.deleteMode`
+  - `summary.recoverable`
+  - `data.deleteMode`
 
 `cleanup_monthly` 常见 `summary` 字段：
 
@@ -155,6 +167,7 @@ JSON 顶层字段：
 `recycle_maintain` 常见 `summary` 字段：
 
 - `status`
+- `recycleScope`
 - `candidateCount`
 - `selectedByAge` / `selectedBySize`
 - `deletedBatches` / `deletedBytes` / `failedBatches`
@@ -166,6 +179,28 @@ JSON 顶层字段：
 - `thresholdBytes` / `overThreshold`
 - `selectedCandidates`
 - `operations`
+- `scopeResults`（当 `--recycle-scope all` 时返回）
+
+`service_status` 常见 `summary` 字段：
+
+- `installed`
+- `loginLoaded`
+- `scheduleLoaded`
+- `nextRunAt`
+- `deleteMode`
+- `retainDays`
+- `triggerTimes`
+
+`service_run` 常见 `summary` 字段：
+
+- `status`
+- `triggerSource`
+- `deleteMode`
+- `retainDays`
+- `matchedTargets` / `matchedBytes`
+- `reclaimedBytes`
+- `serviceRecycleDeletedBatches` / `serviceRecycleDeletedBytes`
+- `lowSpaceTriggered` / `lowSpaceDeletedBatches` / `lowSpaceDeletedBytes`
 
 `doctor` 常见 `summary` 字段：
 

@@ -15,7 +15,7 @@
 - 命令名：`wecom-cleaner`
 - 仓库：<https://github.com/MisonL/wecom-cleaner>
 
-> 定位：在“可回收、可恢复、可审计”前提下，清理企业微信本地缓存，避免误删业务资料。
+> 定位：手动清理默认立即释放空间；自动服务按规则治理到期缓存，并用服务专用回收站承接自动任务的可恢复需求。
 
 ## 目录
 
@@ -37,22 +37,23 @@
 
 设计原则：
 
-- 安全优先：默认以回收区搬移代替直接删除。
-- 可恢复：所有可执行删除都记录索引并支持按批次恢复。
-- 可审计：关键分支会写入状态码，便于追踪与复盘。
+- 手动优先释放：交互模式默认直接删除，执行前强确认，不留手动备份。
+- 自动服务隔离：服务模式默认先进服务专用回收站，再按服务回收站策略二次清理。
+- 可审计：关键分支会写入状态码与删除方式，便于追踪与复盘。
 - 渐进增强：有 Zig 核心则加速，无则自动回退 Node。
 
 ## 功能总览
 
-| 模块               | 是否可执行删除 | 说明                                               |
-| ------------------ | -------------- | -------------------------------------------------- |
-| 年月清理（默认）   | 是             | 按账号 + 年月 + 类型筛选缓存，支持 dry-run。       |
-| 会话分析           | 否             | 只读分析目录/体积分布，不做删除。                  |
-| 全量空间治理       | 是             | 分级治理高占用缓存目录（安全层/谨慎层/受保护层）。 |
-| 回收区治理         | 是             | 按保留策略清理回收区历史批次，支持 dry-run。       |
-| 恢复已删除批次     | 是             | 基于索引恢复，支持覆盖/重命名/跳过。               |
-| 系统自检（doctor） | 否             | 检查目录权限、账号发现、核心可用性与回收区健康。   |
-| 交互配置           | 否             | 配置根目录、主题、文件存储目录、外部自动探测等。   |
+| 模块               | 是否可执行删除 | 说明                                                      |
+| ------------------ | -------------- | --------------------------------------------------------- |
+| 年月清理（默认）   | 是             | 按账号 + 年月 + 类型筛选缓存，交互模式默认直接删除。      |
+| 会话分析           | 否             | 只读分析目录/体积分布，不做删除。                         |
+| 全量空间治理       | 是             | 分级治理高占用缓存目录，交互模式默认直接删除。            |
+| 回收站治理         | 是             | 按策略清理手动回收站或服务回收站历史批次，支持 dry-run。  |
+| 恢复回收站批次     | 是             | 基于索引恢复手动/服务回收站批次，支持覆盖/重命名/跳过。   |
+| 自动服务           | 是             | 通过 macOS `launchd` 按登录 + 定时 + 低空间阈值自动治理。 |
+| 系统自检（doctor） | 否             | 检查目录权限、账号发现、核心可用性、回收站与服务状态。    |
+| 交互配置           | 否             | 配置根目录、主题、文件存储目录、外部自动探测等。          |
 
 ### 关键能力
 
@@ -70,15 +71,17 @@
 
 3. 删除与恢复链路
 
-- 删除动作统一进入程序回收区，而不是直接 `rm`。
-- 写入 `index.jsonl` 审计记录，恢复按批次回放。
+- 交互模式下，年月清理/全量治理默认直接删除，执行前会明确提示“不可恢复”并要求确认词。
+- 非交互模式默认保持保守：只有显式传 `--delete-mode direct --direct-delete-ack DIRECT_DELETE --yes` 才会直删。
+- 选择 `--delete-mode recycle` 时，仍会写入回收站与 `index.jsonl`，并支持按批次恢复。
 - 恢复时做路径边界校验（含 `realpath` 防符号链接越界）。
-- 恢复支持先 `dry-run` 预演，再选择是否执行真实恢复。
 
-4. 回收区保留策略
+4. 自动服务与服务回收站
 
-- 支持“保留最近 N 批 + 保留近 N 天 + 容量阈值”联合治理。
-- 超过阈值会给出空间提示，可一键进入回收区治理。
+- 自动服务通过 macOS `launchd` 运行，不使用常驻 daemon。
+- 默认触发时机：登录后一次 + 每日 `09:30 / 13:30 / 18:30`。
+- 服务模式默认先移到 `service-recycle-bin/`，再按“保留天数 + 最少保留批次 + 容量阈值”治理。
+- 当系统磁盘可用空间低于阈值时，会按最旧批次优先清理服务回收站。
 
 5. Zig 核心与自动修复
 
@@ -211,12 +214,17 @@ Agent 侧统一任务入口脚本（位于 `skills/wecom-cleaner-agent/scripts/`
 - `--check-update`
 - `--upgrade <npm|github-script>`
 - `--sync-skills`
+- `--service-install`
+- `--service-uninstall`
+- `--service-status`
+- `--service-run`
 
 ### 无交互安全规则
 
-- 破坏性动作（清理/治理/恢复/回收区治理）默认 `dry-run`。
+- 破坏性动作（清理/治理/恢复/回收站治理）默认 `dry-run`。
 - 显式真实执行需带 `--yes`。
 - 若传 `--dry-run false` 但未传 `--yes`，将直接退出（退出码 `3`）。
+- 非交互直删需额外显式传：`--delete-mode direct --direct-delete-ack DIRECT_DELETE`。
 
 ### 常用无交互示例
 
@@ -235,6 +243,15 @@ wecom-cleaner --cleanup-monthly \
   --dry-run false \
   --yes
 
+# 年月清理（非交互直删）
+wecom-cleaner --cleanup-monthly \
+  --accounts all \
+  --cutoff-month 2024-04 \
+  --dry-run false \
+  --delete-mode direct \
+  --direct-delete-ack DIRECT_DELETE \
+  --yes
+
 # 全量空间治理（仅建议项，真实执行）
 wecom-cleaner --space-governance \
   --suggested-only true \
@@ -244,6 +261,9 @@ wecom-cleaner --space-governance \
 
 # 回收区治理（按策略执行）
 wecom-cleaner --recycle-maintain --dry-run false --yes
+
+# 服务回收站治理
+wecom-cleaner --recycle-maintain --recycle-scope service --dry-run false --yes
 
 # 年月清理（三阶段协议：预演 -> 执行 -> 复核）
 wecom-cleaner --cleanup-monthly --accounts all --cutoff-month 2024-04 --run-task preview-execute-verify --yes
@@ -265,12 +285,28 @@ wecom-cleaner --upgrade github-script --upgrade-version 1.3.3 --upgrade-yes
 
 # 单独同步 skills（修复版本不匹配）
 wecom-cleaner --sync-skills --skill-sync-method npm --dry-run false
+
+# 安装自动服务
+wecom-cleaner --service-install \
+  --accounts all \
+  --categories files,images,videos \
+  --service-retain-days 180 \
+  --service-trigger-times 09:30,13:30,18:30
+
+# 查看自动服务状态
+wecom-cleaner --service-status
+
+# 手动触发一次自动服务任务
+wecom-cleaner --service-run
 ```
 
 ### 输出与兼容参数
 
 - `--output json|text`：无交互输出格式，默认 `json`。
 - `--json`：兼容别名，等价于 `--output json`。
+- `--delete-mode direct|recycle|service_recycle`：删除方式。
+- `--direct-delete-ack DIRECT_DELETE`：非交互直删确认词。
+- `--recycle-scope manual|service|all`：回收站治理范围。
 - `--run-task preview|execute|preview-execute-verify`：阶段任务协议（推荐给 Agent）。
 - `--scan-debug off|summary|full`：扫描诊断信息输出等级。
 - `--mode`：兼容参数，建议迁移到动作参数（如 `--cleanup-monthly`）。
@@ -283,6 +319,16 @@ wecom-cleaner --sync-skills --skill-sync-method npm --dry-run false
 - `--upgrade-sync-skills true|false`：升级后是否联动同步 skills（默认 `true`）。
 - `--skill-sync-method npm|github-script`：skills 同步方式（默认 `npm`）。
 - `--skill-sync-ref <x.y.z>`：skills 同步版本标签（通常与程序版本一致）。
+- `--service-retain-days <days>`：自动服务保留天数。
+- `--service-delete-mode service_recycle|direct`：自动服务删除方式。
+- `--service-direct-delete-ack SERVICE_DIRECT_DELETE`：服务直删确认词。
+- `--service-recycle-retention-days <days>`：服务回收站保留天数。
+- `--service-recycle-min-keep-batches <n>`：服务回收站至少保留批次数。
+- `--service-recycle-threshold-gb <n>`：服务回收站容量阈值。
+- `--service-low-space-threshold-gb <n>`：系统低空间绝对阈值。
+- `--service-low-space-threshold-percent <n>`：系统低空间百分比阈值。
+- `--service-trigger-times HH:MM,HH:MM,HH:MM`：自动服务定时点。
+- `--service-cooldown-minutes <n>`：自动服务冷却窗口。
 
 ### 各动作关键统计字段（JSON）
 
@@ -380,6 +426,22 @@ wecom-cleaner --sync-skills --skill-sync-method npm --dry-run false
 - `data.before` / `data.after`：同步前后 skills 绑定详情
 - `data.skillSync`：执行命令与退出码
 
+#### `service-status`
+
+- `summary.installed`：是否已安装自动服务
+- `summary.loginLoaded` / `summary.scheduleLoaded`：登录触发与定时触发是否已载入
+- `summary.nextRunAt`：下一次计划执行时间
+- `summary.deleteMode` / `summary.retainDays` / `summary.triggerTimes`
+
+#### `service-run`
+
+- `summary.triggerSource`：`service_login` / `service_schedule` / `service_manual`
+- `summary.deleteMode`：服务删除方式
+- `summary.matchedTargets` / `matchedBytes`
+- `summary.reclaimedBytes`：本轮处理源缓存释放空间
+- `summary.serviceRecycleDeletedBatches` / `serviceRecycleDeletedBytes`
+- `summary.lowSpaceTriggered` / `lowSpaceDeletedBatches` / `lowSpaceDeletedBytes`
+
 ### 全局参数
 
 - `--root <path>`：Profile 根目录
@@ -416,12 +478,18 @@ wecom-cleaner --sync-skills --skill-sync-method npm --dry-run false
 - `config.json`：交互配置
 - `account-aliases.json`：账号别名
 - `index.jsonl`：删除/恢复流水审计
-- `recycle-bin/`：回收区
+- `recycle-bin/`：手动回收站
+- `service-recycle-bin/`：自动服务专用回收站
+- `service-config.json`：自动服务配置
+- `service-state.json`：自动服务最近运行状态
 - `.wecom-cleaner.lock`：运行锁文件（防并发误操作）
 
 `index.jsonl` 常见字段：
 
 - `scope`：`cleanup_monthly` 或 `space_governance`
+- `deleteMode`：`direct` / `recycle` / `service_recycle`
+- `recycleScope`：`manual` / `service` / `null`
+- `triggerSource`：`interactive` / `cli` / `service_*`
 - `tier`：`safe` / `caution` / `protected`
 - `status`：`success`、`dry_run`、`skipped_*`、`failed`
 - `error_type`：错误分类（如 `path_not_found`、`path_validation_failed`、`permission_denied`）

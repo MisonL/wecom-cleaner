@@ -12,10 +12,25 @@
 - 新增 npm 命令：
   - `npm run release:ship`
   - `npm run release:ship:dry-run`
+- 新增服务管理模块：`launchd` 安装/卸载/状态查询、服务配置与服务状态持久化。
+- 新增无交互服务动作：
+  - `--service-install`
+  - `--service-uninstall`
+  - `--service-status`
+  - `--service-run`
 
 ### Changed
 
 - 发布门禁的 shellcheck 范围新增 `scripts/release.sh`。
+- 交互模式下，`cleanup_monthly` 与 `space_governance` 默认删除方式改为 `direct`，执行前明确提示“不可恢复”。
+- 无交互模式新增 `--delete-mode direct|recycle|service_recycle`、`--direct-delete-ack DIRECT_DELETE`、`--recycle-scope manual|service|all`。
+- 恢复链路支持同时识别手动回收站与服务回收站批次。
+- `e2e:smoke` 已适配新的删除方式步骤与确认词。
+
+### Fixed
+
+- 修复“手动清理后空间未立即释放”的体验偏差：手动默认不再先搬运到回收区。
+- 修复回收站治理在多回收站语义下的无交互兼容字段缺口，保持旧 JSON 契约可读。
 
 ## [1.3.3] - 2026-02-27
 
