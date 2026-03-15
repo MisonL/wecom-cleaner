@@ -110,7 +110,7 @@
   - npm 升级（默认）
   - GitHub 脚本升级
 - 程序升级完成后默认联动同步 skills，避免“程序已升级但 skills 仍旧版”。
-- 无交互模式可用 `--sync-skills` 单独修复 skills 版本绑定。
+- 无交互模式可用 `wecom-cleaner skills sync` 单独修复 skills 版本绑定。
 
 ## 能力边界
 
@@ -124,10 +124,11 @@
 
 ## 安装与运行
 
-### 方式一：直接运行
+### 方式一：全局安装（npm）
 
 ```bash
-npx @mison/wecom-cleaner
+npm install -g @mison/wecom-cleaner
+wecom-cleaner
 ```
 
 ### 方式二：本地开发
@@ -154,7 +155,13 @@ npm run e2e:smoke
 
 内置技能：`wecom-cleaner-agent`（用于 Codex/Agent 无交互调用）。
 
-推荐方式（npmjs，最稳定）：
+若已全局安装主程序，直接使用：
+
+```bash
+wecom-cleaner-skill install
+```
+
+无需全局安装时，也可一次性执行：
 
 ```bash
 npx --yes --package=@mison/wecom-cleaner wecom-cleaner-skill install
@@ -171,10 +178,10 @@ npx --yes --package=@mison/wecom-cleaner wecom-cleaner-skill install
 示例：
 
 ```bash
-npx --yes --package=@mison/wecom-cleaner wecom-cleaner-skill install --force
-npx --yes --package=@mison/wecom-cleaner wecom-cleaner-skill install --target ~/.codex/skills
-npx --yes --package=@mison/wecom-cleaner wecom-cleaner-skill status --json
-npx --yes --package=@mison/wecom-cleaner wecom-cleaner-skill sync
+wecom-cleaner-skill install --force
+wecom-cleaner-skill install --target ~/.codex/skills
+wecom-cleaner-skill status --json
+wecom-cleaner-skill sync
 ```
 
 GitHub 备选方式（无 npm 包依赖）：
@@ -205,7 +212,7 @@ Agent 侧统一任务入口脚本（位于 `skills/wecom-cleaner-agent/scripts/`
 运行方式：
 
 - 不带参数：进入交互菜单（TUI）。
-- 带参数：进入无交互执行（默认输出 JSON，适合 AI Agent）。
+- 带参数：进入无交互执行（公共 v2 默认输出 `agent-json`，适合 AI Agent）。
 - 带参数但需交互：可追加 `--interactive` 强制进入交互流程（支持配合 `--mode` 直达功能）。
 - 完整契约文档：[`docs/NON_INTERACTIVE_SPEC.md`](./docs/NON_INTERACTIVE_SPEC.md)。
 
@@ -226,9 +233,8 @@ Agent 侧统一任务入口脚本（位于 `skills/wecom-cleaner-agent/scripts/`
 
 ### 无交互安全规则
 
-- 破坏性动作（清理/治理/恢复/回收站治理）默认 `dry-run`。
-- 显式真实执行需带 `--yes`。
-- 若传 `--dry-run false` 但未传 `--yes`，将直接退出（退出码 `3`）。
+- `plan monthly-cleanup` / `plan space-governance` 默认只做预演，不执行真实删除。
+- 真实执行统一走确认入口：`apply --ack APPLY`、`recover ... --ack ...`、`service run --ack SERVICE_RUN`、`update apply ... --ack UPGRADE`、`skills sync --ack SKILLS_SYNC`。
 - 非交互直删需额外显式传：`--delete-mode direct --direct-delete-ack DIRECT_DELETE`。
 
 ### 常用无交互示例
@@ -276,7 +282,7 @@ wecom-cleaner recover restore 20260226-105009-ffa098 --conflict rename --output 
 # 批次恢复（真实执行）
 wecom-cleaner recover restore 20260226-105009-ffa098 --conflict rename --ack RESTORE --output agent-json
 
-# 系统自检（默认 JSON 输出）
+# 系统自检（默认 agent-json 输出）
 wecom-cleaner inspect doctor --output agent-json
 
 # 检查更新（不执行升级）
@@ -306,23 +312,28 @@ wecom-cleaner service status --output agent-json
 wecom-cleaner service run --ack SERVICE_RUN --output agent-json
 ```
 
+说明：
+
+- `apply` 会校验 `plan` 阶段冻结下来的目标范围；若目录内容或自动探测结果已漂移，会拒绝执行。
+- `verify` 复用同一份冻结范围，不会因后续重新扫描而把计划外变化混入复核。
+
 ### 输出与兼容参数
 
-- `--output json|text|agent-json`：无交互输出格式，默认 `json`。
-- `--json`：兼容别名，等价于 `--output json`。
+- `--output text|agent-json`：公共 v2 输出格式，默认 `agent-json`。
+- `--json`：兼容别名，仅用于旧调用兼容，不属于公共 v2 契约。
 - `--delete-mode direct|recycle|service_recycle`：删除方式。
 - `--direct-delete-ack DIRECT_DELETE`：非交互直删确认词。
 - `--recycle-scope manual|service|all`：回收站治理范围。
-- `--run-task preview|execute|preview-execute-verify`：阶段任务协议（推荐给 Agent）。
+- `--run-task preview|execute|preview-execute-verify`：兼容壳层的阶段任务协议。
 - `--scan-debug off|summary|full`：扫描诊断信息输出等级。
-- `--mode`：兼容参数，建议迁移到动作参数（如 `--cleanup-monthly`）。
+- `--mode`：兼容参数，建议迁移到 v2 子命令（如 `inspect ...` / `plan ...` / `apply ...`）。
 - `--save-config`：将本次全局配置参数写回 `config.json`。
 - `--help` / `-h`：输出命令帮助并退出。
 - `--version` / `-v`：输出版本号并退出。
 - `--upgrade-channel stable|pre`：升级检查通道（稳定版/预发布）。
 - `--upgrade-version <x.y.z>`：指定升级目标版本。
-- `--upgrade-yes`：确认执行升级动作（无此参数将拒绝执行升级）。
-- `--upgrade-sync-skills true|false`：升级后是否联动同步 skills（默认 `true`）。
+- `--upgrade-yes`：兼容旧升级确认参数；公共 v2 升级请使用 `update apply ... --ack UPGRADE`。
+- `--upgrade-sync-skills true|false`：兼容旧升级联动参数；公共 v2 默认仍会联动同步 skills。
 - `--skill-sync-method npm|github-script`：skills 同步方式（默认 `npm`）。
 - `--skill-sync-ref <x.y.z>`：skills 同步版本标签（通常与程序版本一致）。
 - `--service-retain-days <days>`：自动服务保留天数。
@@ -460,7 +471,7 @@ wecom-cleaner service run --ack SERVICE_RUN --output agent-json
 - `--theme <auto|light|dark>`：Logo 主题
 - `--interactive`：即使携带参数也进入交互流程（可配合 `--mode`）
 - `--force`：锁异常场景下强制清理并继续（兜底参数，通常无需）
-- `--run-task preview|execute|preview-execute-verify`：阶段任务协议（推荐无交互自动化调用）
+- `--run-task preview|execute|preview-execute-verify`：兼容壳层的阶段任务协议。
 - `--scan-debug off|summary|full`：附加扫描诊断信息
 
 ### `--theme` 可选值

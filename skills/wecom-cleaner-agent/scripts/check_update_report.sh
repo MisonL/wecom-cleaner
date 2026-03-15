@@ -18,7 +18,7 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 if ! command -v wecom-cleaner >/dev/null 2>&1; then
-  echo "错误：未找到 wecom-cleaner 命令，请先安装 @mison/wecom-cleaner。" >&2
+  echo "错误：未找到 wecom-cleaner 命令，请先执行 npm install -g @mison/wecom-cleaner。" >&2
   exit 2
 fi
 

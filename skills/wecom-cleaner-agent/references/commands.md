@@ -94,7 +94,7 @@ wecom-cleaner skills sync --skill-sync-method github-script --skill-sync-ref 1.3
 ## 3. 回退方案：直接调用 wecom-cleaner
 
 仅在脚本不可用时使用直接命令，且保持 `--output agent-json`。
-破坏性动作必须使用 `--run-task`，并优先消费 `data.taskCard` / `data.taskPhases`。
+兼容壳层脚本内部会用 `--run-task`；直接回退到公共 v2 CLI 时，优先使用 `plan / apply / verify` 或对应确认子命令。
 
 ```bash
 # 年月清理（预演）
@@ -144,7 +144,7 @@ wecom-cleaner skills sync --skill-sync-method npm --ack SKILLS_SYNC --output age
 - `0`：成功（含预演成功）
 - `1`：业务失败或运行失败
 - `2`：参数错误或动作冲突
-- `3`：请求真实执行但缺少确认（`--yes`）
+- `3`：请求真实执行但缺少确认（如 `--ack APPLY` / `--ack RESTORE` / `--ack UPGRADE`）
 
 ## 5. Agent 输出要求
 

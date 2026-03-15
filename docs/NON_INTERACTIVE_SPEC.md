@@ -57,9 +57,9 @@
 
 公共 v2 子命令默认输出 `agent-json`，可通过 `--output text` 切换文本任务卡片（中文结论 + 范围 + 统计 + 风险提示）。
 
-- `--output json|text|agent-json`（公共 v2 默认 `agent-json`）
-- `--json` 为兼容别名（等价 `--output json`）
-- `--run-task preview|execute|preview-execute-verify`（推荐破坏性动作使用）
+- `--output text|agent-json`（公共 v2 默认 `agent-json`）
+- `--json` 为兼容别名（等价 `--output json`，不属于公共 v2 契约）
+- `--run-task preview|execute|preview-execute-verify`（兼容壳层阶段协议）
 - `--scan-debug off|summary|full`（默认 `off`）
 
 JSON 顶层字段：
@@ -297,8 +297,6 @@ JSON 顶层字段：
 - `--save-config`：把本次全局参数落盘到 `config.json`
 - `--upgrade-channel <stable|pre>`：更新通道（稳定版/预发布）
 - `--upgrade-version <x.y.z>`：升级到指定版本
-- `--upgrade-yes`：确认执行升级（无此参数将拒绝执行升级）
-- `--upgrade-sync-skills <true|false>`：升级后是否联动同步 skills（默认 `true`）
 - `--skill-sync-method <npm|github-script>`：skills 同步方式
 - `--skill-sync-ref <x.y.z>`：skills 同步版本标签
 - `--run-task preview|execute|preview-execute-verify`：无交互阶段协议
@@ -322,6 +320,7 @@ JSON 顶层字段：
 说明：
 
 - `inspect footprint` 默认按 `external-roots-source=all` 读取外部目录来源（只读动作，避免漏扫）。
+- `inspect footprint` 为严格只读：不会创建状态目录、索引文件或锁文件，也不会触发 Zig 自动修复下载。
 
 ### 7.3 `plan space-governance`
 
@@ -342,6 +341,12 @@ JSON 顶层字段：
 - `apply <planId> --ack APPLY`
 - `verify <runId>`
 - 通常与 `plan monthly-cleanup` / `plan space-governance` 配套使用
+
+说明：
+
+- `apply` 只会执行 `plan` 阶段冻结下来的目标范围；若当前扫描结果与计划签名不一致，会拒绝执行，避免计划漂移。
+- `verify` 复用同一份冻结范围做复核，不会因为重新扫描或自动探测变化把计划外内容混入结果。
+- 对 `plan space-governance --targets ...` 这类显式目标计划，若目标已在执行阶段被清理，`verify` 会按“已清理完成”处理，不会误报参数错误。
 
 ### 7.5 `recover restore <batchId>`
 
@@ -395,4 +400,7 @@ JSON 顶层字段：
 
 ## 8. 兼容参数
 
-- `--mode`：兼容旧调用，会映射到动作参数并附带 warning，建议迁移。
+- `--json`：兼容旧 JSON 输出别名，不属于公共 v2 契约。
+- `--mode`：兼容旧调用，会映射到 v2 子命令并附带 warning，建议迁移。
+- `--run-task`：兼容壳层使用的阶段协议参数；公共 v2 CLI 优先直接使用 `plan / apply / verify` 或对应确认子命令。
+- `--upgrade-yes` / `--upgrade-sync-skills`：兼容旧升级调用；公共 v2 升级入口使用 `update apply <method> --ack UPGRADE`。

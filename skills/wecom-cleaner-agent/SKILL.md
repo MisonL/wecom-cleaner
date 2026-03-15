@@ -16,7 +16,7 @@ description: 用于执行和编排 wecom-cleaner 的无交互 Agent 技能。当
 1. 全程只用无交互命令（禁止直接运行 `wecom-cleaner` 进入 TUI）。
 2. v2 主控制面优先使用新 CLI 子命令；现有脚本入口属于兼容壳层，优先用于报告呈现。
 3. 破坏性动作（清理/治理/恢复/回收区治理）默认预演；真实执行必须有明确授权。
-4. 回退到 CLI 时，破坏性动作必须使用 `--run-task` 协议（`preview` 或 `preview-execute-verify`），禁止手工串联多次命令。
+4. 回退到 CLI 时，优先使用公共 v2 子命令；只读动作走 `inspect ...`，破坏性动作走 `plan ... -> apply ... -> verify ...` 或对应确认子命令，禁止混用旧顶层旗标。
 5. 升级动作默认只做检查或预演（`--execute false`）；真实升级必须有明确授权。
 6. 若预演命中为 `0`，必须结束并说明“无需执行”，不得继续真实执行。
 7. 最终汇报必须是中文用户视角，先结论再细节，并解释关键指标含义。
@@ -48,8 +48,9 @@ description: 用于执行和编排 wecom-cleaner 的无交互 Agent 技能。当
 - 破坏性动作脚本内部会做：预演 ->（可选）真实执行 ->（可选）复核。
 - 升级脚本默认“检查 + 预演”；只有明确授权才执行真实升级。
 - CLI 回退时：
-  - 仅预演：`--run-task preview`
-  - 已授权执行：`--run-task preview-execute-verify --yes`
+  - 只读动作：`wecom-cleaner inspect ... --output agent-json`
+  - 年月清理/全量治理：先 `wecom-cleaner plan ... --output agent-json`，再按授权执行 `wecom-cleaner apply <plan-id> --ack APPLY`
+  - 恢复/回收区/服务/升级/skills：直接走各自的确认入口（如 `recover ... --ack ...`、`update apply ... --ack UPGRADE`、`skills sync --ack SKILLS_SYNC`）
 
 推荐参数：
 
@@ -72,7 +73,7 @@ description: 用于执行和编排 wecom-cleaner 的无交互 Agent 技能。当
 ## 异常处理
 
 - 参数错误（退出码 `2`）：说明缺失参数并给出可执行示例。
-- 缺少确认（退出码 `3`）：提示需加 `--execute true`（脚本）或 `--dry-run false --yes`（CLI）。
+- 缺少确认（退出码 `3`）：提示需加 `--execute true`（脚本）或对应确认参数（如 `--ack APPLY` / `--ack RESTORE` / `--ack UPGRADE`）。
 - 业务失败（退出码 `1`）：提取 `errors.code/message`，给出下一步排查建议。
 - 若发现 `warnings` 或 `errors` 非空，结论里必须明确标注。
 
