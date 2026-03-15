@@ -938,6 +938,55 @@ test('无交互 service-install/status/uninstall 形成完整管理链路', asyn
   assert.equal(uninstallPayload.summary.installed, false);
 });
 
+test('无交互 service-run 默认回退为 dry-run，真实执行必须显式 --yes', async (t) => {
+  const root = await makeTempDir('wecom-cli-service-run-confirm-');
+  t.after(async () => removeDir(root));
+
+  const profilesRoot = await prepareFixture(root);
+  const stateRoot = path.join(root, 'state');
+  const fakeBin = await createMockLaunchctlBin(root);
+
+  const install = runCli(
+    [
+      '--service-install',
+      '--root',
+      profilesRoot,
+      '--state-root',
+      stateRoot,
+      '--accounts',
+      'all',
+      '--categories',
+      'files',
+      '--service-retain-days',
+      '180',
+    ],
+    {
+      HOME: root,
+      PATH: `${fakeBin}:${process.env.PATH || ''}`,
+    }
+  );
+  assert.equal(install.status, 0);
+
+  const previewResult = runCli(['--service-run', '--root', profilesRoot, '--state-root', stateRoot], {
+    HOME: root,
+    PATH: `${fakeBin}:${process.env.PATH || ''}`,
+  });
+  assert.equal(previewResult.status, 0);
+  const previewPayload = JSON.parse(String(previewResult.stdout || '{}'));
+  assert.equal(previewPayload.action, 'service_run');
+  assert.equal(previewPayload.dryRun, true);
+
+  const executeResult = runCli(
+    ['--service-run', '--root', profilesRoot, '--state-root', stateRoot, '--dry-run', 'false'],
+    {
+      HOME: root,
+      PATH: `${fakeBin}:${process.env.PATH || ''}`,
+    }
+  );
+  assert.equal(executeResult.status, 3);
+  assert.match(String(executeResult.stderr || ''), /确认错误/);
+});
+
 test('无交互 analysis 返回用户报告统计结构', async (t) => {
   const root = await makeTempDir('wecom-cli-ni-analysis-');
   t.after(async () => removeDir(root));

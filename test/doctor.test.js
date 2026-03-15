@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import { runDoctor } from '../src/doctor.js';
+import { resolveServicePlistPaths } from '../src/service-manager.js';
 import { appendJsonLine, ensureDir } from '../src/utils.js';
 import { ensureFile, makeTempDir, removeDir, toBase64Utf8 } from './helpers/temp.js';
 
@@ -67,17 +68,52 @@ process.exit(0);
   await fs.chmod(filePath, 0o755).catch(() => {});
 }
 
+async function writeFakeLaunchctlBin(root) {
+  const binDir = path.join(root, 'fake-launchctl-bin');
+  const launchctlPath = path.join(binDir, 'launchctl');
+  await ensureDir(binDir);
+  await fs.writeFile(
+    launchctlPath,
+    `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == "print" ]]; then
+  echo "mock launchctl print: $*" >&2
+  exit 0
+fi
+echo "mock launchctl: $*" >&2
+exit 0
+`,
+    'utf-8'
+  );
+  await fs.chmod(launchctlPath, 0o755).catch(() => {});
+  return binDir;
+}
+
 test('runDoctor 在健康场景下返回 pass', async (t) => {
   const root = await makeTempDir('wecom-doctor-pass-');
   t.after(async () => removeDir(root));
   const oldCodexHome = process.env.CODEX_HOME;
+  const oldHome = process.env.HOME;
+  const oldPath = process.env.PATH;
   process.env.CODEX_HOME = path.join(root, 'codex-home');
+  process.env.HOME = root;
+  process.env.PATH = `${await writeFakeLaunchctlBin(root)}:${oldPath || ''}`;
   t.after(() => {
     if (oldCodexHome === undefined) {
       delete process.env.CODEX_HOME;
+    } else {
+      process.env.CODEX_HOME = oldCodexHome;
+    }
+    if (oldHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = oldHome;
+    }
+    if (oldPath === undefined) {
+      delete process.env.PATH;
       return;
     }
-    process.env.CODEX_HOME = oldCodexHome;
+    process.env.PATH = oldPath;
   });
 
   const target = resolveRuntimeTarget();
@@ -86,7 +122,10 @@ test('runDoctor 在健康场景下返回 pass', async (t) => {
   const profilesRoot = path.join(dataRoot, 'Documents', 'Profiles');
   const stateRoot = path.join(root, 'state');
   const recycleRoot = path.join(stateRoot, 'recycle-bin');
+  const serviceRecycleRoot = path.join(stateRoot, 'service-recycle-bin');
   const indexPath = path.join(stateRoot, 'index.jsonl');
+  const serviceConfigPath = path.join(stateRoot, 'service-config.json');
+  const serviceStatePath = path.join(stateRoot, 'service-state.json');
   const externalRoot = path.join(root, 'WXWork_Data_Custom');
 
   await ensureFile(
@@ -98,7 +137,28 @@ test('runDoctor 在健康场景下返回 pass', async (t) => {
   );
   await ensureFile(path.join(externalRoot, 'WXWork Files', 'Caches', 'Files', '2024-01', 'a.bin'), 'a');
   await ensureDir(recycleRoot);
+  await ensureDir(serviceRecycleRoot);
   await ensureFile(indexPath, '');
+  await ensureFile(
+    serviceConfigPath,
+    JSON.stringify({
+      enabled: true,
+      retainDays: 180,
+      deleteMode: 'service_recycle',
+      triggerTimes: ['09:30', '13:30', '18:30'],
+    })
+  );
+  await ensureFile(
+    serviceStatePath,
+    JSON.stringify({
+      lastRunAt: Date.now() - 3600_000,
+      lastStatus: 'success',
+      lastTriggerSource: 'service_schedule',
+    })
+  );
+  const plistPaths = resolveServicePlistPaths(root);
+  await ensureFile(plistPaths.login, 'plist-login');
+  await ensureFile(plistPaths.schedule, 'plist-schedule');
   await ensureFile(path.join(process.env.CODEX_HOME, 'skills', 'wecom-cleaner-agent', 'SKILL.md'), '# skill');
   await ensureFile(
     path.join(process.env.CODEX_HOME, 'skills', 'wecom-cleaner-agent', 'version.json'),
@@ -137,7 +197,10 @@ test('runDoctor 在健康场景下返回 pass', async (t) => {
       rootDir: profilesRoot,
       stateRoot,
       recycleRoot,
+      serviceRecycleRoot,
       indexPath,
+      serviceConfigPath,
+      serviceStatePath,
       externalStorageRoots: [externalRoot],
       externalStorageAutoDetect: false,
       recycleRetention: {
@@ -157,6 +220,7 @@ test('runDoctor 在健康场景下返回 pass', async (t) => {
   assert.equal(report.summary.warn, 0);
   assert.equal(report.metrics.accountCount >= 1, true);
   assert.equal(report.metrics.externalStorageCount >= 1, true);
+  assert.equal(report.metrics.serviceInstalled, true);
 });
 
 test('runDoctor 在异常场景下返回 fail/warn 并给出建议', async (t) => {
