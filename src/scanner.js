@@ -25,6 +25,8 @@ import {
 const CATEGORY_BY_KEY = new Map(CACHE_CATEGORIES.map((item) => [item.key, item]));
 const WWSECURITY_KEY = 'wwsecurity';
 const EXTERNAL_STORAGE_CACHE_RELATIVE = path.join('WXWork Files', 'Caches');
+const EXTERNAL_STORAGE_FILE_RELATIVE = path.join('WXWork Files', 'File');
+const EXTERNAL_STORAGE_IMAGE_RELATIVE = path.join('WXWork Files', 'Image');
 const EXTERNAL_SOURCE_BUILTIN = 'builtin';
 const EXTERNAL_SOURCE_CONFIGURED = 'configured';
 const EXTERNAL_SOURCE_AUTO = 'auto';
@@ -185,7 +187,12 @@ async function detectExternalStorageMarkers(cacheRoot) {
 async function isLikelyExternalStorageRoot(rootPath, options = {}) {
   const strictMarkers = options.strictMarkers === true;
   const cacheRoot = path.join(rootPath, EXTERNAL_STORAGE_CACHE_RELATIVE);
-  if (!(await isDirectoryPath(cacheRoot))) {
+  const fileRoot = path.join(rootPath, EXTERNAL_STORAGE_FILE_RELATIVE);
+  const imageRoot = path.join(rootPath, EXTERNAL_STORAGE_IMAGE_RELATIVE);
+  const hasCacheRoot = await isDirectoryPath(cacheRoot);
+  const hasFileRoot = await isDirectoryPath(fileRoot);
+  const hasImageRoot = await isDirectoryPath(imageRoot);
+  if (!hasCacheRoot && !hasFileRoot && !hasImageRoot) {
     return false;
   }
 
@@ -193,11 +200,27 @@ async function isLikelyExternalStorageRoot(rootPath, options = {}) {
     return true;
   }
 
-  const markers = await detectExternalStorageMarkers(cacheRoot);
-  if (markers.monthLikeCategoryCount >= 1) {
-    return true;
+  if (hasCacheRoot) {
+    const markers = await detectExternalStorageMarkers(cacheRoot);
+    if (markers.monthLikeCategoryCount >= 1) {
+      return true;
+    }
+    if (markers.knownCategoryCount >= 2) {
+      return true;
+    }
   }
-  return markers.knownCategoryCount >= 2;
+
+  for (const candidateRoot of [fileRoot, imageRoot]) {
+    if (!(await isDirectoryPath(candidateRoot))) {
+      continue;
+    }
+    const childDirs = await listSubDirectories(candidateRoot);
+    if (childDirs.some((dirName) => normalizeMonthKey(dirName))) {
+      return true;
+    }
+  }
+
+  return hasFileRoot || hasImageRoot;
 }
 
 function normalizeExternalStorageRootCandidate(rawPath) {
@@ -206,15 +229,16 @@ function normalizeExternalStorageRootCandidate(rawPath) {
     return null;
   }
   const normalized = path.resolve(input);
-  const lower = normalized.toLowerCase();
-  const wxworkFilesSuffix = `${path.sep}wxwork files`;
-  const cachesSuffix = `${wxworkFilesSuffix}${path.sep}caches`;
-
-  if (lower.endsWith(cachesSuffix)) {
-    return path.dirname(path.dirname(normalized));
-  }
-  if (lower.endsWith(wxworkFilesSuffix)) {
-    return path.dirname(normalized);
+  const segments = normalized.split(path.sep);
+  const wxworkFilesIndex = segments.findIndex(
+    (segment) => String(segment || '').trim().toLowerCase() === 'wxwork files'
+  );
+  if (wxworkFilesIndex >= 0) {
+    const rootSegments = segments.slice(0, wxworkFilesIndex);
+    if (rootSegments.length === 0) {
+      return path.sep;
+    }
+    return rootSegments.join(path.sep) || path.sep;
   }
   return normalized;
 }
@@ -1160,40 +1184,68 @@ export async function scanSpaceGovernanceTargets({
   }
 
   for (const externalRoot of externalStorageRoots || []) {
-    const cacheRoot = path.join(externalRoot, EXTERNAL_STORAGE_CACHE_RELATIVE);
-    const stat = await fs.stat(cacheRoot).catch(() => null);
-    if (!stat || !stat.isDirectory()) {
-      continue;
-    }
-
-    const relPath = path.relative(externalRoot, cacheRoot) || cacheRoot;
-    const idSuffix = `${externalRoot}:${relPath}`.replace(/[\\/]/g, '|');
     const labelSuffix = path.basename(externalRoot) || 'WXWork_Data';
+    const externalTargets = [
+      {
+        key: 'external_wxwork_files_caches',
+        label: `外部聊天缓存目录(${labelSuffix})`,
+        desc: '企业微信外部聊天缓存目录，清理后可按需重新下载。',
+        relativePath: EXTERNAL_STORAGE_CACHE_RELATIVE,
+        tier: SPACE_GOVERNANCE_TIERS.CAUTION,
+        deletable: true,
+      },
+      {
+        key: 'external_wxwork_files_saved_files',
+        label: `外部已保存文件目录(${labelSuffix})`,
+        desc: '用户保存/下载后的文件目录，不属于聊天缓存自动清理范围。',
+        relativePath: EXTERNAL_STORAGE_FILE_RELATIVE,
+        tier: SPACE_GOVERNANCE_TIERS.PROTECTED,
+        deletable: false,
+      },
+      {
+        key: 'external_wxwork_files_saved_images',
+        label: `外部已保存图片目录(${labelSuffix})`,
+        desc: '用户保存/下载后的图片目录，不属于聊天缓存自动清理范围。',
+        relativePath: EXTERNAL_STORAGE_IMAGE_RELATIVE,
+        tier: SPACE_GOVERNANCE_TIERS.PROTECTED,
+        deletable: false,
+      },
+    ];
 
-    candidates.push({
-      id: `external_wxwork_files_caches:global:${idSuffix}`,
-      scope: 'space_governance',
-      path: cacheRoot,
-      directoryName: path.basename(cacheRoot),
-      sizeBytes: 0,
-      mtimeMs: stat.mtimeMs || 0,
-      targetKey: 'external_wxwork_files_caches',
-      targetLabel: `外部文件缓存目录(${labelSuffix})`,
-      targetDesc: '企业微信外部文件存储缓存目录，清理后可按需重新下载。',
-      tier: SPACE_GOVERNANCE_TIERS.CAUTION,
-      deletable: true,
-      accountId: null,
-      accountShortId: '外部存储',
-      userName: '外部存储',
-      corpName: externalRoot,
-      accountPath: externalRoot,
-      categoryKey: 'external_wxwork_files_caches',
-      categoryLabel: `外部文件缓存目录(${labelSuffix})`,
-      monthKey: null,
-      categoryPath: relPath,
-      externalStorageRoot: externalRoot,
-      isExternalStorage: true,
-    });
+    for (const target of externalTargets) {
+      const targetPath = path.join(externalRoot, target.relativePath);
+      const stat = await fs.stat(targetPath).catch(() => null);
+      if (!stat || !stat.isDirectory()) {
+        continue;
+      }
+
+      const relPath = path.relative(externalRoot, targetPath) || targetPath;
+      const idSuffix = `${externalRoot}:${relPath}`.replace(/[\\/]/g, '|');
+      candidates.push({
+        id: `${target.key}:global:${idSuffix}`,
+        scope: 'space_governance',
+        path: targetPath,
+        directoryName: path.basename(targetPath),
+        sizeBytes: 0,
+        mtimeMs: stat.mtimeMs || 0,
+        targetKey: target.key,
+        targetLabel: target.label,
+        targetDesc: target.desc,
+        tier: target.tier,
+        deletable: target.deletable,
+        accountId: null,
+        accountShortId: '外部存储',
+        userName: '外部存储',
+        corpName: externalRoot,
+        accountPath: externalRoot,
+        categoryKey: target.key,
+        categoryLabel: target.label,
+        monthKey: null,
+        categoryPath: relPath,
+        externalStorageRoot: externalRoot,
+        isExternalStorage: true,
+      });
+    }
   }
 
   const sizeResult = await calculateSizesWithEngine({

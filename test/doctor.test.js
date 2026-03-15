@@ -136,6 +136,8 @@ test('runDoctor 在健康场景下返回 pass', async (t) => {
     })
   );
   await ensureFile(path.join(externalRoot, 'WXWork Files', 'Caches', 'Files', '2024-01', 'a.bin'), 'a');
+  await ensureFile(path.join(externalRoot, 'WXWork Files', 'File', '2024-01', 'saved.docx'), 'saved');
+  await ensureFile(path.join(externalRoot, 'WXWork Files', 'Image', '2024-01', 'saved.png'), 'saved');
   await ensureDir(recycleRoot);
   await ensureDir(serviceRecycleRoot);
   await ensureFile(indexPath, '');
@@ -221,6 +223,8 @@ test('runDoctor 在健康场景下返回 pass', async (t) => {
   assert.equal(report.metrics.accountCount >= 1, true);
   assert.equal(report.metrics.externalStorageCount >= 1, true);
   assert.equal(report.metrics.serviceInstalled, true);
+  assert.equal(report.metrics.externalSavedFileBytes > 0, true);
+  assert.equal(report.metrics.externalSavedImageBytes > 0, true);
 });
 
 test('runDoctor 在异常场景下返回 fail/warn 并给出建议', async (t) => {

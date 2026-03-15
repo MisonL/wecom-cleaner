@@ -86,18 +86,20 @@ test('detectExternalStorageRoots 支持内置/手动/自动探测与缓存', asy
 
   const builtInRoot = path.join(root, 'Library', 'Containers', 'com.tencent.WeWorkMac', 'Data', 'Documents');
   const manualRoot = path.join(root, 'Custom-Manual-Storage');
+  const manualSubPath = path.join(manualRoot, 'WXWork Files', 'File');
   const autoRoot = path.join(root, 'Auto-Storage-Root');
   const fakeRoot = path.join(root, 'Fake-Storage-Root');
 
   await ensureFile(path.join(profilesRoot, 'placeholder.txt'), 'ok');
   await ensureFile(path.join(builtInRoot, 'WXWork Files', 'Caches', 'Files', '2024-01', 'a.txt'), 'a');
   await ensureFile(path.join(manualRoot, 'WXWork Files', 'Caches', 'Files', '2024-02', 'a.txt'), 'a');
+  await ensureFile(path.join(manualRoot, 'WXWork Files', 'File', '2024-02', 'saved.docx'), 'a');
   await ensureFile(path.join(autoRoot, 'WXWork Files', 'Caches', 'Files', '2024-03', 'a.txt'), 'a');
   await ensureFile(path.join(fakeRoot, 'WXWork Files', 'Caches', 'OtherAppCache', 'a.txt'), 'a');
 
   const first = await detectExternalStorageRoots({
     profilesRoot,
-    configuredRoots: [manualRoot],
+    configuredRoots: [manualSubPath],
     autoDetect: true,
     searchBaseRoots: [root],
     searchMaxDepth: 6,
@@ -118,7 +120,7 @@ test('detectExternalStorageRoots 支持内置/手动/自动探测与缓存', asy
 
   const second = await detectExternalStorageRoots({
     profilesRoot,
-    configuredRoots: [manualRoot],
+    configuredRoots: [manualSubPath],
     autoDetect: true,
     searchBaseRoots: [root],
     searchMaxDepth: 6,
@@ -148,6 +150,8 @@ test('月份扫描、清理目标扫描、分析汇总与全量治理可工作',
     path.join(externalRoot, 'WXWork Files', 'Caches', 'Files', '2024-04', 'payload.txt'),
     'ext-file'
   );
+  await ensureFile(path.join(externalRoot, 'WXWork Files', 'File', '2024-04', 'saved.docx'), 'saved-file');
+  await ensureFile(path.join(externalRoot, 'WXWork Files', 'Image', '2024-04', 'saved.png'), 'saved-image');
   await ensureFile(path.join(dataRoot, 'tmp', 'large.bin'), Buffer.alloc(2 * 1024 * 1024));
 
   const oldTime = new Date(Date.now() - 10 * 24 * 3600 * 1000);
@@ -205,4 +209,18 @@ test('月份扫描、清理目标扫描、分析汇总与全量治理可工作',
   const externalTarget = governance.targets.find((item) => item.targetKey === 'external_wxwork_files_caches');
   assert.ok(externalTarget);
   assert.equal(externalTarget.tier, 'caution');
+
+  const savedFilesTarget = governance.targets.find(
+    (item) => item.targetKey === 'external_wxwork_files_saved_files'
+  );
+  assert.ok(savedFilesTarget);
+  assert.equal(savedFilesTarget.deletable, false);
+  assert.equal(savedFilesTarget.tier, 'protected');
+
+  const savedImagesTarget = governance.targets.find(
+    (item) => item.targetKey === 'external_wxwork_files_saved_images'
+  );
+  assert.ok(savedImagesTarget);
+  assert.equal(savedImagesTarget.deletable, false);
+  assert.equal(savedImagesTarget.tier, 'protected');
 });

@@ -6,6 +6,7 @@ import { detectExternalStorageRoots, discoverAccounts } from './scanner.js';
 import { computeNextTriggerAt, queryServiceStatus, readFilesystemUsage } from './service-manager.js';
 import { inspectSkillBinding, skillBindingStatusLabel } from './skill-installer.js';
 import { normalizeSelfUpdateConfig } from './updater.js';
+import { calculateDirectorySize } from './utils.js';
 
 const STATUS_PASS = 'pass';
 const STATUS_WARN = 'warn';
@@ -278,6 +279,25 @@ export async function runDoctor({ config, aliases, projectRoot, appVersion }) {
     )
   );
 
+  let externalSavedFileBytes = 0;
+  let externalSavedImageBytes = 0;
+  for (const externalRoot of externalStorage.roots) {
+    externalSavedFileBytes += await calculateDirectorySize(path.join(externalRoot, 'WXWork Files', 'File'));
+    externalSavedImageBytes += await calculateDirectorySize(path.join(externalRoot, 'WXWork Files', 'Image'));
+  }
+  const externalSavedBytes = externalSavedFileBytes + externalSavedImageBytes;
+  checks.push(
+    buildCheck(
+      'external_saved_files',
+      '外部已保存文件/图片',
+      externalSavedBytes >= 512 * 1024 * 1024 ? STATUS_WARN : STATUS_PASS,
+      `文件 ${externalSavedFileBytes} bytes，图片 ${externalSavedImageBytes} bytes`,
+      externalSavedBytes >= 512 * 1024 * 1024
+        ? '这部分通常属于用户保存/下载后的文件，不在聊天缓存自动清理范围。'
+        : ''
+    )
+  );
+
   const selfUpdate = normalizeSelfUpdateConfig(config.selfUpdate);
   checks.push(
     buildCheck(
@@ -456,6 +476,8 @@ export async function runDoctor({ config, aliases, projectRoot, appVersion }) {
     metrics: {
       accountCount: accounts.length,
       externalStorageCount: externalStorage.roots.length,
+      externalSavedFileBytes,
+      externalSavedImageBytes,
       recycleBatchCount: recycleStats.totalBatches,
       recycleBytes: recycleStats.totalBytes,
       recycleThresholdBytes: thresholdBytes,
