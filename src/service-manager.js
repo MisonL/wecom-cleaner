@@ -315,6 +315,19 @@ async function writeLaunchAgentFile(plistPath, content) {
   await fs.writeFile(plistPath, content, 'utf-8');
 }
 
+function stopLaunchAgent(label, plistPath, domain, runCommand) {
+  const attempts = [
+    ['bootout', domain, `${domain}/${label}`],
+    ['bootout', domain, plistPath],
+    ['remove', label],
+  ];
+  const results = attempts.map((args) => runLaunchctl(args, runCommand));
+  return {
+    ok: results.some((item) => item.status === 0),
+    results,
+  };
+}
+
 export async function installServiceLaunchAgents({
   nodePath,
   cliPath,
@@ -337,6 +350,9 @@ export async function installServiceLaunchAgents({
       '--service-run',
       '--state-root',
       stateRoot,
+      '--dry-run',
+      'false',
+      '--yes',
       '--service-trigger-source',
       SERVICE_LOGIN_TRIGGER,
       '--output',
@@ -355,6 +371,9 @@ export async function installServiceLaunchAgents({
       '--service-run',
       '--state-root',
       stateRoot,
+      '--dry-run',
+      'false',
+      '--yes',
       '--service-trigger-source',
       SERVICE_SCHEDULE_TRIGGER,
       '--output',
@@ -369,8 +388,8 @@ export async function installServiceLaunchAgents({
   await writeLaunchAgentFile(plistPaths.login, loginPlist);
   await writeLaunchAgentFile(plistPaths.schedule, schedulePlist);
 
-  runLaunchctl(['bootout', domain, plistPaths.login], runCommand);
-  runLaunchctl(['bootout', domain, plistPaths.schedule], runCommand);
+  stopLaunchAgent(SERVICE_LOGIN_LABEL, plistPaths.login, domain, runCommand);
+  stopLaunchAgent(SERVICE_SCHEDULE_LABEL, plistPaths.schedule, domain, runCommand);
   const loginLoad = runLaunchctl(['bootstrap', domain, plistPaths.login], runCommand);
   const scheduleLoad = runLaunchctl(['bootstrap', domain, plistPaths.schedule], runCommand);
 
@@ -389,8 +408,8 @@ export async function uninstallServiceLaunchAgents({
 }) {
   const plistPaths = resolveServicePlistPaths(homeDir);
   const domain = launchctlDomain(uid);
-  const loginUnload = runLaunchctl(['bootout', domain, plistPaths.login], runCommand);
-  const scheduleUnload = runLaunchctl(['bootout', domain, plistPaths.schedule], runCommand);
+  const loginUnload = stopLaunchAgent(SERVICE_LOGIN_LABEL, plistPaths.login, domain, runCommand);
+  const scheduleUnload = stopLaunchAgent(SERVICE_SCHEDULE_LABEL, plistPaths.schedule, domain, runCommand);
   await fs.rm(plistPaths.login, { force: true });
   await fs.rm(plistPaths.schedule, { force: true });
   return {

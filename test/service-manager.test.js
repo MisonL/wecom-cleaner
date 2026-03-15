@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import {
   SERVICE_DIRECT_DELETE_ACK,
   SERVICE_LOGIN_LABEL,
@@ -7,11 +9,14 @@ import {
   buildLaunchAgentPlist,
   computeNextTriggerAt,
   defaultServiceConfig,
+  installServiceLaunchAgents,
   normalizeServiceConfig,
   normalizeTriggerTimes,
   parseFilesystemUsage,
   resolveServicePlistPaths,
+  uninstallServiceLaunchAgents,
 } from '../src/service-manager.js';
+import { makeTempDir, removeDir } from './helpers/temp.js';
 
 test('normalizeServiceConfig 使用默认值并规范触发时间', () => {
   const config = normalizeServiceConfig({
@@ -79,4 +84,62 @@ test('parseFilesystemUsage 可解析 df -kP 输出', () => {
 
 test('服务直接删除确认常量稳定', () => {
   assert.equal(SERVICE_DIRECT_DELETE_ACK, 'SERVICE_DIRECT_DELETE');
+});
+
+test('install/uninstall launch agents 会尝试按 label 与路径退场', async (t) => {
+  const root = await makeTempDir('wecom-service-launchctl-');
+  t.after(async () => removeDir(root));
+
+  const calls = [];
+  const runCommand = (command, args) => {
+    calls.push([command, args]);
+    if (args[0] === 'bootstrap') {
+      return { status: 0, stdout: '', stderr: '', error: null };
+    }
+    if (args[0] === 'remove') {
+      return { status: 0, stdout: '', stderr: '', error: null };
+    }
+    return { status: 3, stdout: '', stderr: 'No such process', error: null };
+  };
+
+  const cliPath = path.join(root, 'cli.js');
+  await fs.writeFile(cliPath, '#!/usr/bin/env node\n', 'utf-8');
+
+  await installServiceLaunchAgents({
+    nodePath: process.execPath,
+    cliPath,
+    stateRoot: path.join(root, 'state'),
+    homeDir: root,
+    runCommand,
+  });
+  const paths = resolveServicePlistPaths(root);
+  const loginPlist = await fs.readFile(paths.login, 'utf-8');
+  const schedulePlist = await fs.readFile(paths.schedule, 'utf-8');
+  assert.match(loginPlist, /--dry-run/);
+  assert.match(loginPlist, /false/);
+  assert.match(loginPlist, /--yes/);
+  assert.match(schedulePlist, /--dry-run/);
+  assert.match(schedulePlist, /false/);
+  assert.match(schedulePlist, /--yes/);
+
+  await uninstallServiceLaunchAgents({
+    homeDir: root,
+    runCommand,
+  });
+
+  assert.equal(
+    calls.some(([, args]) => args[0] === 'remove' && args[1] === SERVICE_LOGIN_LABEL),
+    true
+  );
+  assert.equal(
+    calls.some(([, args]) => args[0] === 'remove' && args[1] === SERVICE_SCHEDULE_LABEL),
+    true
+  );
+  assert.equal(
+    await fs
+      .stat(paths.login)
+      .then(() => true)
+      .catch(() => false),
+    false
+  );
 });

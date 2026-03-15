@@ -152,6 +152,26 @@ test('月份扫描、清理目标扫描、分析汇总与全量治理可工作',
   );
   await ensureFile(path.join(externalRoot, 'WXWork Files', 'File', '2024-04', 'saved.docx'), 'saved-file');
   await ensureFile(path.join(externalRoot, 'WXWork Files', 'Image', '2024-04', 'saved.png'), 'saved-image');
+  await ensureFile(
+    path.join(dataRoot, 'Library', 'Application Support', 'WXDrive', 'crashDumps', 'dump.log'),
+    'dump'
+  );
+  await ensureFile(
+    path.join(dataRoot, 'Library', 'Application Support', 'WXDrive', 'sqlite3', 'meta.db'),
+    'meta'
+  );
+  await ensureFile(
+    path.join(dataRoot, 'Library', 'Application Support', 'Wedoc', 'cache', 'doc.bin'),
+    'doc-cache'
+  );
+  await ensureFile(
+    path.join(dataRoot, 'Library', 'Application Support', 'WeMail', 'cache', 'mail.bin'),
+    'mail-cache'
+  );
+  await ensureFile(
+    path.join(dataRoot, 'Library', 'Application Support', 'WeMail', 'sqlite', 'mail.db'),
+    'mail-db'
+  );
   await ensureFile(path.join(dataRoot, 'tmp', 'large.bin'), Buffer.alloc(2 * 1024 * 1024));
 
   const oldTime = new Date(Date.now() - 10 * 24 * 3600 * 1000);
@@ -223,4 +243,24 @@ test('月份扫描、清理目标扫描、分析汇总与全量治理可工作',
   assert.ok(savedImagesTarget);
   assert.equal(savedImagesTarget.deletable, false);
   assert.equal(savedImagesTarget.tier, 'protected');
+
+  const wxdriveCrash = governance.targets.find((item) => item.targetKey === 'wxdrive_crash_dumps');
+  assert.ok(wxdriveCrash);
+  assert.equal(wxdriveCrash.deletable, true);
+  assert.equal(wxdriveCrash.tier, 'safe');
+
+  const wedocCache = governance.targets.find((item) => item.targetKey === 'wedoc_cache');
+  assert.ok(wedocCache);
+  assert.equal(wedocCache.deletable, true);
+  assert.equal(wedocCache.tier, 'caution');
+
+  const wemailCache = governance.targets.find((item) => item.targetKey === 'wemail_cache');
+  assert.ok(wemailCache);
+  assert.equal(wemailCache.deletable, true);
+  assert.equal(wemailCache.tier, 'caution');
+
+  const wemailSqlite = governance.targets.find((item) => item.targetKey === 'wemail_sqlite');
+  assert.ok(wemailSqlite);
+  assert.equal(wemailSqlite.deletable, false);
+  assert.equal(wemailSqlite.tier, 'protected');
 });

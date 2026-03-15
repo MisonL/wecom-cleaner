@@ -231,7 +231,10 @@ function normalizeExternalStorageRootCandidate(rawPath) {
   const normalized = path.resolve(input);
   const segments = normalized.split(path.sep);
   const wxworkFilesIndex = segments.findIndex(
-    (segment) => String(segment || '').trim().toLowerCase() === 'wxwork files'
+    (segment) =>
+      String(segment || '')
+        .trim()
+        .toLowerCase() === 'wxwork files'
   );
   if (wxworkFilesIndex >= 0) {
     const rootSegments = segments.slice(0, wxworkFilesIndex);
